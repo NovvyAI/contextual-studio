@@ -252,6 +252,55 @@ export function resolveAssetReferences(sessionId, text) {
   return [...imageNumbers.map((number) => imageByNumber.get(number)), ...screenshotNumbers.map((number) => screenshotByNumber.get(number))];
 }
 
+function conceptRevisionFeedback(content) {
+  const text = String(content || "");
+  const target = text.match(/(?:concept-|方案\s*)([A-D])\b/i)?.[1]?.toUpperCase();
+  if (!target || !/(?:修改聊天候选卡|重新生成方案|修改方案)/.test(text)) return null;
+  const feedback = text.match(/(?:我的)?修改意见[：:]\s*([\s\S]*?)(?:(?:\n\n|。)请(?:返回|直接)|$)/)?.[1]?.trim() || "按本轮要求修改方案";
+  return { target, feedback };
+}
+
+function conceptRevisionHistory(messages) {
+  const history = {};
+  const pendingFeedback = new Map();
+  for (const message of messages) {
+    if (message.role === "user") {
+      const revision = conceptRevisionFeedback(message.content);
+      if (revision) pendingFeedback.set(revision.target, { feedback: revision.feedback, createdAt: message.created_at });
+      continue;
+    }
+    let cards = [];
+    try { cards = JSON.parse(message.cards_json || "[]"); } catch { /* Ignore malformed historical cards. */ }
+    for (const card of cards.filter((item) => item.kind === "concept" && /^concept-[A-D]$/i.test(item.id || ""))) {
+      const conceptId = card.id.slice(-1).toUpperCase();
+      history[conceptId] ||= [];
+      const pending = pendingFeedback.get(conceptId);
+      if (history[conceptId].length && !pending) continue;
+      history[conceptId].push({
+        version: history[conceptId].length + 1,
+        feedback: pending?.feedback || "初始方案",
+        title: card.title || `方案 ${conceptId}`,
+        summary: card.summary || "",
+        details: card.details || [],
+        status: "completed",
+        createdAt: message.created_at,
+      });
+      pendingFeedback.delete(conceptId);
+    }
+  }
+  for (const [conceptId, pending] of pendingFeedback) {
+    history[conceptId] ||= [];
+    history[conceptId].push({
+      version: history[conceptId].length + 1,
+      feedback: pending.feedback,
+      title: `方案 ${conceptId} 修改版生成中`,
+      summary: "Novvy 正在根据这条修改意见生成新版本，完成后会在这个节点原位更新。",
+      details: [], status: "generating", createdAt: pending.createdAt,
+    });
+  }
+  return history;
+}
+
 export function serializeCreativeSession(row) {
   if (!row) return null;
   const drama = db.prepare("SELECT * FROM drama_analyses WHERE id = ?").get(row.drama_id);
@@ -263,6 +312,7 @@ export function serializeCreativeSession(row) {
     codexThreadId: row.codex_thread_id, errorMessage: row.error_message,
     drama: serializeAnalysis(drama),
     game: serializeGameAnalysis(game),
+    conceptRevisions: conceptRevisionHistory(messages),
     messages: messages.map((message) => ({
       id: message.id, role: message.role, content: message.content,
       cards: message.cards_json ? JSON.parse(message.cards_json) : [],

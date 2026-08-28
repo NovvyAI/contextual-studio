@@ -118,7 +118,7 @@ ${screenshotIndex}
 21. 用户可直接用“图片 04”“参考图片4”引用图片资产，也可用“截图 03”“视频截图3”引用短剧原视频关键帧。必须先解析到相应索引中的真实资产、标题和 URL，再理解人物、姿势、构图、场景或风格之间的组合关系；回复和候选卡 details 中保留所用编号，禁止猜测不存在的编号。`;
 }
 
-export async function runCreativeTurn(sessionId, userMessage, initial = false, attachments = []) {
+export async function runCreativeTurn(sessionId, userMessage, initial = false, attachments = [], turnPolicy = {}) {
   const session = db.prepare("SELECT * FROM creative_sessions WHERE id = ?").get(sessionId);
   if (!session) return;
   const drama = db.prepare("SELECT * FROM drama_analyses WHERE id = ?").get(session.drama_id);
@@ -136,6 +136,30 @@ export async function runCreativeTurn(sessionId, userMessage, initial = false, a
     const turnInput = preparedAttachments.visualInputs.length ? [{ type: "text", text: input }, ...preparedAttachments.visualInputs] : input;
     const turn = await thread.run(turnInput, { outputSchema: creativeTurnSchema, signal: AbortSignal.timeout(15 * 60 * 1000) });
     const output = JSON.parse(turn.finalResponse);
+    if (turnPolicy.conceptRevisionId) {
+      const originalWorkspace = session.workspace_json ? JSON.parse(session.workspace_json) : null;
+      const revisedConcept = output.workspace?.concepts?.find((concept) => concept.id === turnPolicy.conceptRevisionId);
+      if (!originalWorkspace || !revisedConcept) throw new Error(`Novvy 没有返回方案 ${turnPolicy.conceptRevisionId} 的修改版本`);
+      output.workspace = {
+        ...originalWorkspace,
+        concepts: (originalWorkspace.concepts || []).map((concept) => concept.id === turnPolicy.conceptRevisionId ? revisedConcept : concept),
+      };
+      output.stage = "concept_review";
+      output.nextAction = `继续审核修改后的方案 ${turnPolicy.conceptRevisionId}`;
+      const revisedCardId = `concept-${turnPolicy.conceptRevisionId}`;
+      output.assistantCards = (output.assistantCards || []).filter((card) => card.kind === "concept" && card.id === revisedCardId);
+      if (!output.assistantCards.length) output.assistantCards = [{
+        id: revisedCardId, kind: "concept", title: `${turnPolicy.conceptRevisionId}｜${revisedConcept.title}`,
+        summary: revisedConcept.tailAdAngle, previewUrl: "", status: "candidate",
+        details: [
+          { label: "模型组合", content: `${revisedConcept.primaryDesire}；${revisedConcept.secondaryDesire}；${revisedConcept.narrativeModel}；${revisedConcept.entryPromise}；${revisedConcept.accelerator}` },
+          { label: "视频匹配点", content: revisedConcept.videoMatch }, { label: "片尾进入方式", content: revisedConcept.entryMethod },
+          { label: "玩法卖点", content: revisedConcept.gameplaySellingPoint }, { label: "对白关系", content: revisedConcept.dialogueRelationship },
+          { label: "目标受众", content: revisedConcept.audience }, { label: "市场传达", content: revisedConcept.marketMessage },
+          { label: "情绪接续", content: revisedConcept.emotionalBridge }, { label: "转化路径", content: revisedConcept.conversionPath },
+        ],
+      }];
+    }
     const historicalCards = db.prepare("SELECT cards_json FROM creative_messages WHERE session_id=? AND cards_json IS NOT NULL ORDER BY id").all(sessionId)
       .flatMap((row) => { try { return JSON.parse(row.cards_json || "[]"); } catch { return []; } });
     const knownVisual = new Map(historicalCards.filter((card) => card.id && card.previewUrl).map((card) => [card.id, card.previewUrl]));

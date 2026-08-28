@@ -206,6 +206,7 @@ const server = http.createServer(async (req, res) => {
         attachments.push({ name: file.name, type: file.type, size: file.size, storedName, storedPath, url: `/api/creative/chat-attachments/${id}/${encodeURIComponent(storedName)}` });
       }
       const userMessage = content || "请查看并分析我上传的附件。";
+      const conceptRevisionMatch = content.match(/(?:修改聊天候选卡\s*concept-|只(?:修改|重新生成)方案\s*)([A-D])\b/i);
       const storyboardTarget = content.match(/分镜(?:图|镜头)?\s*0*(\d+)/i);
       const storyboardEditIntent = /修改|调整|重绘|重新生成|改成|换成|替换|去掉|去除|移除|删除|增加|添加|希望|需要|不要|不一样|不同/i.test(content);
       if (!attachments.length && storyboardTarget && storyboardEditIntent) {
@@ -213,14 +214,14 @@ const server = http.createServer(async (req, res) => {
         return json(res, 202, { id, status: "working", action: "storyboard_image_regeneration", shotNumber: Number(storyboardTarget[1]) });
       }
       const characterImageRequest = /(?:生成|创建|做|画|制作).{0,18}(?:人物|男主|女主|男人|女人|正脸|侧脸|正面|侧面)|(?:基于|使用|参考).{0,18}(?:图片|截图).{0,30}(?:生成|创建|做|画)|(?:修改|调整|放大|缩小|聚焦|裁切|裁剪|去掉|去除|移除|删除|替换|换成|改成).{0,24}(?:图片|截图|人物|男主|女主|正脸|侧脸)|(?:图片|截图)\s*0*\d+.{0,24}(?:修改|调整|放大|缩小|聚焦|裁切|裁剪|去掉|去除|移除|删除|替换|换成|改成)/i.test(content);
-      if (!attachments.length && characterImageRequest && /(?:图片|截图)\s*0*\d+|(?:人物|男主|女主|男人|女人|正脸|侧脸|正面|侧面)/i.test(content)) {
+      if (!attachments.length && !conceptRevisionMatch && characterImageRequest && /(?:图片|截图)\s*0*\d+|(?:人物|男主|女主|男人|女人|正脸|侧脸|正面|侧面)/i.test(content)) {
         startCustomCharacterGeneration(id, content);
         return json(res, 202, { id, status: "working", action: "character_image_generation" });
       }
       const timestamp = now();
       db.prepare("INSERT INTO creative_messages (session_id, role, content, attachments_json, created_at) VALUES (?, 'user', ?, ?, ?)").run(id, userMessage, attachments.length ? JSON.stringify(attachments) : null, timestamp);
       db.prepare("UPDATE creative_sessions SET stage = 'working', updated_at = ? WHERE id = ?").run(timestamp, id);
-      runCreativeTurn(id, userMessage, false, attachments);
+      runCreativeTurn(id, userMessage, false, attachments, conceptRevisionMatch ? { conceptRevisionId: conceptRevisionMatch[1].toUpperCase() } : {});
       return json(res, 202, { id, status: "working", attachmentCount: attachments.length });
     }
 

@@ -3,6 +3,8 @@ let pollTimer;
 let chatFollowLatest = true;
 let chatRenderSignature = "";
 let suppressChatScrollTracking = false;
+let canvasRenderSignature = "";
+const canvasDetailsOpenState = new Map();
 const pendingChatFiles = [];
 let pendingChatPreviewUrls = [];
 const selectedCharacterIds = new Set();
@@ -47,6 +49,12 @@ function element(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function canvasDetails(node, key, defaultOpen = false) {
+  node.dataset.canvasDetailsKey = key;
+  node.open = canvasDetailsOpenState.has(key) ? canvasDetailsOpenState.get(key) : defaultOpen;
   return node;
 }
 
@@ -218,8 +226,7 @@ function legacyConfirmedCards(workspace) {
 }
 
 function renderConfirmedCard(card, expanded) {
-  const node = element("details", `artifact-card ${card.status}`);
-  node.open = expanded;
+  const node = canvasDetails(element("details", `artifact-card ${card.status}`), `confirmed:${card.id}`, expanded);
   const isPreviewUrl = (value) => typeof value === "string" && (/^https?:\/\//.test(value) || /^\/api\/screenshots\/\d+$/.test(value));
   const previewEntries = [
     ...(card.previewUrl ? [{ label: card.title, content: card.previewUrl }] : []),
@@ -282,8 +289,7 @@ function latestCharacterCandidates(messages) {
 }
 
 function renderCharacterSelectionPanel(session, cards) {
-  const content = element("details", "workflow-node-card character-selection-node-card");
-  content.open = session.stage === "reference_review";
+  const content = canvasDetails(element("details", "workflow-node-card character-selection-node-card"), "character-selection", session.stage === "reference_review");
   const summary = element("summary", "character-selection-summary");
   const copy = element("div"); copy.append(element("strong", "", "人物参考图选择"), element("small", "", `${cards.length} 张最新候选 · 点击展开`));
   summary.append(copy, element("span", "", "查看与勾选"));
@@ -313,8 +319,7 @@ function renderVideoShotWorkflowNode(shots) {
   heading.append(element("div", "", "逐镜视频候选"), element("span", "", `${shots.length} 个镜头`));
   const grid = element("div", "canvas-video-shot-grid");
   shots.forEach((shot, index) => {
-    const card = element("details", "canvas-video-shot-card");
-    card.open = true;
+    const card = canvasDetails(element("details", "canvas-video-shot-card"), `video-shot:${shot.id}`, true);
     const summary = element("summary");
     const title = element("div");
     title.append(element("small", "", `镜头 ${String(index + 1).padStart(2, "0")} · V${shot.version || 1}`), element("strong", "", shot.title));
@@ -731,6 +736,11 @@ function renderCanvas(session) {
   status.className = `status ${session.stage === "working" ? "analyzing" : session.stage === "error" ? "failed" : "completed"}`;
   status.textContent = session.stage === "working" ? "Novvy 处理中" : session.stage === "error" ? "需要处理" : "可交互";
 
+  const renderSignature = JSON.stringify([session.stage, session.workspace, session.messages, session.conceptRevisions, session.assets, session.screenshots]);
+  if (renderSignature === canvasRenderSignature) return;
+  canvasRenderSignature = renderSignature;
+  document.querySelectorAll("#creative-canvas details[data-canvas-details-key]").forEach((details) => canvasDetailsOpenState.set(details.dataset.canvasDetailsKey, details.open));
+
   const strip = document.querySelector("#source-strip");
   strip.replaceChildren();
   strip.classList.add("hidden");
@@ -820,8 +830,7 @@ function renderCanvas(session) {
   const hasSelectedConcept = Boolean(workspace.selectedConceptIds?.length);
   (workspace.concepts || []).forEach((concept) => {
     const selected = workspace.selectedConceptIds?.includes(concept.id);
-    const card = element("details", `concept-card has-folding ${selected ? "selected" : ""}`);
-    card.open = !hasSelectedConcept || selected;
+    const card = canvasDetails(element("details", `concept-card has-folding ${selected ? "selected" : ""}`), `concept:${concept.id}`, !hasSelectedConcept || selected);
     const summary = element("summary", "concept-summary");
     const summaryCopy = element("div", "concept-summary-copy");
     summaryCopy.append(element("strong", "", concept.title), element("p", "", concept.tailAdAngle));
@@ -834,6 +843,25 @@ function renderCanvas(session) {
       facts.append(row);
     });
     body.append(facts);
+    const revisions = session.conceptRevisions?.[concept.id] || [];
+    if (revisions.length > 1) {
+      const history = canvasDetails(element("details", "concept-revision-history"), `concept-history:${concept.id}`, false);
+      history.append(element("summary", "", `修改历史 · ${revisions.length} 个版本`));
+      const chain = element("ol", "concept-revision-chain");
+      revisions.forEach((entry) => {
+        const item = element("li", `concept-revision-entry ${entry.status === "generating" ? "generating" : ""}`);
+        const heading = element("div", "concept-revision-heading");
+        const time = entry.createdAt ? new Date(entry.createdAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
+        const version = element("b", "", `V${entry.version}`);
+        if (entry.status === "generating") version.append(element("span", "concept-revision-generating", "生成中"));
+        heading.append(version, element("time", "", time));
+        item.append(heading, element("strong", "", entry.title));
+        if (entry.version > 1) item.append(element("p", "concept-revision-feedback", `你的意见：${entry.feedback}`));
+        item.append(element("p", "concept-revision-result", entry.summary));
+        chain.append(item);
+      });
+      history.append(chain); body.append(history);
+    }
     const choose = element("button", "concept-choose", selected ? "已选择" : `选择方案 ${concept.id}`);
     choose.type = "button";
     choose.disabled = session.stage === "working";
@@ -869,8 +897,7 @@ function renderCanvas(session) {
     card.append(summary, body);
     concepts.append(card);
   });
-  const conceptArchive = element("details", "current-concept-archive");
-  conceptArchive.open = presentation.stage === "concept_review";
+  const conceptArchive = canvasDetails(element("details", "current-concept-archive"), "concept-archive", presentation.stage === "concept_review");
   conceptArchive.append(element("summary", "", presentation.stage === "concept_review" ? "创意方案候选" : `创意方案回看${workspace.selectedConceptIds?.length ? ` · 已选择 ${workspace.selectedConceptIds.join("、")}` : ""}`), concepts);
   liveCard.append(conceptArchive); live.append(liveCard); flow.append(live);
   layoutWorkflowNodes(flow);
