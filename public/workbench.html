@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>创意视频工作台 · Contextual Studio</title>
+    <link rel="stylesheet" href="/styles.css?v=20260827-8" />
+  </head>
+  <body class="workbench-page">
+    <header class="workspace-topbar">
+      <button id="close-workbench" class="workspace-back" type="button">← 返回项目列表</button>
+      <div class="workspace-identity">
+        <span class="brand-mark">N</span>
+        <div><small>CREATIVE VIDEO WORKBENCH</small><h1 id="workbench-title">正在打开工作台…</h1></div>
+      </div>
+      <span id="workbench-status" class="status analyzing">载入中</span>
+    </header>
+    <main class="workbench-shell">
+      <div class="workbench-grid">
+        <section class="canvas-panel">
+          <div class="canvas-toolbar"><div><small>CANVAS</small><strong>片尾创意画布</strong></div><div class="canvas-zoom">9:16 · 15s</div></div>
+          <div id="source-strip" class="source-strip"></div>
+          <div id="creative-canvas" class="creative-canvas"><div class="canvas-loading"><div class="loader"></div><strong>正在载入创意画布</strong></div></div>
+        </section>
+        <aside class="chat-panel">
+          <div class="chat-header"><div class="chat-avatar">N</div><div><strong>Novvy 创意助手</strong><small>由 Codex 驱动 · 持续保存</small></div></div>
+          <div id="creative-messages" class="chat-messages"></div>
+          <form id="creative-chat-form" class="chat-compose"><textarea id="creative-chat-input" rows="3" placeholder="选择方案，或告诉我想修改的方向…"></textarea><button id="creative-send" type="submit">发送 ↑</button></form>
+        </aside>
+      </div>
+    </main>
+    <dialog id="source-analysis-dialog" class="source-analysis-dialog">
+      <div class="source-analysis-shell">
+        <header class="source-analysis-header">
+          <div><small id="source-analysis-kind"></small><h2 id="source-analysis-title"></h2></div>
+          <button id="source-analysis-close" type="button" aria-label="关闭完整分析">×</button>
+        </header>
+        <div id="source-analysis-body" class="source-analysis-body"></div>
+      </div>
+    </dialog>
+    <script type="module" src="/workbench.js?v=20260827-8"></script>
+  </body>
+</html>

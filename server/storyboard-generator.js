@@ -1,0 +1,166 @@
+import { db, now, resolveAssetReferences } from "./database.js";
+import { publicInputUrl } from "./character-generator.js";
+import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function cards(sessionId) {
+  return db.prepare("SELECT cards_json FROM creative_messages WHERE session_id=? AND cards_json IS NOT NULL ORDER BY id DESC").all(sessionId)
+    .flatMap((row) => { try { return JSON.parse(row.cards_json || "[]"); } catch { return []; } });
+}
+function append(sessionId, content, messageCards) {
+  db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,created_at) VALUES (?,'assistant',?,?,?)")
+    .run(sessionId, content, JSON.stringify(messageCards), now());
+}
+function walk(value) {
+  if (Array.isArray(value)) return value.flatMap(walk);
+  if (value && typeof value === "object") return [value, ...Object.values(value).flatMap(walk)];
+  return [value];
+}
+function valueFor(data, keys) {
+  const wanted = new Set(keys.map((key) => key.toLowerCase()));
+  for (const node of walk(data)) if (node && typeof node === "object" && !Array.isArray(node)) {
+    for (const [key, value] of Object.entries(node)) if (wanted.has(key.toLowerCase()) && ["string", "number"].includes(typeof value)) return String(value);
+  }
+  return "";
+}
+function imageUrl(data) {
+  const keys = new Set(["imageurl", "resulturl", "outputurl", "downloadurl"]);
+  for (const node of walk(data)) if (node && typeof node === "object" && !Array.isArray(node)) {
+    for (const [key, value] of Object.entries(node)) if (keys.has(key.toLowerCase()) && typeof value === "string" && /^https?:\/\//.test(value)) return value;
+  }
+  return "";
+}
+function shotDetails(card) {
+  return (card.details || []).filter((item) => /^(?:镜(?:头)?|Shot)\s*\d/i.test(String(item.label || "").trim())).slice(0, 3);
+}
+function referenceUrls(session) {
+  const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
+  const group = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "reference_panel" && item.status === "confirmed");
+  const finalCard = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "final_card" && item.status === "confirmed");
+  return [...(group?.details || []), ...(finalCard?.details || [])].map((item) => item.content)
+    .filter((value) => typeof value === "string" && (/^https?:\/\//.test(value) || /^\/api\/screenshots\/\d+$/.test(value)));
+}
+
+export function startStoryboardImageGeneration(sessionId, storyboardId) {
+  const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
+  if (!session) throw new Error("创意工作台不存在");
+  if (session.stage === "working") throw new Error("当前仍有任务正在处理");
+  const storyboard = cards(sessionId).find((item) => item.id === storyboardId && item.kind === "storyboard");
+  if (!storyboard) throw new Error("找不到这套剧情与分镜");
+  const shots = shotDetails(storyboard);
+  if (!shots.length) throw new Error("这套分镜没有可生成的镜头内容");
+  const refs = referenceUrls(session);
+  if (!refs.length) throw new Error("已确认人物参考图组为空");
+  const timestamp = now();
+  const placeholders = shots.map((shot, index) => ({
+    id: `${storyboard.id}-image-${index + 1}`, kind: "storyboard_image", title: `分镜 ${String(index + 1).padStart(2, "0")}｜${shot.label}`,
+    summary: shot.content, previewUrl: "", status: "generating", version: 1,
+    details: [{ label: "所属方案", content: storyboard.id }, { label: "镜头内容", content: shot.content }],
+  }));
+  db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, `选择 ${storyboard.id} 并生成逐镜分镜图`, timestamp);
+  append(sessionId, `已选择「${storyboard.title}」。现在生成 ${shots.length} 张逐镜分镜图，完成后可以逐张修改或统一确认。`, placeholders);
+  db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, sessionId);
+  generateGroup(sessionId, storyboard, placeholders, refs);
+}
+
+export function startStoryboardImageRegeneration(sessionId, cardId, feedback) {
+  const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
+  if (!session) throw new Error("创意工作台不存在");
+  if (session.stage === "working") throw new Error("当前仍有任务正在处理");
+  const card = cards(sessionId).find((item) => item.id === cardId && item.kind === "storyboard_image");
+  if (!card) throw new Error("找不到这张分镜图");
+  const instruction = String(feedback || "").trim();
+  if (!instruction) throw new Error("请填写分镜图修改意见");
+  const timestamp = now();
+  db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, `修改分镜图 ${cardId}：${instruction}`, timestamp);
+  append(sessionId, "收到，我会以当前分镜图为基础只修改这一个镜头。", [{ ...card, previewUrl: "", status: "generating" }]);
+  db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, sessionId);
+  regenerateOne(sessionId, card, instruction, referenceUrls(session));
+}
+
+export function approveStoryboardImages(sessionId, cardIds) {
+  const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
+  if (!session) throw new Error("创意工作台不存在");
+  const latest = new Map();
+  cards(sessionId).forEach((card) => { if (!latest.has(card.id)) latest.set(card.id, card); });
+  const selected = [...new Set((cardIds || []).map(String))].map((id) => latest.get(id)).filter((card) => card?.kind === "storyboard_image" && card.previewUrl);
+  if (!selected.length || selected.length !== new Set(cardIds || []).size) throw new Error("部分分镜图尚未生成完成");
+  const storyboardId = selected[0].details?.find((item) => item.label === "所属方案")?.content;
+  if (!storyboardId || selected.some((card) => card.details?.find((item) => item.label === "所属方案")?.content !== storyboardId)) throw new Error("请选择同一套方案的分镜图");
+  const timestamp = now();
+  const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
+  workspace.confirmedCards ||= [];
+  workspace.confirmedCards.push({
+    id: `confirmed-${storyboardId}-images-${Date.now()}`, kind: "storyboard", title: `已确认分镜图｜${storyboardId}`,
+    summary: `已确认 ${selected.length} 张逐镜草案图，供视频生成和 ImaRouter 单图生视频使用。`,
+    details: selected.map((card) => ({ label: card.title, content: card.previewUrl })), status: "confirmed", confirmedAt: timestamp,
+  });
+  workspace.productionPlan = { ...(workspace.productionPlan || {}), videoPromptStatus: "storyboard_images_approved" };
+  db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, `统一确认 ${storyboardId} 的逐镜分镜图`, timestamp);
+  db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)").run(sessionId, "分镜图组已经确认。我现在基于已确认文字分镜和逐镜图片自动生成正式视频提示词。", timestamp);
+  db.prepare("UPDATE creative_sessions SET stage='working',workspace_json=?,error_message=NULL,updated_at=? WHERE id=?").run(JSON.stringify(workspace), timestamp, sessionId);
+  import("./creative-agent.js").then(({ runCreativeTurn }) => runCreativeTurn(sessionId, `已确认 ${storyboardId} 及其逐镜分镜图片。现在生成正式 video_prompt 审核卡；保留全部历史内容，不提交视频生成。`, false));
+}
+
+async function generateImage(prompt, imageUrls) {
+  const client = new NovvyMcpClient(); await client.initialize();
+  const created = unpackToolResult(await client.callTool("novvy_create_image_generation", { model: "gpt-image-2", prompt, imageUrls, inputFidelity: "high", n: 1, outputFormat: "png", quality: "high", includeRaw: false }));
+  const taskId = valueFor(created, ["taskId", "task_id", "id"]); const providerSessionId = valueFor(created, ["sessionId", "session_id"]);
+  if (!taskId && !providerSessionId) throw new Error("Novvy 未返回分镜图任务 ID");
+  let result = created; const deadline = Date.now() + 20 * 60_000;
+  while (Date.now() < deadline && !imageUrl(result)) {
+    const status = valueFor(result, ["status", "state"]).toLowerCase();
+    if (/fail|error|cancel/.test(status)) throw new Error(valueFor(result, ["errorMessage", "message", "error"]) || "分镜图生成失败");
+    await wait(5000);
+    result = unpackToolResult(await client.callTool("novvy_query_generation", { ...(taskId ? { taskId } : {}), ...(providerSessionId ? { sessionId: providerSessionId } : {}), model: "gpt-image-2", includeRaw: false }));
+  }
+  const previewUrl = imageUrl(result); if (!previewUrl) throw new Error("分镜图生成查询超时");
+  return { previewUrl, taskId: taskId || providerSessionId };
+}
+
+async function generateGroup(sessionId, storyboard, placeholders, referenceSources) {
+  try {
+    const refs = [];
+    for (const source of referenceSources) refs.push(await publicInputUrl(source));
+    const results = await Promise.allSettled(placeholders.map(async (card, index) => {
+      const prompt = `Create storyboard frame ${index + 1} of ${placeholders.length} for a vertical 9:16 live-action mobile game advertisement. Storyboard concept: ${storyboard.title}. Overall story: ${storyboard.summary}. This shot: ${card.summary}. Preserve the exact identities, faces, ages, hairstyles, costumes, and accessories from the supplied character references. Compose one production-ready cinematic key frame, not a collage, contact sheet, split screen, captioned storyboard, or UI mockup. No labels, subtitles, watermarks, borders, shot numbers, or explanatory text. If this is the final-card shot, preserve the approved English product copy and CTA from the supplied final-card reference.`;
+      const generated = await generateImage(prompt, refs);
+      return { ...card, previewUrl: generated.previewUrl, status: "candidate", details: [...card.details, { label: "生成任务", content: generated.taskId }] };
+    }));
+    const completed = results.map((result, index) => result.status === "fulfilled" ? result.value : {
+      ...placeholders[index], status: "failed", details: [...placeholders[index].details, { label: "失败原因", content: result.reason instanceof Error ? result.reason.message : String(result.reason) }],
+    });
+    const failedCount = results.filter((result) => result.status === "rejected").length;
+    append(sessionId, failedCount
+      ? `${placeholders.length - failedCount} 张分镜图已生成，${failedCount} 张生成失败。成功图片已保留，可单独重试失败镜头。`
+      : "逐镜分镜图已经生成。你可以在任意卡片里修改单镜，确认全部画面后再统一采用。", completed);
+    const errorMessage = failedCount ? `${failedCount} 张分镜图生成失败` : null;
+    db.prepare("UPDATE creative_sessions SET stage='storyboard_review',error_message=?,updated_at=? WHERE id=?").run(errorMessage, now(), sessionId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    append(sessionId, `分镜图生成没有全部完成：${message}。文字分镜和已经生成的结果均保留。`, placeholders.map((card) => ({ ...card, status: "failed" })));
+    db.prepare("UPDATE creative_sessions SET stage='storyboard_review',error_message=?,updated_at=? WHERE id=?").run(message, now(), sessionId);
+  }
+}
+
+async function regenerateOne(sessionId, card, feedback, fallbackReferences) {
+  try {
+    const sources = card.previewUrl ? [card.previewUrl] : fallbackReferences;
+    const referencedAssets = resolveAssetReferences(sessionId, feedback);
+    sources.push(...referencedAssets.map((asset) => asset.url));
+    const uploaded = [];
+    for (const source of [...new Set(sources)]) uploaded.push(await publicInputUrl(source));
+    const assetGuide = referencedAssets.length ? ` Numbered assets explicitly referenced by the user are supplied after the current storyboard image: ${referencedAssets.map((asset) => `${asset.reference} (${asset.title})`).join(", ")}. Apply only the person, pose, scene, composition, object, or style role assigned by the user to each asset.` : "";
+    const prompt = card.previewUrl
+      ? `Edit the first supplied storyboard key frame according to the user's instruction: ${feedback}.${assetGuide} Preserve every element not mentioned by the user. Do not blend identities unless explicitly requested. Return one clean vertical 9:16 cinematic frame. No collage, captions, labels, shot numbers, borders, subtitles, logos, or watermark.`
+      : `Create one vertical 9:16 cinematic storyboard key frame for this shot: ${card.summary}. User instruction: ${feedback}.${assetGuide} Preserve the supplied character identities, costumes and accessories. No collage, captions, labels, shot numbers, borders, subtitles, logos, or watermark.`;
+    const generated = await generateImage(prompt, uploaded);
+    append(sessionId, `${card.title} 已按意见生成新版，图片已在原卡片中更新。`, [{ ...card, previewUrl: generated.previewUrl, status: "candidate", version: Number(card.version || 1) + 1, details: [...card.details, { label: "本版修改", content: feedback }, ...(referencedAssets.length ? [{ label: "引用资产", content: referencedAssets.map((asset) => asset.reference).join("、") }] : []), { label: "生成任务", content: generated.taskId }] }]);
+    db.prepare("UPDATE creative_sessions SET stage='storyboard_review',error_message=NULL,updated_at=? WHERE id=?").run(now(), sessionId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    append(sessionId, `这张分镜图修改失败：${message}。上一版图片仍然保留。`, [{ ...card, status: "failed" }]);
+    db.prepare("UPDATE creative_sessions SET stage='storyboard_review',error_message=?,updated_at=? WHERE id=?").run(message, now(), sessionId);
+  }
+}

@@ -1,0 +1,313 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://novvy.ai/schemas/storyboard-prompts-v1.json",
+  "title": "Novvy Storyboard Prompt Contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "planId",
+    "creativeOptionId",
+    "visualStyle",
+    "referenceSnapshot",
+    "generation",
+    "shots"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "novvy.storyboard-prompts.v1"
+    },
+    "planId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    },
+    "creativeOptionId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "visualStyle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["renderingType", "reviewLabelZh", "promptLabelEn"],
+      "properties": {
+        "renderingType": {
+          "enum": ["live_action_realistic", "cartoon_animation", "mixed_unknown"]
+        },
+        "reviewLabelZh": {
+          "type": "string",
+          "minLength": 1
+        },
+        "promptLabelEn": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "referenceSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["snapshotId", "referenceField", "slotOrder", "referenceUrls", "summaryZh"],
+      "properties": {
+        "snapshotId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "referenceField": {
+          "enum": ["imageUrls", "humanImageUrls"]
+        },
+        "slotOrder": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "referenceUrls": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "summaryZh": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "generation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "ratio", "resolution", "generateAudio"],
+      "properties": {
+        "model": {
+          "const": "seedance-2.0-fast"
+        },
+        "ratio": {
+          "const": "9:16"
+        },
+        "resolution": {
+          "const": "720p"
+        },
+        "generateAudio": {
+          "const": true
+        }
+      }
+    },
+    "shots": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "items": {
+        "$ref": "#/$defs/shot"
+      }
+    }
+  },
+  "$defs": {
+    "bilingual": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["zh", "en"],
+      "properties": {
+        "zh": {
+          "type": "string",
+          "minLength": 1
+        },
+        "en": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "referenceBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slot", "purpose"],
+      "properties": {
+        "slot": {
+          "type": "string",
+          "minLength": 1
+        },
+        "purpose": {
+          "$ref": "#/$defs/bilingual"
+        }
+      }
+    },
+    "dialogue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["speakerEn", "targetEn", "lineEn"],
+      "properties": {
+        "speakerEn": {
+          "type": "string",
+          "minLength": 1
+        },
+        "targetEn": {
+          "type": "string",
+          "minLength": 1
+        },
+        "lineEn": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "finalCard": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["productNameEn", "benefitEn", "ctaEn", "destinationEn", "layout"],
+      "properties": {
+        "productNameEn": {
+          "type": "string",
+          "minLength": 1
+        },
+        "benefitEn": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ctaEn": {
+          "type": "string",
+          "minLength": 1
+        },
+        "destinationEn": {
+          "type": "string",
+          "minLength": 1
+        },
+        "layout": {
+          "$ref": "#/$defs/bilingual"
+        }
+      }
+    },
+    "shot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "shotId",
+        "order",
+        "version",
+        "durationSeconds",
+        "narrativeStage",
+        "narrativeFunction",
+        "coreGameplayAction",
+        "audienceAndSellingPoint",
+        "includesFinalCard",
+        "referenceBindings",
+        "identityConstraints",
+        "continuity",
+        "visualAction",
+        "onScreenTextEn",
+        "dialogue",
+        "voiceoverEn",
+        "camera",
+        "transition",
+        "audio",
+        "additionalNegativeConstraints",
+        "finalCard"
+      ],
+      "properties": {
+        "shotId": {
+          "type": "string",
+          "pattern": "^shot-[0-9]{2}$"
+        },
+        "order": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "durationSeconds": {
+          "type": "integer",
+          "minimum": 4,
+          "maximum": 15
+        },
+        "narrativeStage": {
+          "enum": ["real_operation", "stage_success", "causal_escalation", "agency_handoff"]
+        },
+        "narrativeFunction": {
+          "$ref": "#/$defs/bilingual"
+        },
+        "coreGameplayAction": {
+          "$ref": "#/$defs/bilingual"
+        },
+        "audienceAndSellingPoint": {
+          "$ref": "#/$defs/bilingual"
+        },
+        "includesFinalCard": {
+          "type": "boolean"
+        },
+        "referenceBindings": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/referenceBinding"
+          }
+        },
+        "identityConstraints": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/bilingual"
+          }
+        },
+        "continuity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["start", "end"],
+          "properties": {
+            "start": {
+              "$ref": "#/$defs/bilingual"
+            },
+            "end": {
+              "$ref": "#/$defs/bilingual"
+            }
+          }
+        },
+        "visualAction": {
+          "$ref": "#/$defs/bilingual"
+        },
+        "onScreenTextEn": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "dialogue": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/dialogue"
+          }
+        },
+        "voiceoverEn": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "camera": {
+          "$ref": "#/$defs/bilingual"
+        },
+        "transition": {
+          "$ref": "#/$defs/bilingual"
+        },
+        "audio": {
+          "$ref": "#/$defs/bilingual"
+        },
+        "additionalNegativeConstraints": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/bilingual"
+          }
+        },
+        "finalCard": {
+          "$ref": "#/$defs/finalCard"
+        }
+      }
+    }
+  }
+}
+

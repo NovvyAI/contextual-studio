@@ -1,0 +1,4 @@
+interface:
+  display_name: "Novvy 广告创意"
+  short_description: "中文片尾广告分析与植入推荐"
+  default_prompt: "使用 $novvy-ad-creative，分析玩法、卖点、受众、市场传达、情绪接续和转化路径，推荐可多选的片尾玩法凸出式广告植入。"

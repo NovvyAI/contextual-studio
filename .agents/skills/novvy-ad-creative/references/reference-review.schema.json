@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://novvy.ai/schemas/reference-review-v1.json",
+  "title": "Novvy Reference Image Review",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "reviewId", "requestedUploadMode", "requiredSlots", "waivedSlots", "priorFailure", "slots"],
+  "properties": {
+    "schemaVersion": {
+      "const": "novvy.reference-review.v1"
+    },
+    "reviewId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "requestedUploadMode": {
+      "enum": ["asset", "seedance-human"]
+    },
+    "requiredSlots": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "waivedSlots": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "priorFailure": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["phase", "errorClass", "failedSlot", "summary"],
+      "properties": {
+        "phase": {
+          "enum": ["upload", "video"]
+        },
+        "errorClass": {
+          "type": "string",
+          "minLength": 1
+        },
+        "failedSlot": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "slots": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "slot",
+          "source",
+          "sourceFingerprint",
+          "pixelReviewed",
+          "visualClass",
+          "reviewDecision",
+          "reviewReason",
+          "identityMatch",
+          "viewMatch"
+        ],
+        "properties": {
+          "slot": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sourceFingerprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "pixelReviewed": {
+            "type": "boolean"
+          },
+          "visualClass": {
+            "enum": ["human_photorealistic", "non_human", "uncertain"]
+          },
+          "reviewDecision": {
+            "enum": ["pass", "exclude", "block"]
+          },
+          "reviewReason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "identityMatch": {
+            "enum": ["pass", "fail", "unknown", "not_applicable"]
+          },
+          "viewMatch": {
+            "enum": ["pass", "fail", "unknown", "not_applicable"]
+          }
+        }
+      }
+    }
+  }
+}
+

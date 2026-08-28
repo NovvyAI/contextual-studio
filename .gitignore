@@ -1,0 +1,13 @@
+data/
+.env
+node_modules/
+.codex/
+.idea/
+.vscode/
+*.log
+coverage/
+dist/
+__pycache__/
+*.py[cod]
+.DS_Store
+npm-debug.log*

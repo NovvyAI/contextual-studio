@@ -1,0 +1,4 @@
+interface:
+  display_name: "手游商店页分析"
+  short_description: "分析手游商店页、核心玩法、卖点层级、素材表达与投放信号"
+  default_prompt: "Use $analyze-game-store-page to analyze this Google Play or Apple App Store game URL and produce an evidence-based product and creative brief."

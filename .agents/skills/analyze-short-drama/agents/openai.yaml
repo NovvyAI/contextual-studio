@@ -1,0 +1,4 @@
+interface:
+  display_name: "短剧分析"
+  short_description: "拆解短剧剧情、情绪转折、角色关系及广告承接元素"
+  default_prompt: "Use $analyze-short-drama to analyze this short-drama video and produce an evidence-based creative brief."
