@@ -160,6 +160,16 @@ export async function runCreativeTurn(sessionId, userMessage, initial = false, a
         ],
       }];
     }
+    if (turnPolicy.finalCardRevisionId) {
+      const originalWorkspace = session.workspace_json ? JSON.parse(session.workspace_json) : null;
+      const revisedCard = (output.assistantCards || []).find((card) => card.kind === "final_card" && card.id === turnPolicy.finalCardRevisionId);
+      if (!originalWorkspace || !revisedCard) throw new Error("Novvy 没有返回指定落版图方案的修改版本");
+      output.workspace = originalWorkspace;
+      output.stage = "final_card_review";
+      output.nextAction = "继续审核修改后的落版图方案";
+      output.assistantCards = [{ ...revisedCard, id: turnPolicy.finalCardRevisionId, kind: "final_card", previewUrl: "", status: "candidate" }];
+      output.assistantMessage = `${output.assistantMessage}\n\n落版图方案已经按意见更新；这次只修改候选方案，确认生成前不会进入人物与参考图。`;
+    }
     const historicalCards = db.prepare("SELECT cards_json FROM creative_messages WHERE session_id=? AND cards_json IS NOT NULL ORDER BY id").all(sessionId)
       .flatMap((row) => { try { return JSON.parse(row.cards_json || "[]"); } catch { return []; } });
     const knownVisual = new Map(historicalCards.filter((card) => card.id && card.previewUrl).map((card) => [card.id, card.previewUrl]));
