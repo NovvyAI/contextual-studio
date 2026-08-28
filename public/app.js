@@ -240,7 +240,7 @@ function renderGameDetail(item) {
   node.querySelector(".record-meta").textContent = `${item.platform === "google_play" ? "Google Play" : "Apple App Store"} · ${new Date(item.createdAt).toLocaleString("zh-CN")}`;
   const status = node.querySelector(".status"); status.className = `status ${item.status}`;
   status.textContent = ({ uploaded: "等待分析", analyzing: "分析中", completed: "已完成", failed: "失败" })[item.status] || item.status;
-  node.querySelector(".game-thesis").textContent = item.result?.products?.[0]?.descriptionSummary || item.result?.productThesis || item.errorMessage || (item.status === "analyzing" ? "Codex 正在按 Novvy 商品分析契约核验产品事实…" : "等待开始分析");
+  node.querySelector(".game-thesis").textContent = item.result?.products?.[0]?.descriptionSummary || item.result?.productThesis || item.errorMessage || (item.status === "analyzing" ? "Novvy 正在核验产品信息并分析游戏…" : "等待开始分析");
   node.querySelector(".game-message").textContent = item.result?.products?.[0]?.marketMessage?.promise || item.result?.marketMessage?.promise || "完成后将在这里显示产品定位与市场传达。";
   renderGameAnalysis(node.querySelector(".game-analysis-content"), item.result);
   gameDetail.append(node);
@@ -390,7 +390,7 @@ document.querySelector("#refresh-button").addEventListener("click", loadRecords)
 gameForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const button = document.querySelector("#game-analyze-button"); button.disabled = true; button.querySelector("span").textContent = "正在创建…";
-  gameMessage.textContent = "创建后将由 Codex 在后台完成商店与玩法分析。";
+  gameMessage.textContent = "创建后将由 Novvy 在后台完成商店与玩法分析。";
   try {
     const created = await api("/api/games", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ storeUrl: document.querySelector("#game-url").value, title: document.querySelector("#game-title").value }) });
     if (created.status !== "completed" && created.status !== "analyzing") await api(`/api/games/${created.id}/analyze`, { method: "POST" });

@@ -171,7 +171,7 @@ const server = http.createServer(async (req, res) => {
       const id = Number(creativeMessageMatch[1]);
       const session = db.prepare("SELECT * FROM creative_sessions WHERE id = ?").get(id);
       if (!session) return json(res, 404, { error: "创意工作台不存在" });
-      if (session.stage === "working") return json(res, 409, { error: "Codex 正在处理上一条消息" });
+      if (session.stage === "working") return json(res, 409, { error: "Novvy 正在处理上一条消息" });
       const body = JSON.parse((await requestBody(req)).toString("utf8") || "{}");
       const content = String(body.content || "").trim();
       if (!content) return json(res, 400, { error: "请输入消息" });

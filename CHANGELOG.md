@@ -12,6 +12,7 @@
 
 ### 调整
 
+- 所有用户可见页面、状态提示和错误提示中的 `Codex` 品牌名称统一改为 `Novvy`；底层仍使用原有 SDK，不改变运行方式。
 - ImaRouter 视频模型从 `seedance-2.0` 调整为 `seedance-2.0-fast`。
 - ImaRouter 生成中、完成和失败卡片统一显示 `Seedance 2.0 Fast`。
 

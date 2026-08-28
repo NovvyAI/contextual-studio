@@ -181,6 +181,6 @@ export async function translatePromptWithCodex(card) {
   const audit = (card.details || []).map((item) => `${item.label}: ${item.content}`).join("\n\n");
   const turn = await thread.run(`Convert the following approved Chinese video audit into one complete English Seedance video-generation prompt. Preserve every approved story beat and constraint. Use no more than 3 shots. All on-screen text, dialogue, voiceover, speech, CTA, and final-card copy must be English only. Keep the same male and female identities from the supplied human reference images. Do not mention URLs, model names, resolution fields, JSON, or internal implementation. Return only the required JSON object.\n\n${audit}`, { outputSchema: schema, signal: AbortSignal.timeout(10 * 60 * 1000) });
   const prompt = String(JSON.parse(turn.finalResponse).prompt || "").trim();
-  if (!prompt) throw new Error("Codex 未能生成英文视频提交提示词");
+  if (!prompt) throw new Error("Novvy 未能生成英文视频提交提示词");
   return prompt;
 }

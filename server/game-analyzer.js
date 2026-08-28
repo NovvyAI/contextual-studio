@@ -55,7 +55,7 @@ export async function analyzeGame(id) {
     const codex = new Codex();
     const thread = codex.startThread({ ...(analysisModel ? { model: analysisModel } : {}), workingDirectory: path.resolve("."), skipGitRepoCheck: true, sandboxMode: "read-only", approvalPolicy: "never", networkAccessEnabled: true, webSearchMode: "live" });
     const turn = await thread.run(prompt(product), { outputSchema: schema, signal: AbortSignal.timeout(15 * 60 * 1000) });
-    if (!turn.finalResponse) throw new Error("Codex 没有返回商品分析结果");
+    if (!turn.finalResponse) throw new Error("Novvy 没有返回商品分析结果");
     const output = JSON.parse(turn.finalResponse);
     const result = { ...output, engine: "codex-sdk", model: analysisModel || "codex-config-default", codexThreadId: thread.id, analyzedAt: now(), contract: "novvy.product-analysis.v1" };
     db.prepare("UPDATE game_analyses SET title=?,status='completed',analysis_json=?,codex_thread_id=?,updated_at=? WHERE id=?").run(output.products[0]?.productName || row.title, JSON.stringify(result), thread.id, now(), id);
@@ -63,4 +63,3 @@ export async function analyzeGame(id) {
     db.prepare("UPDATE game_analyses SET status='failed',error_message=?,updated_at=? WHERE id=?").run(error instanceof Error ? error.message : String(error), now(), id);
   }
 }
-

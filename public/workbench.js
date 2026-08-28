@@ -35,7 +35,7 @@ const analysisLabels = {
   gameplayVsWrapper: "玩法与包装", expectationRisk: "预期风险", demonstratedMechanic: "展示玩法", payoff: "回报",
   fidelityRisk: "保真风险", strongestPromise: "最强承诺", mustShowMechanic: "必须展示的玩法", bestWrapper: "最佳包装",
   largestRisk: "最大风险", testableTerritories: "可测试方向", sources: "来源", url: "地址", engine: "分析引擎",
-  model: "模型", analyzedAt: "分析时间", codexThreadId: "Codex Thread", version: "版本",
+  model: "模型", analyzedAt: "分析时间", codexThreadId: "Novvy 会话", version: "版本",
 };
 
 function element(tag, className, text) {
@@ -676,7 +676,7 @@ function renderCanvas(session) {
   document.title = `${session.title} · 创意工作台`;
   const status = document.querySelector("#workbench-status");
   status.className = `status ${session.stage === "working" ? "analyzing" : session.stage === "error" ? "failed" : "completed"}`;
-  status.textContent = session.stage === "working" ? "Codex 处理中" : session.stage === "error" ? "需要处理" : "可交互";
+  status.textContent = session.stage === "working" ? "Novvy 处理中" : session.stage === "error" ? "需要处理" : "可交互";
 
   const strip = document.querySelector("#source-strip");
   strip.replaceChildren();
@@ -687,7 +687,7 @@ function renderCanvas(session) {
   const workspace = session.workspace;
   if (!workspace) {
     const loading = element("div", "canvas-loading");
-    loading.append(element("div", "loader"), element("strong", "", "正在生成剧游连接与创意方向"), element("p", "", "Codex 会基于已保存的短剧和游戏分析构建第一版画布。"));
+    loading.append(element("div", "loader"), element("strong", "", "正在生成剧游连接与创意方向"), element("p", "", "Novvy 会基于已保存的短剧和游戏分析构建第一版画布。"));
     canvas.append(loading);
     return;
   }
@@ -727,7 +727,7 @@ function renderCanvas(session) {
   const liveHeading = element("div", "board-heading");
   const liveCopy = element("div");
   liveCopy.append(element("small", "", "CURRENT"), element("h2", "", presentation.title));
-  liveHeading.append(liveCopy, element("span", "board-live", session.stage === "working" ? "Codex 正在更新" : "可继续修改"));
+  liveHeading.append(liveCopy, element("span", "board-live", session.stage === "working" ? "Novvy 正在更新" : "可继续修改"));
   liveCard.append(liveHeading);
 
   const strategy = element("section", "strategy-board");
