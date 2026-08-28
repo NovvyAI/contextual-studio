@@ -180,8 +180,12 @@ function legacyConfirmedCards(workspace) {
 function renderConfirmedCard(card, expanded) {
   const node = element("details", `artifact-card ${card.status}`);
   node.open = expanded;
-  const previewUrls = [card.previewUrl, ...(card.details || []).map((item) => item.content)]
-    .filter((value) => typeof value === "string" && (/^https?:\/\//.test(value) || /^\/api\/screenshots\/\d+$/.test(value)));
+  const isPreviewUrl = (value) => typeof value === "string" && (/^https?:\/\//.test(value) || /^\/api\/screenshots\/\d+$/.test(value));
+  const previewEntries = [
+    ...(card.previewUrl ? [{ label: card.title, content: card.previewUrl }] : []),
+    ...(card.details || []).filter((item) => isPreviewUrl(item.content)),
+  ].filter((item, index, entries) => entries.findIndex((other) => other.content === item.content) === index);
+  const previewUrls = previewEntries.map((item) => item.content);
   const previewUrl = previewUrls[0];
   const summary = element("summary");
   const identity = element("div", "artifact-identity");
@@ -194,16 +198,20 @@ function renderConfirmedCard(card, expanded) {
   const body = element("div", "artifact-body");
   if (previewUrls.length) {
     const gallery = element("div", "artifact-preview-gallery");
-    previewUrls.forEach((url) => {
-      const link = element("a", "artifact-preview-link"); link.href = url; link.target = "_blank"; link.rel = "noreferrer";
-      const image = element("img", "artifact-preview"); image.src = url; image.alt = card.title; image.loading = "lazy";
-      link.append(image); gallery.append(link);
+    previewEntries.forEach((entry) => {
+      const item = element("figure", "artifact-preview-item");
+      const link = element("a", "artifact-preview-link"); link.href = entry.content; link.target = "_blank"; link.rel = "noreferrer";
+      const image = element("img", "artifact-preview"); image.src = entry.content; image.alt = entry.label || card.title; image.loading = "lazy";
+      link.append(image); item.append(link);
+      const description = card.kind === "storyboard" ? (card.details || []).find((detail) => detail.label === `${entry.label}｜文字描述`)?.content : "";
+      if (description) item.append(element("figcaption", "artifact-preview-caption", description));
+      gallery.append(item);
     });
     body.append(gallery);
   }
   body.append(element("p", "artifact-summary", card.summary));
   const details = element("dl", "artifact-details");
-  (card.details || []).forEach((item) => {
+  (card.details || []).filter((item) => !isPreviewUrl(item.content)).forEach((item) => {
     const row = element("div");
     row.append(element("dt", "", item.label), element("dd", "", item.content));
     details.append(row);

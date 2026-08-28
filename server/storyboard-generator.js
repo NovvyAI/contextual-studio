@@ -94,7 +94,10 @@ export function approveStoryboardImages(sessionId, cardIds) {
   workspace.confirmedCards.push({
     id: `confirmed-${storyboardId}-images-${Date.now()}`, kind: "storyboard", title: `已确认分镜图｜${storyboardId}`,
     summary: `已确认 ${selected.length} 张逐镜草案图，供视频生成和 ImaRouter 单图生视频使用。`,
-    details: selected.map((card) => ({ label: card.title, content: card.previewUrl })), status: "confirmed", confirmedAt: timestamp,
+    details: selected.flatMap((card) => [
+      { label: card.title, content: card.previewUrl },
+      { label: `${card.title}｜文字描述`, content: card.details?.find((item) => item.label === "镜头内容")?.content || card.summary || "" },
+    ]), status: "confirmed", confirmedAt: timestamp,
   });
   workspace.productionPlan = { ...(workspace.productionPlan || {}), videoPromptStatus: "storyboard_images_approved" };
   db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, `统一确认 ${storyboardId} 的逐镜分镜图`, timestamp);
