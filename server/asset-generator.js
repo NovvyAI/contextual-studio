@@ -63,6 +63,57 @@ export function startAssetCreation(sessionId, description, interruptedCard = nul
   createAsset(sessionId, card, instruction, session.stage);
 }
 
+export function startAttachmentImageEdit(sessionId, attachments, description, options = {}) {
+  const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
+  if (!session) throw new Error("创意工作台不存在");
+  if (session.stage === "working") throw new Error("当前仍有任务正在处理");
+  const images = (attachments || []).filter((item) => String(item.type || "").startsWith("image/") && item.storedPath);
+  const instruction = String(description || "").trim();
+  if (!images.length) throw new Error("没有找到可编辑的上传图片");
+  if (!instruction) throw new Error("请说明希望怎样修改图片");
+  const timestamp = now();
+  const card = {
+    id: `attachment-edit-${Date.now()}`, kind: "reference_image", title: "上传图片修改候选",
+    summary: instruction, previewUrl: "", version: 1, status: "generating",
+    details: [{ label: "修改意见", content: instruction }, { label: "主参考图", content: images[0].name || "用户上传图片" }],
+  };
+  if (options.recordUser !== false) {
+    db.prepare("INSERT INTO creative_messages (session_id,role,content,attachments_json,created_at) VALUES (?,'user',?,?,?)")
+      .run(sessionId, instruction, JSON.stringify(attachments), timestamp);
+  }
+  append(sessionId, "收到，我正在以你上传的图片为主图执行真实修改；完成后会在这张卡片中显示新图片。", card);
+  db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, sessionId);
+  editAttachmentImage(sessionId, images, card, instruction, session.stage);
+}
+
+async function editAttachmentImage(sessionId, images, card, instruction, returnStage) {
+  try {
+    const imageUrls = [];
+    for (const item of images) imageUrls.push(await publicInputUrl(item.storedPath));
+    const prompt = `Edit the first supplied image as the exact primary source. User request: ${instruction}. Preserve all people, animals, objects, poses, anatomy, clothing, accessories, composition, camera angle, setting, lighting, and style that the user did not explicitly ask to change. Additional supplied images, if any, are secondary references only. Return one polished edited image only. No collage, comparison, split screen, labels, captions, watermark, subtitles, or unintended text.`;
+    const client = new NovvyMcpClient(); await client.initialize();
+    const created = unpackToolResult(await client.callTool("novvy_create_image_generation", {
+      model: "gpt-image-2", prompt, imageUrls, inputFidelity: "high", n: 1, outputFormat: "png", quality: "high", includeRaw: false,
+    }));
+    const taskId = valueFor(created, ["taskId", "task_id", "id"]); const providerSessionId = valueFor(created, ["sessionId", "session_id"]);
+    if (!taskId && !providerSessionId) throw new Error("Novvy 未返回图片任务 ID");
+    let result = created; const deadline = Date.now() + 20 * 60_000;
+    while (Date.now() < deadline && !imageUrl(result)) {
+      const status = valueFor(result, ["status", "state"]).toLowerCase();
+      if (/fail|error|cancel/.test(status)) throw new Error(valueFor(result, ["errorMessage", "message", "error"]) || "图片生成失败");
+      await wait(5000);
+      result = unpackToolResult(await client.callTool("novvy_query_generation", { ...(taskId ? { taskId } : {}), ...(providerSessionId ? { sessionId: providerSessionId } : {}), model: "gpt-image-2", includeRaw: false }));
+    }
+    const previewUrl = imageUrl(result); if (!previewUrl) throw new Error("图片生成查询超时");
+    append(sessionId, "上传图片的修改版已经生成，并已加入资产区域。", { ...card, previewUrl, status: "candidate", details: [...card.details, { label: "生成任务", content: taskId || providerSessionId }] });
+    db.prepare("UPDATE creative_sessions SET stage=?,error_message=NULL,updated_at=? WHERE id=?").run(returnStage === "working" ? "reference_review" : returnStage, now(), sessionId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    append(sessionId, `上传图片修改失败：${message}。原始上传图片仍然保留。`, { ...card, status: "failed" });
+    db.prepare("UPDATE creative_sessions SET stage=?,error_message=?,updated_at=? WHERE id=?").run(returnStage === "working" ? "reference_review" : returnStage, message, now(), sessionId);
+  }
+}
+
 async function createAsset(sessionId, card, instruction, returnStage) {
   try {
     const referenced = resolveAssetReferences(sessionId, instruction);

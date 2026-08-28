@@ -184,6 +184,9 @@ export async function runCreativeTurn(sessionId, userMessage, initial = false, a
         const sourceUrl = detailText.match(/(?:https?:\/\/[^\s；，。]+|\/api\/screenshots\/\d+)/)?.[0] || "";
         if (/^\/api\/screenshots\/\d+$/.test(sourceUrl) || knownVisualUrls.has(sourceUrl)) return { ...card, previewUrl: sourceUrl };
       }
+      if (generatedVisualKinds.has(card.kind) && !card.previewUrl && ["completed", "confirmed"].includes(card.status)) {
+        return { ...card, status: "candidate", details: [...(card.details || []), { label: "生成状态", content: "尚未执行真实图片生成，因此没有图片预览" }] };
+      }
       if (!generatedVisualKinds.has(card.kind) || !card.previewUrl || knownVisual.get(card.id) === card.previewUrl) return card;
       return { ...card, previewUrl: "", status: "candidate", details: [...(card.details || []), { label: "生成状态", content: "尚未执行真实图片生成；不得分配或声称新的图片资产编号" }] };
     });

@@ -15,7 +15,7 @@ import { resumeImaRouterVideoGeneration, startImaRouterVideoGeneration } from ".
 import { approveStoryboardImages, startStoryboardImageGeneration, startStoryboardImageRegeneration, startStoryboardImageRegenerationByNumber } from "./storyboard-generator.js";
 import { approveAndFinalizeVideoShots, approveFinalVideo } from "./video-shot-review.js";
 import { generatedVideoPath } from "./video-finalizer.js";
-import { startAssetCreation, startAssetRegeneration } from "./asset-generator.js";
+import { startAssetCreation, startAssetRegeneration, startAttachmentImageEdit } from "./asset-generator.js";
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
 
 const port = Number(process.env.PORT || 4180);
@@ -206,6 +206,12 @@ const server = http.createServer(async (req, res) => {
         attachments.push({ name: file.name, type: file.type, size: file.size, storedName, storedPath, url: `/api/creative/chat-attachments/${id}/${encodeURIComponent(storedName)}` });
       }
       const userMessage = content || "请查看并分析我上传的附件。";
+      const attachmentImageEdit = attachments.some((item) => item.type.startsWith("image/"))
+        && /修改|调整|编辑|重绘|重新生成|改成|换成|替换|去掉|去除|移除|删除|增加|添加|变成|变为|希望|不要/i.test(content);
+      if (attachmentImageEdit) {
+        startAttachmentImageEdit(id, attachments, userMessage);
+        return json(res, 202, { id, status: "working", action: "attachment_image_edit", attachmentCount: attachments.length });
+      }
       const conceptRevisionMatch = content.match(/(?:修改聊天候选卡\s*concept-|只(?:修改|重新生成)方案\s*)([A-D])\b/i);
       const finalCardRevisionMatch = content.match(/修改聊天候选卡\s*(final-card-[^\s（]+)/i);
       const storyboardTarget = content.match(/分镜(?:图|镜头)?\s*0*(\d+)/i);

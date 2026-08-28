@@ -30,6 +30,7 @@ function mcpConfigPath() {
 
 export async function publicInputUrl(previewUrl) {
   if (/^https?:\/\//.test(previewUrl)) return previewUrl;
+  if (path.isAbsolute(previewUrl) && fs.existsSync(previewUrl)) return uploadLocalImage(previewUrl, "uploaded_reference");
   const match = previewUrl.match(/^\/api\/screenshots\/(\d+)$/);
   if (!match) throw new Error("人物候选缺少可上传的真实图片");
   const screenshot = db.prepare("SELECT image_blob,mime_type FROM drama_screenshots WHERE id=?").get(Number(match[1]));
@@ -38,15 +39,19 @@ export async function publicInputUrl(previewUrl) {
   const inputPath = path.join(tempDir, screenshot.mime_type === "image/png" ? "input.png" : "input.jpg");
   await fsp.writeFile(inputPath, screenshot.image_blob);
   try {
-    const script = path.resolve(".agents/skills/novvy-ad-creative/scripts/upload_ai_platform_asset.py");
-    const { stdout } = await execFileAsync("python3", [script, "--mode", "asset", "--kind", "image", "--mcp-json", mcpConfigPath(), "--slot", `character_reference=${inputPath}`], { maxBuffer: 4 * 1024 * 1024 });
-    const result = JSON.parse(stdout);
-    const url = result.videoPayloadHint?.imageUrls?.[0] || result.referenceUrls?.[0];
-    if (!url) throw new Error("人物原图上传后没有返回公开地址");
-    return url;
+    return await uploadLocalImage(inputPath, "character_reference");
   } finally {
     await fsp.rm(tempDir, { recursive: true, force: true });
   }
+}
+
+async function uploadLocalImage(inputPath, slot) {
+  const script = path.resolve(".agents/skills/novvy-ad-creative/scripts/upload_ai_platform_asset.py");
+  const { stdout } = await execFileAsync("python3", [script, "--mode", "asset", "--kind", "image", "--mcp-json", mcpConfigPath(), "--slot", `${slot}=${inputPath}`], { maxBuffer: 4 * 1024 * 1024 });
+  const result = JSON.parse(stdout);
+  const url = result.videoPayloadHint?.imageUrls?.[0] || result.referenceUrls?.[0];
+  if (!url) throw new Error("图片上传后没有返回公开地址");
+  return url;
 }
 
 function walk(value) {
