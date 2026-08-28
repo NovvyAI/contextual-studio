@@ -124,6 +124,18 @@ cp .env.example .env
 
 ## 启动项目
 
+首次 Clone 后，先安装依赖并登录 Codex：
+
+```bash
+git clone https://github.com/NovvyAI/contextual-studio.git
+cd contextual-studio
+npm install
+npx codex login
+cp .env.example .env
+```
+
+`@openai/codex-sdk` 会通过 npm 安装项目所需的 Codex CLI，因此不需要另外全局安装 Codex。`npx codex login` 仍然是必需的：短剧分析、游戏分析、创意助手对话、创意方案、剧情台词、文字分镜和视频提示词都会使用该登录状态。
+
 推荐使用启动脚本：
 
 ```bash
@@ -205,9 +217,10 @@ PORT=4181
 
 ### Codex 分析失败
 
-确认本机 Codex 已登录、Node.js 版本满足要求，并运行：
+确认 Node.js 版本满足要求，然后重新登录 Codex 并运行检查：
 
 ```bash
+npx codex login
 ./start_server.sh --check
 ```
 
