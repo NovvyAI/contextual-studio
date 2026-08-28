@@ -7,8 +7,11 @@ This repository vendors the skills required by its Codex SDK workflows under `.a
 - Short-drama analysis: `.agents/skills/analyze-short-drama/SKILL.md`
 - Game store analysis: `.agents/skills/analyze-game-store-page/SKILL.md`
 - Novvy creative workflow: `.agents/skills/novvy-ad-creative/SKILL.md`
+- Audiovisual language design: `.agents/skills/audiovisual-language-design/SKILL.md`
+- Creative quality review: `.agents/skills/creative-quality-review/SKILL.md`
+- Storyboard production contract: `.agents/skills/storyboard-production-contract/SKILL.md`
 
-When a project prompt invokes `$analyze-short-drama`, `$analyze-game-store-page`, or `$novvy-ad-creative`, use the project-local copy. Do not substitute a similarly named personal skill or plugin-cache copy.
+When a project prompt invokes `$analyze-short-drama`, `$analyze-game-store-page`, `$novvy-ad-creative`, `$audiovisual-language-design`, `$creative-quality-review`, or `$storyboard-production-contract`, use the project-local copy. Do not substitute a similarly named personal skill or plugin-cache copy.
 
 Treat these directories as vendored project dependencies. Update them deliberately from their upstream source and review the diff before changing production behavior.
 

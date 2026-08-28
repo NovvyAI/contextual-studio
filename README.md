@@ -191,6 +191,11 @@ npm run check
 - `.agents/skills/analyze-short-drama`
 - `.agents/skills/analyze-game-store-page`
 - `.agents/skills/novvy-ad-creative`
+- `.agents/skills/audiovisual-language-design`
+- `.agents/skills/creative-quality-review`
+- `.agents/skills/storyboard-production-contract`
+
+其中，视听语言 Skill 负责把创意转译为可执行镜头参数，质量审核 Skill 内置 129 条项目质量矩阵，分镜生产 Skill 负责最多三镜的文字分镜、静态分镜图和逐镜视频任务合同。外部资料中的 `single_final_video_pass` 在本项目中仅为用户明确选择时的严格模式；默认仍使用静态分镜图审核、逐镜生成/修改、Novvy MCP 或 ImaRouter、审核后拼接的现有流程。
 
 个人目录、插件缓存和其他项目里的同名 Skill 仅作为参考。外部 Skill 更新时，应先比较差异，再选择性合并到项目本地版本，不能覆盖项目定制逻辑。
 

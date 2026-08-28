@@ -19,6 +19,9 @@ description: 使用 Novvy MCP 产品列表和参考视频，用中文分析剧�
 - 创意策略与制作契约：在同一个创意 Codex session 内依次读取 `references/creative-strategy-phase.md` 与 `references/creative-production-phase.md`；它们是结构化阶段，不创建新的 Codex task。
 - 参考图像素审核：上传前读取 `references/reference-image-audit-phase.md`，并按 `references/reference-review.schema.json` 校验结果。
 - 最终视频分镜：按 `references/storyboard-prompt.schema.json` 生成结构化 JSON，并通过 `scripts/storyboard_prompt_contract.py` 确定性编译中文审核稿和英文逐镜任务。
+- 视听语言：创意方案、文字分镜、分镜图提示词与逐镜视频提示词阶段使用项目本地 `$audiovisual-language-design`，把“电影感”编译成构图、机位、焦段、运镜触发、调度、光色、剪辑和声音参数。
+- 分镜合同：人物参考组确认后使用项目本地 `$storyboard-production-contract` 生成和校验最多三镜的文字分镜、静态分镜图与逐镜视频任务。
+- 创意质量：候选交付用户审核前使用项目本地 `$creative-quality-review` 做相关字段的轻量检查；硬门与 CQ 创作分级分开，普通运行不得套用外部单次视频硬预算。
 
 ## Contextual Studio 本地架构覆盖
 
@@ -29,6 +32,7 @@ description: 使用 Novvy MCP 产品列表和参考视频，用中文分析剧�
 - 保留“先生成并审核静态分镜图”的门槛。静态分镜图统一确认后，才编译并展示逐镜视频任务。
 - 视频生成保留 `Novvy MCP` 与 `ImaRouter` 两种方式；每个视频镜头独立生成、独立版本化和复审，全部通过后按顺序拼接。
 - 真人模式沿用本项目的落版逻辑：视频模型不重绘已确认落版图。内容镜头拼接完成后，由后端把已确认原始落版图确定性追加为结尾静态片段。
+- 外部视听资料中的 `single_final_video_pass` 只作为用户明确选择时的严格 profile；默认工作台继续允许最多三镜独立生成、单镜修改、Novvy MCP/ImaRouter 选择和审核后拼接。
 
 ## 本地参数和工具边界
 

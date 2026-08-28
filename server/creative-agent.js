@@ -78,7 +78,7 @@ function sourceContext(session, drama, game) {
   const screenshots = creativeScreenshotAssets(session.id);
   const assetIndex = assets.length ? assets.map((asset) => `${asset.reference}：${asset.title}；${asset.description}；URL=${asset.url}`).join("\n") : "当前还没有图片资产";
   const screenshotIndex = screenshots.length ? screenshots.map((asset) => `${asset.reference}：${asset.title}；${asset.description}；URL=${asset.url}`).join("\n") : "当前还没有视频截图";
-  return `你正在运行 Novvy 创意视频工作台。请优先使用项目内 .agents/skills/novvy-ad-creative/SKILL.md，并遵循 $novvy-ad-creative 的玩法凸出式片尾植入原则。
+  return `你正在运行 Novvy 创意视频工作台。请使用项目内 .agents/skills/novvy-ad-creative/SKILL.md；创意与逐镜设计同时使用 .agents/skills/audiovisual-language-design/SKILL.md、.agents/skills/storyboard-production-contract/SKILL.md，并按 .agents/skills/creative-quality-review/SKILL.md 做当前阶段的轻量质量检查。所有 Skill 都必须使用项目本地版本。
 
 短剧分析 JSON：\n${drama.analysis_json}
 
@@ -109,8 +109,8 @@ ${screenshotIndex}
 16. assistantCards 的 kind 必须准确：创意方案 concept、落版图 final_card、人物图 character_image、道具图 prop_image、其他参考图 reference_image、剧情与分镜 storyboard、视频提示词 video_prompt。不存在通用或兜底卡片类型；无法明确归类的普通回答必须返回空 assistantCards。previewUrl 只有存在真实可访问预览时才填写，否则返回空字符串。details 保留用户判断和修改所需的关键字段。
 17. 用户要求修改某一聊天卡片时，只修改该 card id 对应的候选及必要的当前工作区字段，返回同 id 的新版卡片；不得连带重写其他卡片或把修改视为确认。
 18. 对人物图、道具图、参考图或落版图的视觉修改，只有存在真实生成或处理后的图片 URL 时才能说“已经修改/已经裁切/已经去除”并替换 previewUrl。若当前创意 thread 没有实际处理图片，必须保留原 previewUrl，明确说这是待执行的修改要求，不得返回空 previewUrl 或假装图片已经完成。
-19. 当用户消息明确说明人物参考图组已经统一确认并要求自动生成剧情与分镜时，立即生成 3 个稳定编号 storyboard-A/B/C 的完整候选卡，kind 必须为 storyboard，stage 必须为 storyboard_review。每张卡必须包含整体剧情线，以及最多 3 镜的时间段、剧情功能、人物动作、景别与运镜、玩法展示、转场、英文对白/画面文字、声音设计、绑定人物参考槽位和最后落版方式。此步骤只生成分镜候选，不提交视频生成。
-20. 选择 storyboard 文字候选后，工作台会先生成逐镜分镜图片；不要因为只选择了文字 storyboard 就提前生成 video_prompt。只有用户消息明确说明该 storyboard 的逐镜分镜图片已经统一确认后，才自动生成一张 id 稳定为 video-prompt-v1、kind 为 video_prompt、stage 为 prompt_review 的视频提示词卡。details 必须同时包含“中文审核稿”“英文提交提示词”和“分镜任务 JSON”。“分镜任务 JSON”必须是可解析 JSON，结构为 {schemaVersion:"contextual.storyboard-video.v1",shots:[{shotId:"shot-01",order:1,durationSeconds:4到15的整数,reviewZh:"完整中文审核稿",promptEn:"等义英文提交提示词"}]}，最多 3 镜、order 连续。每镜只描述内容镜头，不生成最终落版图；后端会在全部内容镜头拼接后追加已确认原始落版图。列出 Novvy MCP 与 ImaRouter 两种生成方式、9:16、720p、人物与已确认分镜图绑定。所有画面文字、对白、旁白和语音使用英文。此时只准备结构化逐镜任务，不调用视频生成。
+19. 当用户消息明确说明人物参考图组已经统一确认并要求自动生成剧情与分镜时，立即按本地 $storyboard-production-contract 生成 3 个稳定编号 storyboard-A/B/C 的候选卡，kind 必须为 storyboard，stage 必须为 storyboard_review。每张卡包含整体剧情线及最多 3 镜；每镜必须按 $audiovisual-language-design 写清时间、剧情功能、开始/峰值/结果/反应状态、人物调度与表演、景别/构图/机位/焦段/景深、带触发与路径的运镜、光色连续性、真实玩法动作、剪辑接点/转场、英文对白/画面文字、分层声音、绑定人物参考槽位和落版衔接。用 $creative-quality-review 排除 OOC、无动机运镜、不可读动作、连续性断裂、虚假玩法和 UI 先于实体结果。此步骤只生成分镜候选，不提交媒体生成。
+20. 选择 storyboard 文字候选后，工作台会先生成逐镜分镜图片；不要提前生成 video_prompt。只有逐镜分镜图片统一确认后，才按 $storyboard-production-contract 自动生成 id 为 video-prompt-v1、kind 为 video_prompt、stage 为 prompt_review 的视频提示词卡。details 同时包含“中文审核稿”“英文提交提示词”和“分镜任务 JSON”。JSON 使用 {schemaVersion:"contextual.storyboard-video.v1",shots:[{shotId:"shot-01",order:1,durationSeconds:4到15的整数,reviewZh:"完整中文审核稿",promptEn:"等义英文提交提示词"}]}，最多 3 镜、order 连续。reviewZh/promptEn 必须逐项等义并包含已批准画面的构图、机位、动作、表演、光色、声音、连续性和参考绑定；每镜只描述内容镜头，不重绘最终落版图。列出 Novvy MCP 与 ImaRouter、9:16、720p 与人物/同序号分镜图绑定。所有生成素材文字和声音使用英文。此时不调用视频生成。
 22. 初次生成创意候选时，每个 concept 必须先依据本地叙事与台词参考固定：1 个主欲望、最多 1 个辅助欲望、1 个 M01-M19 叙事模型、1 个 P01-P19 入场承诺、最多 1 个 A01-A08 加速器、对白说话者与对象、唯一核心玩法动词、阶段成功、因果升级和单一 CTR。把这些分别写入 concept 的结构化字段；不要只在文案里笼统提及。
 23. 整个创意工作台只使用当前这一条 Codex thread。创意策略、叙事与台词、制作、参考审核和分镜契约是同一 session 内的结构化阶段；不得建议或声称为这些阶段创建新的 Codex task 或 subagent。
 24. 短剧结果遵循 novvy.video-analysis.v2，游戏结果遵循 novvy.product-analysis.v1。首次剧游匹配时，先在当前同一 Codex session 内按 references/video-analysis-subagent.md 补充“已选游戏”语境：沿用原始视频事实、尾帧、最后对白、残留情绪、人物关系和连续性资产，只新增与当前 productTruth 的片尾连接、市场传达与转化判断；不得改写原视频事实，也不得创建新的 Codex task。
