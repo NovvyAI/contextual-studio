@@ -79,6 +79,21 @@ export function startStoryboardImageRegeneration(sessionId, cardId, feedback) {
   regenerateOne(sessionId, card, instruction, referenceUrls(session));
 }
 
+export function startStoryboardImageRegenerationByNumber(sessionId, shotNumber, feedback) {
+  const targetNumber = Number(shotNumber);
+  if (!Number.isInteger(targetNumber) || targetNumber < 1) throw new Error("分镜编号无效");
+  const latestById = new Map();
+  for (const card of cards(sessionId)) if (card?.id && !latestById.has(card.id)) latestById.set(card.id, card);
+  const card = [...latestById.values()].find((item) => {
+    if (item.kind !== "storyboard_image") return false;
+    const titleNumber = String(item.title || "").match(/^分镜\s*0*(\d+)/)?.[1];
+    const idNumber = String(item.id || "").match(/-image-(\d+)$/)?.[1];
+    return Number(titleNumber || idNumber) === targetNumber;
+  });
+  if (!card) throw new Error(`找不到分镜 ${String(targetNumber).padStart(2, "0")} 的已生成图片`);
+  startStoryboardImageRegeneration(sessionId, card.id, feedback);
+}
+
 export function approveStoryboardImages(sessionId, cardIds) {
   const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
   if (!session) throw new Error("创意工作台不存在");

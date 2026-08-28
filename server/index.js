@@ -12,7 +12,7 @@ import { approveFinalCard, startFinalCardGeneration } from "./image-generator.js
 import { approveCharacterReferences, startCharacterRegeneration, startCustomCharacterGeneration } from "./character-generator.js";
 import { startVideoGeneration } from "./video-generator.js";
 import { resumeImaRouterVideoGeneration, startImaRouterVideoGeneration } from "./imarouter-video-generator.js";
-import { approveStoryboardImages, startStoryboardImageGeneration, startStoryboardImageRegeneration } from "./storyboard-generator.js";
+import { approveStoryboardImages, startStoryboardImageGeneration, startStoryboardImageRegeneration, startStoryboardImageRegenerationByNumber } from "./storyboard-generator.js";
 import { approveAndFinalizeVideoShots, approveFinalVideo } from "./video-shot-review.js";
 import { generatedVideoPath } from "./video-finalizer.js";
 import { startAssetCreation, startAssetRegeneration } from "./asset-generator.js";
@@ -175,6 +175,12 @@ const server = http.createServer(async (req, res) => {
       const body = JSON.parse((await requestBody(req)).toString("utf8") || "{}");
       const content = String(body.content || "").trim();
       if (!content) return json(res, 400, { error: "请输入消息" });
+      const storyboardTarget = content.match(/分镜(?:图|镜头)?\s*0*(\d+)/i);
+      const storyboardEditIntent = /修改|调整|重绘|重新生成|改成|换成|替换|去掉|去除|移除|删除|增加|添加|希望|需要|不要|不一样|不同/i.test(content);
+      if (storyboardTarget && storyboardEditIntent) {
+        startStoryboardImageRegenerationByNumber(id, Number(storyboardTarget[1]), content);
+        return json(res, 202, { id, status: "working", action: "storyboard_image_regeneration", shotNumber: Number(storyboardTarget[1]) });
+      }
       const characterImageRequest = /(?:生成|创建|做|画|制作).{0,18}(?:人物|男主|女主|男人|女人|正脸|侧脸|正面|侧面)|(?:基于|使用|参考).{0,18}(?:图片|截图).{0,30}(?:生成|创建|做|画)|(?:修改|调整|放大|缩小|聚焦|裁切|裁剪|去掉|去除|移除|删除|替换|换成|改成).{0,24}(?:图片|截图|人物|男主|女主|正脸|侧脸)|(?:图片|截图)\s*0*\d+.{0,24}(?:修改|调整|放大|缩小|聚焦|裁切|裁剪|去掉|去除|移除|删除|替换|换成|改成)/i.test(content);
       if (characterImageRequest && /(?:图片|截图)\s*0*\d+|(?:人物|男主|女主|男人|女人|正脸|侧脸|正面|侧面)/i.test(content)) {
         startCustomCharacterGeneration(id, content);

@@ -1,5 +1,8 @@
 const sessionId = Number(location.hash.slice(1));
 let pollTimer;
+let chatFollowLatest = true;
+let chatRenderSignature = "";
+let suppressChatScrollTracking = false;
 const selectedCharacterIds = new Set();
 
 function updateCharacterSelectionUI() {
@@ -462,6 +465,18 @@ function renderChatCard(card, disabled) {
   }
   const adoptLabel = card.kind === "concept" ? "选择这个方案" : card.kind === "storyboard" ? "选择并生成分镜图" : isFinalCardDraft ? "确认并生成落版图" : isGeneratedFinalCard ? "确认使用" : isFinalVideo && card.status === "confirmed" ? "最终成片已确认" : isFinalVideo ? "确认最终成片" : isShotBatchReady ? "确认全部镜头并合成" : isVideoPromptDraft && card.status === "failed" ? "按所选方式重新生成" : isVideoPromptDraft ? "确认并生成逐镜视频" : "采用这个候选";
   const adopt = element("button", "chat-card-adopt", adoptLabel); adopt.type = "button";
+  const actionStages = card.kind === "concept" ? ["concept_review"]
+    : card.kind === "storyboard" ? ["storyboard_review"]
+      : isFinalCardDraft ? ["concept_selected", "final_card_review"]
+        : isGeneratedFinalCard ? ["final_card_review"]
+          : isVideoPromptDraft ? ["prompt_review", "ready_to_generate", "video_review"]
+            : isFinalVideo ? ["video_review"] : [];
+  if (actionStages.length && adoptLabel !== "最终成片已确认") {
+    adopt.classList.add("workflow-confirm-action");
+    adopt.dataset.workflowStages = actionStages.join(" ");
+    adopt.dataset.workflowLabel = adoptLabel;
+    adopt.dataset.workflowPriority = "20";
+  }
   if (card.kind === "character_image" || card.kind === "storyboard_image" || card.kind === "video_shot") adopt.hidden = true;
   adopt.disabled = disabled || card.status === "selected" || (card.status === "confirmed" && !isVideoPromptDraft) || card.status === "generating" || (card.status === "completed" && !isShotBatchReady && !isFinalVideo);
   adopt.addEventListener("click", async () => {
@@ -828,6 +843,7 @@ function renderCharacterGroupActions(session) {
   const panel = element("section", "character-group-actions");
   panel.append(element("strong", "", "人物参考图组操作"), element("p", "", "请在每张人物图片下方勾选需要采用的参考图；也可以继续添加新的角度或人物候选。"));
   const approve = element("button", "character-group-approve", `确认选中的人物参考图（${selectedCharacterIds.size} 张）`); approve.type = "button"; approve.dataset.characterApprove = "true"; approve.disabled = session.stage === "working";
+  approve.classList.add("workflow-confirm-action"); approve.dataset.workflowStages = "reference_review"; approve.dataset.workflowLabel = "确认选中的人物参考图"; approve.dataset.workflowPriority = "100";
   approve.addEventListener("click", async () => {
     if (!selectedCharacterIds.size) return alert("请先至少勾选一张人物参考图。");
     try {
@@ -857,6 +873,7 @@ function renderStoryboardGroupActions(session, storyboardCards) {
   panel.append(element("strong", "", "逐镜分镜图操作"), element("p", "", "可以继续逐张修改；全部画面符合预期后，统一确认这组分镜图并自动生成视频提示词。"));
   const approve = element("button", "character-group-approve", "统一确认这组分镜图");
   approve.type = "button";
+  approve.classList.add("workflow-confirm-action"); approve.dataset.workflowStages = "storyboard_review"; approve.dataset.workflowLabel = "统一确认这组分镜图"; approve.dataset.workflowPriority = "100";
   approve.disabled = session.stage === "working" || !storyboardCards.length || storyboardCards.some((card) => !card.previewUrl || card.status === "generating");
   approve.addEventListener("click", async () => {
     try {
@@ -871,8 +888,14 @@ function renderStoryboardGroupActions(session, storyboardCards) {
 
 function renderMessages(session) {
   const root = document.querySelector("#creative-messages");
+  const signature = JSON.stringify([session.stage, session.messages]);
+  if (signature === chatRenderSignature) return;
+  chatRenderSignature = signature;
   const priorScrollTop = root.scrollTop;
-  const wasNearBottom = root.scrollHeight - root.scrollTop - root.clientHeight < 90;
+  const anchor = [...root.querySelectorAll(":scope > .chat-message")].find((message) => message.getBoundingClientRect().bottom > root.getBoundingClientRect().top);
+  const anchorId = anchor?.dataset.messageId || "";
+  const anchorOffset = anchor ? anchor.getBoundingClientRect().top - root.getBoundingClientRect().top : 0;
+  suppressChatScrollTracking = true;
   root.replaceChildren();
   const latestCharacterCards = new Map();
   let characterGroupMessageId = null;
@@ -926,7 +949,13 @@ function renderMessages(session) {
     root.append(bubble);
   }
   renderCurrentTask(session);
-  root.scrollTop = wasNearBottom ? root.scrollHeight : Math.min(priorScrollTop, root.scrollHeight - root.clientHeight);
+  if (chatFollowLatest) root.scrollTop = root.scrollHeight;
+  else if (anchorId) {
+    const restoredAnchor = root.querySelector(`.chat-message[data-message-id="${anchorId}"]`);
+    if (restoredAnchor) root.scrollTop += restoredAnchor.getBoundingClientRect().top - root.getBoundingClientRect().top - anchorOffset;
+    else root.scrollTop = Math.min(priorScrollTop, Math.max(0, root.scrollHeight - root.clientHeight));
+  } else root.scrollTop = Math.min(priorScrollTop, Math.max(0, root.scrollHeight - root.clientHeight));
+  requestAnimationFrame(() => { suppressChatScrollTracking = false; });
   const disabled = session.stage === "working";
   document.querySelector("#creative-chat-input").disabled = disabled;
   document.querySelector("#creative-send").disabled = disabled;
@@ -941,22 +970,24 @@ function renderCurrentTask(session) {
     storyboard_review: "剧情与分镜确认", prompt_review: "视频提示词确认",
     ready_to_generate: "视频生成确认", video_review: "逐镜视频复审", working: "任务处理中",
   };
-  const actionable = [...session.messages].reverse().find((message) => (message.cards || []).some((card) => !["superseded", "failed", "confirmed"].includes(card.status)));
-  const cards = (actionable?.cards || []).filter((card) => !["superseded", "failed", "confirmed"].includes(card.status));
+  const candidates = [...document.querySelectorAll("#creative-messages .workflow-confirm-action")]
+    .filter((action) => !action.hidden && String(action.dataset.workflowStages || "").split(/\s+/).includes(session.stage))
+    .sort((left, right) => Number(right.dataset.workflowPriority || 0) - Number(left.dataset.workflowPriority || 0));
+  const currentAction = candidates[0] || null;
   const copy = element("div", "chat-current-task-copy");
   copy.append(element("small", "", "当前待处理"), element("strong", "", stageLabels[session.stage] || "继续当前创作"));
   const description = session.stage === "working"
     ? "正在处理，完成后会更新当前任务"
-    : cards.length ? cards.slice(0, 2).map((card) => card.title).join(" · ") : "可继续在下方对话中提出要求";
+    : currentAction ? currentAction.dataset.workflowLabel : "当前没有需要确认才能继续的步骤";
   copy.append(element("p", "", description));
-  const button = element("button", "", actionable ? "定位到任务" : "暂无待确认");
-  button.type = "button"; button.disabled = !actionable;
+  const button = element("button", "", currentAction ? "定位到待确认步骤" : session.stage === "working" ? "处理中" : "暂无待确认");
+  button.type = "button"; button.disabled = !currentAction;
   button.addEventListener("click", () => {
-    const target = document.querySelector(`.chat-message[data-message-id="${actionable.id}"]`);
+    const target = currentAction.closest(".character-group-actions,.chat-candidate-card,.chat-message") || currentAction;
     if (!target) return;
-    document.querySelectorAll(".chat-message.current-task-highlight").forEach((item) => item.classList.remove("current-task-highlight"));
+    document.querySelectorAll(".current-task-highlight").forEach((item) => item.classList.remove("current-task-highlight"));
     target.classList.add("current-task-highlight");
-    target.scrollIntoView({ behavior: "smooth", block: "start" });
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
     setTimeout(() => target.classList.remove("current-task-highlight"), 1800);
   });
   const row = element("div", "chat-current-task-row"); row.append(copy, button); panel.append(row);
@@ -1003,6 +1034,7 @@ async function sendMessage(content) {
     body: JSON.stringify({ content }),
   });
   document.querySelector("#creative-chat-input").value = "";
+  chatFollowLatest = true;
   await refreshSession();
 }
 
@@ -1027,5 +1059,15 @@ document.querySelector("#source-analysis-close").addEventListener("click", () =>
 document.querySelector("#source-analysis-dialog").addEventListener("click", (event) => {
   if (event.target === event.currentTarget) event.currentTarget.close();
 });
+
+const chatMessages = document.querySelector("#creative-messages");
+chatMessages.addEventListener("wheel", (event) => {
+  if (event.deltaY < 0) chatFollowLatest = false;
+}, { passive: true });
+chatMessages.addEventListener("scroll", () => {
+  if (suppressChatScrollTracking) return;
+  const distanceFromBottom = chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight;
+  chatFollowLatest = distanceFromBottom <= 24;
+}, { passive: true });
 
 refreshSession();
