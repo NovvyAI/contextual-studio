@@ -1,5 +1,6 @@
 import { db, now } from "./database.js";
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
+import { publicInputUrl } from "./character-generator.js";
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -37,6 +38,66 @@ export function startFinalCardGeneration(sessionId, cardId) {
   db.prepare("UPDATE creative_sessions SET stage = 'working', error_message = NULL, updated_at = ? WHERE id = ?").run(timestamp, sessionId);
 
   runFinalCardGeneration(sessionId, generatingCard, prompt);
+}
+
+export function startFinalCardRegeneration(sessionId, cardId, feedback) {
+  const session = db.prepare("SELECT * FROM creative_sessions WHERE id = ?").get(sessionId);
+  if (!session) throw new Error("创意工作台不存在");
+  if (session.stage === "working") throw new Error("当前仍有任务正在处理");
+  const instruction = String(feedback || "").trim();
+  if (!instruction) throw new Error("请先填写落版图修改意见");
+  const card = allCards(sessionId).find((item) => item.id === cardId && item.kind === "final_card" && item.previewUrl);
+  if (!card) throw new Error("找不到这张已生成的落版图预览");
+
+  const timestamp = now();
+  const version = Number(card.version || 1) + 1;
+  const generatingCard = {
+    ...card, version, status: "generating", previewUrl: "",
+    details: [...(card.details || []), { label: `V${version} 修改意见`, content: instruction }],
+  };
+  db.prepare("INSERT INTO creative_messages (session_id, role, content, created_at) VALUES (?, 'user', ?, ?)")
+    .run(sessionId, `修改落版图 ${cardId}：${instruction}`, timestamp);
+  appendCardMessage(sessionId, "收到，我会以当前落版图为主图生成修改版。旧版本继续保留，流程仍停留在落版图审核。", generatingCard);
+  db.prepare("UPDATE creative_sessions SET stage = 'working', error_message = NULL, updated_at = ? WHERE id = ?").run(timestamp, sessionId);
+  runFinalCardRegeneration(sessionId, card, generatingCard, instruction);
+}
+
+async function runFinalCardRegeneration(sessionId, sourceCard, generatingCard, feedback) {
+  try {
+    const sourceUrl = await publicInputUrl(sourceCard.previewUrl);
+    const originalPrompt = cardPrompt(sourceCard);
+    const prompt = `Edit the supplied image, which is the exact current advertising final-card design. User feedback: ${feedback}. Preserve every element not explicitly changed, including product identity, composition, visual hierarchy, English copy and CTA. Keep every visible English word accurate and mobile-readable. ${originalPrompt ? `Original design intent: ${originalPrompt}` : ""} Return one polished vertical final-card image only. Do not create a collage, comparison layout, labels, annotations, watermark, or unintended text.`;
+    const client = new NovvyMcpClient();
+    await client.initialize();
+    const created = unpackToolResult(await client.callTool("novvy_create_image_generation", {
+      model: "gpt-image-2", prompt, imageUrls: [sourceUrl], inputFidelity: "high", n: 1, outputFormat: "png", quality: "high", includeRaw: false,
+    }));
+    const taskId = findValue(created, ["taskId", "task_id", "id"]);
+    const providerSessionId = findValue(created, ["sessionId", "session_id"]);
+    if (!taskId && !providerSessionId) throw new Error("Novvy 未返回可查询的生成任务 ID");
+    let queried = created;
+    const deadline = Date.now() + 20 * 60 * 1000;
+    while (Date.now() < deadline) {
+      const status = normalizedStatus(queried);
+      const previewUrl = findPreviewUrl(queried);
+      if (status === "completed" && previewUrl) { queried = { ...queried, previewUrl }; break; }
+      if (status === "failed") throw new Error(findValue(queried, ["error", "errorMessage", "message"]) || "Novvy 图片生成失败");
+      await wait(5000);
+      queried = unpackToolResult(await client.callTool("novvy_query_generation", {
+        ...(taskId ? { taskId } : {}), ...(providerSessionId ? { sessionId: providerSessionId } : {}), model: "gpt-image-2", includeRaw: false,
+      }));
+    }
+    const previewUrl = queried.previewUrl || findPreviewUrl(queried);
+    if (!previewUrl) throw new Error("图片生成查询超时，尚未返回预览地址");
+    appendCardMessage(sessionId, `落版图 V${generatingCard.version} 已生成。请继续审核；确认使用前不会进入人物与参考图。`, {
+      ...generatingCard, previewUrl, status: "candidate", details: [...generatingCard.details, { label: "生成任务", content: taskId || providerSessionId }],
+    });
+    db.prepare("UPDATE creative_sessions SET stage = 'final_card_review', error_message = NULL, updated_at = ? WHERE id = ?").run(now(), sessionId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    appendCardMessage(sessionId, `落版图修改版生成失败：${message}。原图继续保留，你可以直接重试。`, { ...generatingCard, previewUrl: sourceCard.previewUrl, status: "failed" });
+    db.prepare("UPDATE creative_sessions SET stage = 'final_card_review', error_message = ?, updated_at = ? WHERE id = ?").run(message, now(), sessionId);
+  }
 }
 
 export function approveFinalCard(sessionId, cardId) {

@@ -8,7 +8,7 @@ import { db, now, serializeAnalysis, serializeGameAnalysis, serializeCreativeSes
 import { analyzeDrama } from "./analyzer.js";
 import { analyzeGame } from "./game-analyzer.js";
 import { runCreativeTurn } from "./creative-agent.js";
-import { approveFinalCard, startFinalCardGeneration } from "./image-generator.js";
+import { approveFinalCard, startFinalCardGeneration, startFinalCardRegeneration } from "./image-generator.js";
 import { approveCharacterReferences, startCharacterRegeneration, startCustomCharacterGeneration } from "./character-generator.js";
 import { startVideoGeneration } from "./video-generator.js";
 import { resumeImaRouterVideoGeneration, startImaRouterVideoGeneration } from "./imarouter-video-generator.js";
@@ -240,6 +240,15 @@ const server = http.createServer(async (req, res) => {
       approveFinalCard(id, cardId);
       const row = db.prepare("SELECT * FROM creative_sessions WHERE id = ?").get(id);
       return json(res, 200, serializeCreativeSession(row));
+    }
+
+    const finalCardRegenerateMatch = url.pathname.match(/^\/api\/creative\/sessions\/(\d+)\/cards\/([^/]+)\/regenerate-final-card$/);
+    if (req.method === "POST" && finalCardRegenerateMatch) {
+      const id = Number(finalCardRegenerateMatch[1]);
+      const cardId = decodeURIComponent(finalCardRegenerateMatch[2]);
+      const body = JSON.parse((await requestBody(req)).toString("utf8") || "{}");
+      startFinalCardRegeneration(id, cardId, body.feedback);
+      return json(res, 202, { id, cardId, status: "working", action: "final_card_regeneration" });
     }
 
     const characterRegenerateMatch = url.pathname.match(/^\/api\/creative\/sessions\/(\d+)\/cards\/([^/]+)\/regenerate-image$/);

@@ -483,6 +483,13 @@ function renderChatCard(card, disabled) {
           await api(`/api/creative/sessions/${sessionId}/cards/${encodeURIComponent(card.id)}/regenerate-storyboard-image`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ feedback: instruction }) });
           submitted = true; await refreshSession();
         }
+      } else if (card.kind === "final_card" && card.previewUrl) {
+        const instruction = feedback.value.trim();
+        if (!instruction) { feedback.setCustomValidity("请先填写对这张落版图的修改意见"); feedback.reportValidity(); feedback.setCustomValidity(""); submitted = false; }
+        else {
+          await api(`/api/creative/sessions/${sessionId}/cards/${encodeURIComponent(card.id)}/regenerate-final-card`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ feedback: instruction }) });
+          submitted = true; await refreshSession();
+        }
       } else submitted = await sendChatCardFeedback(card, feedback.value, feedback);
       if (!submitted) { regenerate.disabled = false; regenerate.textContent = "按意见重新生成"; }
     } catch (error) {
