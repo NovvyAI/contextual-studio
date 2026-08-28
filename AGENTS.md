@@ -23,3 +23,13 @@ Every skill used by this product's runtime workflows must live in this repositor
 - Keep each local skill self-contained: include the required `SKILL.md`, referenced scripts, templates, assets, and narrowly required documentation.
 - When an external reference is updated, compare it with the local skill and selectively port useful changes. Do not overwrite project-specific behavior automatically.
 - New skills created for Contextual Studio must be created in `.agents/skills/` first.
+
+## Change history
+
+Keep the project-level `CHANGELOG.md` current.
+
+- Every material feature, fix, behavior change, workflow change, configuration change, dependency change, or documentation change must update `CHANGELOG.md` in the same working change.
+- Add unreleased work under `## 未发布`, using the appropriate Chinese subsection such as `新增`, `调整`, `修复`, or `文档`.
+- Keep entries concise, user-visible, and ordered with the newest item first inside its subsection.
+- When preparing a release, move the relevant unreleased entries into a dated section; do not erase historical entries.
+- Internal investigation, read-only checks, and changes that do not modify project files do not require a changelog entry.

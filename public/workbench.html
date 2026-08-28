@@ -9,6 +9,11 @@
       .artifact-preview-item{min-width:0;margin:0;border:1px solid #30362c;border-radius:8px;background:#11140f;overflow:hidden}
       .artifact-preview-item .artifact-preview-link{border-radius:0}
       .artifact-preview-caption{margin:0;padding:9px 10px;color:#b8c0b2;font-size:10px;line-height:1.55;white-space:pre-wrap}
+      .chat-current-task{flex:none;margin:10px 12px 0;padding:10px 11px;border:1px solid #637443;border-radius:10px;background:#1b2116;box-shadow:0 8px 22px #0005}
+      .chat-current-task-row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+      .chat-current-task-copy{min-width:0}.chat-current-task-copy small{display:block;color:#a8c85b;font-size:8px;letter-spacing:.12em}.chat-current-task-copy strong{display:block;margin-top:4px;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.chat-current-task-copy p{margin:4px 0 0;color:#929b8a;font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      .chat-current-task button{flex:none;border:1px solid #819752;border-radius:7px;background:#29331f;color:#deefac;padding:7px 9px;font-size:9px;font-weight:700;cursor:pointer}.chat-current-task button:hover{background:#354228}.chat-current-task button:disabled{opacity:.5;cursor:default}
+      .chat-message.current-task-highlight{border-color:#a6c45c;box-shadow:0 0 0 2px #a6c45c33}
     </style>
   </head>
   <body class="workbench-page">
@@ -29,6 +34,7 @@
         </section>
         <aside class="chat-panel">
           <div class="chat-header"><div class="chat-avatar">N</div><div><strong>Novvy 创意助手</strong><small>由 Codex 驱动 · 持续保存</small></div></div>
+          <div id="chat-current-task" class="chat-current-task"></div>
           <div id="creative-messages" class="chat-messages"></div>
           <form id="creative-chat-form" class="chat-compose"><textarea id="creative-chat-input" rows="3" placeholder="选择方案，或告诉我想修改的方向…"></textarea><button id="creative-send" type="submit">发送 ↑</button></form>
         </aside>

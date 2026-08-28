@@ -79,6 +79,7 @@ contextual-studio/
 │   └── video-finalizer.js           视频拼接与最终成片
 ├── .env.example                     环境变量示例
 ├── AGENTS.md                        项目本地 Skill 规则
+├── CHANGELOG.md                     中文修改历史
 ├── TODO.md                          后续开发及云端部署事项
 ├── package.json
 └── start_server.sh                  本地启动脚本

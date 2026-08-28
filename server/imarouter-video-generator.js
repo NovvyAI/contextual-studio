@@ -8,6 +8,8 @@ import { parseStoryboardVideoPlan, shotCard } from "./storyboard-video-plan.js";
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const execFileAsync = promisify(execFile);
+const VIDEO_MODEL = "seedance-2.0-fast";
+const VIDEO_MODEL_LABEL = "Seedance 2.0 Fast";
 const OK = new Set(["succeeded", "completed", "success"]);
 const FAILED = new Set(["failed", "error", "cancelled", "canceled"]);
 
@@ -123,9 +125,9 @@ export function startImaRouterVideoGeneration(sessionId, cardId) {
   const reference = selectReferences(workspace);
   const timestamp = now();
   db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, `使用 ImaRouter 生成视频：${cardId}`, timestamp);
-  append(sessionId, `已选择 ImaRouter。正在准备逐镜分镜图和多人物参考图，然后通过 Seedance 2.0 生成视频。参考策略：${reference.strategy}。`, {
+  append(sessionId, `已选择 ImaRouter。正在准备逐镜分镜图和多人物参考图，然后通过 ${VIDEO_MODEL_LABEL} 生成视频。参考策略：${reference.strategy}。`, {
     ...card, previewUrl: "", status: "generating",
-    details: [...(card.details || []).filter((item) => !["视频供应商", "参考策略"].includes(item.label)), { label: "视频供应商", content: "ImaRouter / Seedance 2.0" }, { label: "参考策略", content: reference.strategy }],
+    details: [...(card.details || []).filter((item) => !["视频供应商", "参考策略"].includes(item.label)), { label: "视频供应商", content: `ImaRouter / ${VIDEO_MODEL_LABEL}` }, { label: "参考策略", content: reference.strategy }],
   });
   db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, sessionId);
   generate(sessionId, card, plan, reference);
@@ -164,7 +166,7 @@ async function generate(sessionId, card, plan, reference) {
           .run(sessionId, card.id, shot.shotId, shot.order, version, shot.durationSeconds, shot.promptEn, createdAt, createdAt);
         const imageReferences = [storyboardReference, ...characterReferences];
         const referenceInstruction = `The first reference image is the approved storyboard frame for this exact shot and controls composition, camera angle, scene layout, action, pose, and object placement. The following ${characterReferences.length} images control character identity, facial features, age, hairstyle, costume, and accessories. Keep the same identities throughout. `;
-        const created = await request(`${baseUrl}/v1/videos`, { method: "POST", headers, body: JSON.stringify({ model: "seedance-2.0", prompt: `${referenceInstruction}${shot.promptEn}`, duration: shot.durationSeconds, aspect_ratio: "9:16", metadata: { resolution: "720p" }, images: imageReferences }) });
+        const created = await request(`${baseUrl}/v1/videos`, { method: "POST", headers, body: JSON.stringify({ model: VIDEO_MODEL, prompt: `${referenceInstruction}${shot.promptEn}`, duration: shot.durationSeconds, aspect_ratio: "9:16", metadata: { resolution: "720p" }, images: imageReferences }) });
         taskId = created?.id || created?.task_id;
         if (!taskId) throw new Error(`${shot.shotId}：ImaRouter 未返回视频任务 ID`);
         db.prepare("UPDATE creative_video_shots SET task_id=?,updated_at=? WHERE session_id=? AND prompt_card_id=? AND shot_id=? AND version=?").run(taskId, now(), sessionId, card.id, shot.shotId, version);
@@ -180,7 +182,7 @@ async function generate(sessionId, card, plan, reference) {
       }
       if (!previewUrl) throw new Error(`${shot.shotId} 查询超时或未返回视频地址`);
       db.prepare("UPDATE creative_video_shots SET status='completed',result_url=?,updated_at=? WHERE session_id=? AND prompt_card_id=? AND shot_id=? AND version=?").run(previewUrl, now(), sessionId, card.id, shot.shotId, version);
-      append(sessionId, `${shot.shotId} V${version} 已生成，可以单独播放复审。`, shotCard(card, shot, { previewUrl, status: "completed", version, details: [...shotCard(card, shot).details, { label: "版本", content: `V${version}` }, { label: "视频供应商", content: "ImaRouter / Seedance 2.0" }, { label: "参考策略", content: `对应分镜图 ${shot.order} + ${characterReferences.length} 张人物参考图` }, { label: "视频任务", content: taskId }] }));
+      append(sessionId, `${shot.shotId} V${version} 已生成，可以单独播放复审。`, shotCard(card, shot, { previewUrl, status: "completed", version, details: [...shotCard(card, shot).details, { label: "版本", content: `V${version}` }, { label: "视频供应商", content: `ImaRouter / ${VIDEO_MODEL_LABEL}` }, { label: "参考策略", content: `对应分镜图 ${shot.order} + ${characterReferences.length} 张人物参考图` }, { label: "视频任务", content: taskId }] }));
     }
     append(sessionId, "全部内容镜头已经生成。请逐镜播放复审；确认后再按顺序拼接，并追加已确认的原始落版图。", { ...card, previewUrl: "", status: "completed", details: [...(card.details || []).filter((item) => item.label !== "失败原因"), { label: "逐镜状态", content: `${plan.shots.length} 个镜头已完成，等待统一确认拼接` }] });
     db.prepare("UPDATE creative_sessions SET stage='video_review',error_message=NULL,updated_at=? WHERE id=?").run(now(), sessionId);
@@ -188,7 +190,7 @@ async function generate(sessionId, card, plan, reference) {
     const message = error instanceof Error ? error.message : String(error);
     append(sessionId, `ImaRouter 视频没有生成成功：${message}。提示词和参考素材均已保留。`, {
       ...card, previewUrl: "", status: "failed",
-      details: [...(card.details || []).filter((item) => !["失败原因", "视频供应商", "参考策略"].includes(item.label)), { label: "视频供应商", content: "ImaRouter / Seedance 2.0" }, { label: "参考策略", content: reference.strategy }, { label: "失败原因", content: message }],
+      details: [...(card.details || []).filter((item) => !["失败原因", "视频供应商", "参考策略"].includes(item.label)), { label: "视频供应商", content: `ImaRouter / ${VIDEO_MODEL_LABEL}` }, { label: "参考策略", content: reference.strategy }, { label: "失败原因", content: message }],
     });
     db.prepare("UPDATE creative_sessions SET stage='prompt_review',error_message=?,updated_at=? WHERE id=?").run(message, now(), sessionId);
   }

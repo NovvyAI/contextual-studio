@@ -871,6 +871,8 @@ function renderStoryboardGroupActions(session, storyboardCards) {
 
 function renderMessages(session) {
   const root = document.querySelector("#creative-messages");
+  const priorScrollTop = root.scrollTop;
+  const wasNearBottom = root.scrollHeight - root.scrollTop - root.clientHeight < 90;
   root.replaceChildren();
   const latestCharacterCards = new Map();
   let characterGroupMessageId = null;
@@ -898,6 +900,7 @@ function renderMessages(session) {
   const fallbackCardMessageId = !hasPersistedCards ? [...session.messages].reverse().find((message) => message.role === "assistant")?.id : null;
   session.messages.forEach((message) => {
     const bubble = element("article", `chat-message ${message.role}`);
+    bubble.dataset.messageId = message.id;
     bubble.append(element("small", "", message.role === "user" ? "你" : "Novvy"), element("p", "", message.content));
     const rawCards = message.cards?.length ? message.cards : message.id === fallbackCardMessageId ? conceptChatCards(session.workspace) : [];
     const cards = [
@@ -922,10 +925,41 @@ function renderMessages(session) {
     bubble.append(element("small", "", "Novvy"), element("p", "", humanThinkingReply(latestUserMessage)));
     root.append(bubble);
   }
-  root.scrollTop = root.scrollHeight;
+  renderCurrentTask(session);
+  root.scrollTop = wasNearBottom ? root.scrollHeight : Math.min(priorScrollTop, root.scrollHeight - root.clientHeight);
   const disabled = session.stage === "working";
   document.querySelector("#creative-chat-input").disabled = disabled;
   document.querySelector("#creative-send").disabled = disabled;
+}
+
+function renderCurrentTask(session) {
+  const panel = document.querySelector("#chat-current-task");
+  panel.replaceChildren();
+  const stageLabels = {
+    ideating: "创意方向", concept_review: "创意方案确认", concept_selected: "落版图准备",
+    final_card_review: "落版图确认", reference_review: "人物与参考图确认",
+    storyboard_review: "剧情与分镜确认", prompt_review: "视频提示词确认",
+    ready_to_generate: "视频生成确认", video_review: "逐镜视频复审", working: "任务处理中",
+  };
+  const actionable = [...session.messages].reverse().find((message) => (message.cards || []).some((card) => !["superseded", "failed", "confirmed"].includes(card.status)));
+  const cards = (actionable?.cards || []).filter((card) => !["superseded", "failed", "confirmed"].includes(card.status));
+  const copy = element("div", "chat-current-task-copy");
+  copy.append(element("small", "", "当前待处理"), element("strong", "", stageLabels[session.stage] || "继续当前创作"));
+  const description = session.stage === "working"
+    ? "正在处理，完成后会更新当前任务"
+    : cards.length ? cards.slice(0, 2).map((card) => card.title).join(" · ") : "可继续在下方对话中提出要求";
+  copy.append(element("p", "", description));
+  const button = element("button", "", actionable ? "定位到任务" : "暂无待确认");
+  button.type = "button"; button.disabled = !actionable;
+  button.addEventListener("click", () => {
+    const target = document.querySelector(`.chat-message[data-message-id="${actionable.id}"]`);
+    if (!target) return;
+    document.querySelectorAll(".chat-message.current-task-highlight").forEach((item) => item.classList.remove("current-task-highlight"));
+    target.classList.add("current-task-highlight");
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+    setTimeout(() => target.classList.remove("current-task-highlight"), 1800);
+  });
+  const row = element("div", "chat-current-task-row"); row.append(copy, button); panel.append(row);
 }
 
 function humanThinkingReply(message) {
