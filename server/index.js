@@ -21,6 +21,7 @@ import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
 const port = Number(process.env.PORT || 4180);
 const publicDir = path.resolve("public");
 const uploadsDir = path.resolve("data/uploads");
+const chatUploadsDir = path.resolve("data/chat-uploads");
 const maxUploadBytes = 1024 * 1024 * 1024;
 let gcloudAuth = { status: "idle", message: "", startedAt: "", completedAt: "" };
 
@@ -134,6 +135,17 @@ const server = http.createServer(async (req, res) => {
       return filePath ? sendVideoFile(req, res, filePath) : json(res, 404, { error: "视频不存在" });
     }
 
+    const chatAttachmentMatch = url.pathname.match(/^\/api\/creative\/chat-attachments\/(\d+)\/([^/]+)$/);
+    if (req.method === "GET" && chatAttachmentMatch) {
+      const sessionId = Number(chatAttachmentMatch[1]);
+      const storedName = path.basename(decodeURIComponent(chatAttachmentMatch[2]));
+      const attachment = db.prepare("SELECT attachments_json FROM creative_messages WHERE session_id=? AND attachments_json IS NOT NULL ORDER BY id DESC").all(sessionId)
+        .flatMap((row) => { try { return JSON.parse(row.attachments_json || "[]"); } catch { return []; } })
+        .find((item) => item.storedName === storedName);
+      if (!attachment) return json(res, 404, { error: "附件不存在" });
+      return attachment.type.startsWith("video/") ? sendVideoFile(req, res, attachment.storedPath) : sendFile(res, attachment.storedPath, attachment.type);
+    }
+
     if (req.method === "GET" && url.pathname === "/api/creative/sources") {
       const dramas = db.prepare("SELECT id, title, analysis_json, created_at FROM drama_analyses WHERE status = 'completed' ORDER BY id DESC").all();
       const games = db.prepare("SELECT id, title, analysis_json, platform, created_at FROM game_analyses WHERE status = 'completed' ORDER BY id DESC").all();
@@ -172,25 +184,44 @@ const server = http.createServer(async (req, res) => {
       const session = db.prepare("SELECT * FROM creative_sessions WHERE id = ?").get(id);
       if (!session) return json(res, 404, { error: "创意工作台不存在" });
       if (session.stage === "working") return json(res, 409, { error: "Novvy 正在处理上一条消息" });
-      const body = JSON.parse((await requestBody(req)).toString("utf8") || "{}");
-      const content = String(body.content || "").trim();
-      if (!content) return json(res, 400, { error: "请输入消息" });
+      const isMultipart = String(req.headers["content-type"] || "").includes("multipart/form-data");
+      const body = isMultipart ? await parseMultipart(req) : JSON.parse((await requestBody(req)).toString("utf8") || "{}");
+      const content = String(isMultipart ? body.get("content") : body.content || "").trim();
+      const files = isMultipart ? body.getAll("attachments").filter((file) => file instanceof File && file.size) : [];
+      if (!content && !files.length) return json(res, 400, { error: "请输入消息或添加图片、视频" });
+      if (files.length > 6) return json(res, 400, { error: "每条消息最多添加 6 个附件" });
+      const attachments = [];
+      const sessionUploadDir = path.join(chatUploadsDir, String(id));
+      await fsp.mkdir(sessionUploadDir, { recursive: true });
+      for (const file of files) {
+        const isImage = ["image/jpeg", "image/png", "image/webp"].includes(file.type);
+        const isVideo = file.type.startsWith("video/");
+        if (!isImage && !isVideo) return json(res, 400, { error: `不支持附件格式：${file.name}` });
+        if (isImage && file.size > 20 * 1024 * 1024) return json(res, 400, { error: `图片不能超过 20MB：${file.name}` });
+        if (isVideo && file.size > 500 * 1024 * 1024) return json(res, 400, { error: `视频不能超过 500MB：${file.name}` });
+        const extension = path.extname(file.name).toLowerCase() || (isImage ? ".jpg" : ".mp4");
+        const storedName = `${Date.now()}-${crypto.randomUUID()}${extension}`;
+        const storedPath = path.join(sessionUploadDir, storedName);
+        await fsp.writeFile(storedPath, Buffer.from(await file.arrayBuffer()));
+        attachments.push({ name: file.name, type: file.type, size: file.size, storedName, storedPath, url: `/api/creative/chat-attachments/${id}/${encodeURIComponent(storedName)}` });
+      }
+      const userMessage = content || "请查看并分析我上传的附件。";
       const storyboardTarget = content.match(/分镜(?:图|镜头)?\s*0*(\d+)/i);
       const storyboardEditIntent = /修改|调整|重绘|重新生成|改成|换成|替换|去掉|去除|移除|删除|增加|添加|希望|需要|不要|不一样|不同/i.test(content);
-      if (storyboardTarget && storyboardEditIntent) {
+      if (!attachments.length && storyboardTarget && storyboardEditIntent) {
         startStoryboardImageRegenerationByNumber(id, Number(storyboardTarget[1]), content);
         return json(res, 202, { id, status: "working", action: "storyboard_image_regeneration", shotNumber: Number(storyboardTarget[1]) });
       }
       const characterImageRequest = /(?:生成|创建|做|画|制作).{0,18}(?:人物|男主|女主|男人|女人|正脸|侧脸|正面|侧面)|(?:基于|使用|参考).{0,18}(?:图片|截图).{0,30}(?:生成|创建|做|画)|(?:修改|调整|放大|缩小|聚焦|裁切|裁剪|去掉|去除|移除|删除|替换|换成|改成).{0,24}(?:图片|截图|人物|男主|女主|正脸|侧脸)|(?:图片|截图)\s*0*\d+.{0,24}(?:修改|调整|放大|缩小|聚焦|裁切|裁剪|去掉|去除|移除|删除|替换|换成|改成)/i.test(content);
-      if (characterImageRequest && /(?:图片|截图)\s*0*\d+|(?:人物|男主|女主|男人|女人|正脸|侧脸|正面|侧面)/i.test(content)) {
+      if (!attachments.length && characterImageRequest && /(?:图片|截图)\s*0*\d+|(?:人物|男主|女主|男人|女人|正脸|侧脸|正面|侧面)/i.test(content)) {
         startCustomCharacterGeneration(id, content);
         return json(res, 202, { id, status: "working", action: "character_image_generation" });
       }
       const timestamp = now();
-      db.prepare("INSERT INTO creative_messages (session_id, role, content, created_at) VALUES (?, 'user', ?, ?)").run(id, content, timestamp);
+      db.prepare("INSERT INTO creative_messages (session_id, role, content, attachments_json, created_at) VALUES (?, 'user', ?, ?, ?)").run(id, userMessage, attachments.length ? JSON.stringify(attachments) : null, timestamp);
       db.prepare("UPDATE creative_sessions SET stage = 'working', updated_at = ? WHERE id = ?").run(timestamp, id);
-      runCreativeTurn(id, content, false);
-      return json(res, 202, { id, status: "working" });
+      runCreativeTurn(id, userMessage, false, attachments);
+      return json(res, 202, { id, status: "working", attachmentCount: attachments.length });
     }
 
     const creativeCardGenerateMatch = url.pathname.match(/^\/api\/creative\/sessions\/(\d+)\/cards\/([^/]+)\/generate$/);

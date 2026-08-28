@@ -61,9 +61,18 @@ export class NovvyMcpClient {
     const body = { jsonrpc: "2.0", method, ...(params === undefined ? {} : { params }) };
     if (!notification) body.id = ++this.requestId;
     const response = await fetch(this.url, { method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(90_000) });
-    if (!response.ok) throw new Error(`Novvy MCP HTTP ${response.status}`);
     this.sessionId ||= response.headers.get("mcp-session-id") || "";
-    const payload = parsePayload(await response.text(), response.headers.get("content-type") || "");
+    const responseText = await response.text();
+    if (!response.ok) {
+      let detail = "";
+      try {
+        const parsed = parsePayload(responseText, response.headers.get("content-type") || "");
+        detail = parsed?.error?.message || parsed?.message || "";
+      } catch { detail = responseText.trim().slice(0, 500); }
+      const authHint = response.status === 401 || response.status === 403 ? "。请检查本机 .env 中的 NOVVY_MCP_AUTHORIZATION 是否有效" : "";
+      throw new Error(`Novvy MCP HTTP ${response.status}${detail ? `：${detail}` : ""}${authHint}`);
+    }
+    const payload = parsePayload(responseText, response.headers.get("content-type") || "");
     if (payload?.error) throw new Error(payload.error.message || "Novvy MCP 调用失败");
     return payload?.result ?? payload;
   }

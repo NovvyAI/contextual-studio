@@ -26,6 +26,7 @@ Contextual Studio 是一个面向短剧与游戏广告创意制作的本地 Web 
 - 用户先选择一条已分析短剧和一个已分析游戏，再进入独立工作台页面。
 - 左侧是蛇形节点画布，保存每次确认的创意成果；节点之间用虚线表达创作顺序。
 - 右侧是持续的创意助手对话，同一工作台沿用同一个 Codex session。
+- 底部输入框支持文字同时附带图片或视频：图片直接作为多模态视觉输入，视频在本地均匀抽取关键帧后进入同一会话。
 - 候选创意、人物图、落版图、分镜图和视频均以卡片呈现，可单独修改和重新生成。
 - 已确认成果不会覆盖历史版本，旧版本可以随时展开回看。
 
@@ -57,7 +58,8 @@ contextual-studio/
 │   └── novvy-ad-creative/
 ├── data/
 │   ├── contextual-studio.sqlite     SQLite 数据库
-│   └── uploads/                     上传的短剧原视频
+│   ├── uploads/                     上传的短剧原视频
+│   └── chat-uploads/                对话图片、视频及视频关键帧
 ├── public/
 │   ├── index.html                   主页面
 │   ├── app.js                       短剧、游戏及入口逻辑
@@ -70,6 +72,7 @@ contextual-studio/
 │   ├── analyzer.js                  短剧分析
 │   ├── game-analyzer.js             游戏分析
 │   ├── creative-agent.js            Codex 创意会话
+│   ├── chat-media.js                对话附件与视频关键帧预处理
 │   ├── image-generator.js           落版图生成
 │   ├── character-generator.js       人物图生成与修改
 │   ├── asset-generator.js           资产区图片生成与修改
@@ -123,6 +126,8 @@ cp .env.example .env
 
 不要把真实密钥提交到 Git。云端部署时应通过 GCP Secret Manager 注入。
 
+仅执行 `cp .env.example .env` 不会自动获得 Novvy MCP 权限。其他开发者如果没有安装包含有效 `.mcp.json` 的 Novvy 插件，必须在自己的 `.env` 中填写有效的 `NOVVY_MCP_AUTHORIZATION`，否则落版图、人物图和分镜图生成会持续失败。
+
 ## 启动项目
 
 首次 Clone 后，先安装依赖并登录 Codex：
@@ -169,6 +174,7 @@ npm run check
 
 - SQLite 数据库：`data/contextual-studio.sqlite`
 - 上传原视频：`data/uploads/`
+- 对话上传的图片、视频及临时关键帧：`data/chat-uploads/`
 - 短剧截图：SQLite 的 `drama_screenshots` 表，以 BLOB 保存
 - 短剧分析：`drama_analyses.analysis_json`
 - 游戏分析：`game_analyses.analysis_json`
@@ -224,6 +230,10 @@ PORT=4181
 npx codex login
 ./start_server.sh --check
 ```
+
+### 落版图反复生成失败
+
+先查看失败卡片中的具体错误。如果出现 `Novvy MCP HTTP 401/403` 或“缺少 `NOVVY_MCP_AUTHORIZATION`”，说明这台电脑没有可用的 Novvy MCP 鉴权。请在本机 `.env` 填写团队提供的有效凭据后重启服务；`cp .env.example .env` 只会复制空模板，不会自动配置权限。
 
 ## 当前注意事项
 

@@ -4,6 +4,7 @@ import path from "node:path";
 
 const dataDir = path.resolve("data");
 fs.mkdirSync(path.join(dataDir, "uploads"), { recursive: true });
+fs.mkdirSync(path.join(dataDir, "chat-uploads"), { recursive: true });
 
 export const db = new DatabaseSync(path.join(dataDir, "contextual-studio.sqlite"));
 db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
@@ -112,6 +113,7 @@ db.exec(`
 const creativeMessageColumns = new Set(db.prepare("PRAGMA table_info(creative_messages)").all().map((column) => column.name));
 if (!creativeMessageColumns.has("cards_json")) db.exec("ALTER TABLE creative_messages ADD COLUMN cards_json TEXT");
 if (!creativeMessageColumns.has("visibility")) db.exec("ALTER TABLE creative_messages ADD COLUMN visibility TEXT NOT NULL DEFAULT 'chat'");
+if (!creativeMessageColumns.has("attachments_json")) db.exec("ALTER TABLE creative_messages ADD COLUMN attachments_json TEXT");
 const gameAnalysisColumns = new Set(db.prepare("PRAGMA table_info(game_analyses)").all().map((column) => column.name));
 if (!gameAnalysisColumns.has("source_json")) db.exec("ALTER TABLE game_analyses ADD COLUMN source_json TEXT");
 
@@ -254,14 +256,19 @@ export function serializeCreativeSession(row) {
   if (!row) return null;
   const drama = db.prepare("SELECT * FROM drama_analyses WHERE id = ?").get(row.drama_id);
   const game = db.prepare("SELECT * FROM game_analyses WHERE id = ?").get(row.game_id);
-  const messages = db.prepare("SELECT id, role, content, cards_json, created_at FROM creative_messages WHERE session_id = ? AND COALESCE(visibility,'chat')='chat' ORDER BY id").all(row.id);
+  const messages = db.prepare("SELECT id, role, content, cards_json, attachments_json, created_at FROM creative_messages WHERE session_id = ? AND COALESCE(visibility,'chat')='chat' ORDER BY id").all(row.id);
   return {
     id: row.id, title: row.title, stage: row.stage,
     workspace: row.workspace_json ? JSON.parse(row.workspace_json) : null,
     codexThreadId: row.codex_thread_id, errorMessage: row.error_message,
     drama: serializeAnalysis(drama),
     game: serializeGameAnalysis(game),
-    messages: messages.map((message) => ({ id: message.id, role: message.role, content: message.content, cards: message.cards_json ? JSON.parse(message.cards_json) : [], createdAt: message.created_at })),
+    messages: messages.map((message) => ({
+      id: message.id, role: message.role, content: message.content,
+      cards: message.cards_json ? JSON.parse(message.cards_json) : [],
+      attachments: message.attachments_json ? JSON.parse(message.attachments_json).map(({ storedPath, ...attachment }) => attachment) : [],
+      createdAt: message.created_at,
+    })),
     assets: creativeAssets(row.id),
     screenshots: creativeScreenshotAssets(row.id),
     createdAt: row.created_at, updatedAt: row.updated_at,

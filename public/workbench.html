@@ -36,7 +36,15 @@
           <div class="chat-header"><div class="chat-avatar">N</div><div><strong>Novvy 创意助手</strong><small>智能创意协作 · 持续保存</small></div></div>
           <div id="chat-current-task" class="chat-current-task"></div>
           <div id="creative-messages" class="chat-messages"></div>
-          <form id="creative-chat-form" class="chat-compose"><textarea id="creative-chat-input" rows="3" placeholder="选择方案，或告诉我想修改的方向…"></textarea><button id="creative-send" type="submit">发送 ↑</button></form>
+          <form id="creative-chat-form" class="chat-compose">
+            <div id="chat-attachment-preview" class="chat-attachment-preview"></div>
+            <textarea id="creative-chat-input" rows="3" placeholder="输入消息，也可以添加图片或视频…"></textarea>
+            <div class="chat-compose-actions">
+              <label id="chat-attachment-button" class="chat-attachment-button">＋ 图片或视频<input id="chat-attachment-input" type="file" accept="image/jpeg,image/png,image/webp,video/*" multiple></label>
+              <small id="chat-attachment-hint">最多 6 个附件</small>
+              <button id="creative-send" type="submit">发送 ↑</button>
+            </div>
+          </form>
         </aside>
       </div>
     </main>
@@ -49,6 +57,6 @@
         <div id="source-analysis-body" class="source-analysis-body"></div>
       </div>
     </dialog>
-    <script type="module" src="/workbench.js?v=20260827-9"></script>
+    <script type="module" src="/workbench.js?v=20260828-1"></script>
   </body>
 </html>

@@ -3,6 +3,8 @@ let pollTimer;
 let chatFollowLatest = true;
 let chatRenderSignature = "";
 let suppressChatScrollTracking = false;
+const pendingChatFiles = [];
+let pendingChatPreviewUrls = [];
 const selectedCharacterIds = new Set();
 
 function updateCharacterSelectionUI() {
@@ -46,6 +48,41 @@ function element(tag, className, text) {
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
   return node;
+}
+
+function renderPendingChatFiles() {
+  pendingChatPreviewUrls.forEach((url) => URL.revokeObjectURL(url));
+  pendingChatPreviewUrls = [];
+  const root = document.querySelector("#chat-attachment-preview");
+  root.replaceChildren();
+  pendingChatFiles.forEach((file, index) => {
+    const card = element("article", "chat-pending-attachment");
+    const previewUrl = URL.createObjectURL(file); pendingChatPreviewUrls.push(previewUrl);
+    if (file.type.startsWith("video/")) {
+      const video = document.createElement("video"); video.src = previewUrl; video.muted = true; video.playsInline = true; video.preload = "metadata"; card.append(video);
+    } else {
+      const image = element("img"); image.src = previewUrl; image.alt = file.name; card.append(image);
+    }
+    const remove = element("button", "chat-pending-remove", "×"); remove.type = "button"; remove.title = `移除 ${file.name}`;
+    remove.addEventListener("click", () => { pendingChatFiles.splice(index, 1); renderPendingChatFiles(); });
+    card.append(element("span", "", file.name), remove); root.append(card);
+  });
+  document.querySelector("#chat-attachment-hint").textContent = pendingChatFiles.length ? `已添加 ${pendingChatFiles.length}/6` : "最多 6 个附件";
+}
+
+function renderMessageAttachments(attachments = []) {
+  const root = element("div", "chat-message-attachments");
+  attachments.forEach((attachment) => {
+    const link = element("a", `chat-message-attachment ${attachment.type.startsWith("video/") ? "video" : "image"}`);
+    link.href = attachment.url; link.target = "_blank"; link.rel = "noreferrer";
+    if (attachment.type.startsWith("video/")) {
+      const video = document.createElement("video"); video.src = attachment.url; video.controls = true; video.playsInline = true; video.preload = "metadata"; link.append(video);
+    } else {
+      const image = element("img"); image.src = attachment.url; image.alt = attachment.name; image.loading = "lazy"; link.append(image);
+    }
+    link.append(element("span", "", attachment.name)); root.append(link);
+  });
+  return root;
 }
 
 function labelFor(key) {
@@ -449,6 +486,7 @@ function renderChatCard(card, disabled) {
     }
   });
   const isFinalCardDraft = card.kind === "final_card" && !card.previewUrl;
+  const isFailedFinalCard = isFinalCardDraft && card.status === "failed";
   const isGeneratedFinalCard = card.kind === "final_card" && Boolean(card.previewUrl);
   const isVideoPromptDraft = card.kind === "video_prompt" && !card.previewUrl;
   const isShotBatchReady = isVideoPromptDraft && card.status === "completed" && (card.details || []).some((item) => item.label === "逐镜状态");
@@ -463,7 +501,7 @@ function renderChatCard(card, disabled) {
     providerRow.append(videoProvider);
     actions.append(providerRow);
   }
-  const adoptLabel = card.kind === "concept" ? "选择这个方案" : card.kind === "storyboard" ? "选择并生成分镜图" : isFinalCardDraft ? "确认并生成落版图" : isGeneratedFinalCard ? "确认使用" : isFinalVideo && card.status === "confirmed" ? "最终成片已确认" : isFinalVideo ? "确认最终成片" : isShotBatchReady ? "确认全部镜头并合成" : isVideoPromptDraft && card.status === "failed" ? "按所选方式重新生成" : isVideoPromptDraft ? "确认并生成逐镜视频" : "采用这个候选";
+  const adoptLabel = card.kind === "concept" ? "选择这个方案" : card.kind === "storyboard" ? "选择并生成分镜图" : isFailedFinalCard ? "重新生成落版图" : isFinalCardDraft ? "确认并生成落版图" : isGeneratedFinalCard ? "确认使用" : isFinalVideo && card.status === "confirmed" ? "最终成片已确认" : isFinalVideo ? "确认最终成片" : isShotBatchReady ? "确认全部镜头并合成" : isVideoPromptDraft && card.status === "failed" ? "按所选方式重新生成" : isVideoPromptDraft ? "确认并生成逐镜视频" : "采用这个候选";
   const adopt = element("button", "chat-card-adopt", adoptLabel); adopt.type = "button";
   const actionStages = card.kind === "concept" ? ["concept_review"]
     : card.kind === "storyboard" ? ["storyboard_review"]
@@ -901,6 +939,8 @@ function renderMessages(session) {
   let characterGroupMessageId = null;
   const latestStoryboardImageCards = new Map();
   let storyboardGroupMessageId = null;
+  const mutableCardKinds = new Set(["final_card", "video_prompt", "video_shot"]);
+  const latestMutableCardMessageIds = new Map();
   session.messages.forEach((message) => (message.cards || []).forEach((card) => {
     if (card.kind === "character_image") {
       characterGroupMessageId = message.id;
@@ -910,6 +950,7 @@ function renderMessages(session) {
       storyboardGroupMessageId ??= message.id;
       latestStoryboardImageCards.set(card.id, card);
     }
+    if (mutableCardKinds.has(card.kind) && card.id) latestMutableCardMessageIds.set(card.id, message.id);
   }));
   const groupedCharacterCards = [...latestCharacterCards.values()].sort((a, b) => {
     const left = Number(characterCandidateNumbers[a.id] || a.candidateNumber || 999);
@@ -925,9 +966,10 @@ function renderMessages(session) {
     const bubble = element("article", `chat-message ${message.role}`);
     bubble.dataset.messageId = message.id;
     bubble.append(element("small", "", message.role === "user" ? "你" : "Novvy"), element("p", "", message.content));
+    if (message.attachments?.length) bubble.append(renderMessageAttachments(message.attachments));
     const rawCards = message.cards?.length ? message.cards : message.id === fallbackCardMessageId ? conceptChatCards(session.workspace) : [];
     const cards = [
-      ...rawCards.filter((card) => card.kind !== "character_image" && card.kind !== "storyboard_image"),
+      ...rawCards.filter((card) => card.kind !== "character_image" && card.kind !== "storyboard_image" && (!mutableCardKinds.has(card.kind) || latestMutableCardMessageIds.get(card.id) === message.id)),
       ...(message.id === characterGroupMessageId ? groupedCharacterCards : []),
       ...(message.id === storyboardGroupMessageId ? groupedStoryboardImageCards : []),
     ];
@@ -959,6 +1001,8 @@ function renderMessages(session) {
   const disabled = session.stage === "working";
   document.querySelector("#creative-chat-input").disabled = disabled;
   document.querySelector("#creative-send").disabled = disabled;
+  document.querySelector("#chat-attachment-input").disabled = disabled;
+  document.querySelector("#chat-attachment-button").classList.toggle("disabled", disabled);
 }
 
 function renderCurrentTask(session) {
@@ -1026,14 +1070,20 @@ async function refreshSession() {
   }
 }
 
-async function sendMessage(content) {
-  if (!content.trim()) return;
-  await api(`/api/creative/sessions/${sessionId}/messages`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ content }),
-  });
+async function sendMessage(content, attachments = []) {
+  if (!content.trim() && !attachments.length) return;
+  const options = attachments.length ? (() => {
+    const form = new FormData(); form.append("content", content);
+    attachments.forEach((file) => form.append("attachments", file, file.name));
+    return { method: "POST", body: form };
+  })() : { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ content }) };
+  await api(`/api/creative/sessions/${sessionId}/messages`, options);
   document.querySelector("#creative-chat-input").value = "";
+  if (attachments.length) {
+    pendingChatFiles.splice(0);
+    document.querySelector("#chat-attachment-input").value = "";
+    renderPendingChatFiles();
+  }
   chatFollowLatest = true;
   await refreshSession();
 }
@@ -1042,7 +1092,7 @@ document.querySelector("#creative-chat-form").addEventListener("submit", async (
   event.preventDefault();
   const input = document.querySelector("#creative-chat-input");
   try {
-    await sendMessage(input.value);
+    await sendMessage(input.value, [...pendingChatFiles]);
   } catch (error) {
     input.setCustomValidity(error.message);
     input.reportValidity();
@@ -1058,6 +1108,19 @@ document.querySelector("#close-workbench").addEventListener("click", () => {
 document.querySelector("#source-analysis-close").addEventListener("click", () => document.querySelector("#source-analysis-dialog").close());
 document.querySelector("#source-analysis-dialog").addEventListener("click", (event) => {
   if (event.target === event.currentTarget) event.currentTarget.close();
+});
+
+document.querySelector("#chat-attachment-input").addEventListener("change", (event) => {
+  const incoming = [...event.target.files];
+  for (const file of incoming) {
+    if (pendingChatFiles.length >= 6) break;
+    const isImage = ["image/jpeg", "image/png", "image/webp"].includes(file.type);
+    const isVideo = file.type.startsWith("video/");
+    if (!isImage && !isVideo) continue;
+    pendingChatFiles.push(file);
+  }
+  event.target.value = "";
+  renderPendingChatFiles();
 });
 
 const chatMessages = document.querySelector("#creative-messages");
