@@ -62,6 +62,8 @@ contextual-studio/
 │   ├── uploads/                     上传的短剧原视频
 │   ├── chat-uploads/                对话图片、视频及视频关键帧
 │   └── generated/landing-pages/     一键打包生成的 HTML5 落地页及 ZIP
+├── config/
+│   └── production-profile.json      本地视频生产预算与流程参数
 ├── public/
 │   ├── index.html                   主页面
 │   ├── app.js                       短剧、游戏及入口逻辑
@@ -82,6 +84,7 @@ contextual-studio/
 │   ├── video-generator.js           Novvy MCP 视频生成
 │   ├── imarouter-video-generator.js ImaRouter 视频生成
 │   ├── video-finalizer.js           视频拼接与最终成片
+│   ├── video-quality-review.js       最终成片技术 QC、哈希与联络表
 │   └── landing-page-packager.js     成片压缩与 HTML5 落地页一键打包
 ├── .env.example                     环境变量示例
 ├── AGENTS.md                        项目本地 Skill 规则
@@ -250,7 +253,17 @@ npm run check
 
 其中，视听语言 Skill 负责把创意转译为可执行镜头参数，质量审核 Skill 与 `novvy-ad-creative` 的只读视听质量库提供 129 条规则和 60 个唯一导演样本，运行时只查询必要记录并转成可观察参数；分镜生产 Skill 负责最多三镜的文字分镜、静态分镜图和逐镜视频任务合同。内容镜头默认使用 0.35 秒音画交叉淡化，再确定性追加已确认落版图。外部资料中的 `single_final_video_pass` 在本项目中仅为用户明确选择时的严格模式；默认仍使用静态分镜图审核、逐镜生成/修改、Novvy MCP 或 ImaRouter、审核后拼接的现有流程。
 
+项目还选择性吸收了 Contextual Ad Skill Suite 的剧集理解、情绪连续性、参考用途、视听语言、视觉导演、对白表演、制作全案和视觉交接 Schema。分镜使用“输入→实体动作→实体结果→UI反馈→人物反应→更大钩子”的因果链，并在进入视频前检查人物、空间、物件、摄影、表演、玩法、UI/VFX 和文字图层。没有吸收 Suite 的强制单次视频、强制全素材落本地或 Novvy 只能生成落版图规则。
+
 个人目录、插件缓存和其他项目里的同名 Skill 仅作为参考。外部 Skill 更新时，应先比较差异，再选择性合并到项目本地版本，不能覆盖项目定制逻辑。
+
+## 本地生产 Profile
+
+视频生产策略由 `config/production-profile.json` 统一控制。当前默认不是外部 Suite 的 `single_final_video_pass`，而是符合现有工作台的 `reviewed_storyboard_multishot`：最多三个镜头、每镜 4–15 秒、默认 8 秒，静态分镜统一审核后逐镜生成和复审，允许用户明确操作后重新生成，支持 Novvy 与 ImaRouter，最后只输出一支拼接成片并确定性追加 3 秒落版图。
+
+`max_ai_video_submissions` 当前为 `null`，表示不设置跨工作台的固定总次数；每一次新提交仍必须来自用户点击确认或重新生成。`auto_retry_allowed` 为 `false`，后台不能在失败后擅自创建收费任务；`user_authorized_retry_allowed` 为 `true`，用户可以主动修改并重做某个镜头。修改该文件后需要重启服务，服务启动时会校验配置。
+
+多个镜头合成为最终成片后，后端会自动做一次技术 QC：完整解码、720×1280、时长、编码、像素格式、音轨和 SHA-256，并在 `data/generated/video-qc/` 保存 JSON 报告与 1fps 联络表。技术 QC 通过后才显示可确认的最终成片；人物、连续性、表演、产品真实性、文字和声音时序仍需用户人工复审。
 
 ## 常见问题
 

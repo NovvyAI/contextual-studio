@@ -1,0 +1,26 @@
+{
+  "schema_version": "contextual.production-profile.v1",
+  "profile_id": "contextual_studio_reviewed_multishot_v1",
+  "production_profile": "reviewed_storyboard_multishot",
+  "max_ai_video_submissions": null,
+  "submission_budget_mode": "per_user_confirmation",
+  "max_final_video_deliverables": 1,
+  "max_shots_per_final": 3,
+  "min_shot_duration_seconds": 4,
+  "default_shot_duration_seconds": 8,
+  "max_shot_duration_seconds": 15,
+  "video_drafts_allowed": false,
+  "auto_retry_allowed": false,
+  "user_authorized_retry_allowed": true,
+  "static_storyboard_approval_required": true,
+  "per_shot_review_required": true,
+  "allowed_video_providers": [
+    "novvy",
+    "imarouter"
+  ],
+  "final_assembly": {
+    "mode": "approved_shots_then_deterministic_final_card",
+    "transition_seconds": 0.35,
+    "final_card_duration_seconds": 3
+  }
+}

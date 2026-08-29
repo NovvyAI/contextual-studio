@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/contextual-ad/dialogue-performance-manifest.schema.json",
+  "title": "DialoguePerformanceManifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "library_version", "creative_id", "narrative_model_ids", "promise_model_ids", "dialogue_category_ids", "spoken_hard_cta_allowed", "vo_mode", "fourth_wall_mode", "approved_offscreen_addressees", "fourth_wall_evidence_ids", "lines", "review_status"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "library_version": {"type": "string", "minLength": 1},
+    "creative_id": {"$ref": "#/$defs/id"},
+    "narrative_model_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^M(0[1-9]|1[0-9])$"}},
+    "promise_model_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^P(0[1-9]|1[0-9])$"}},
+    "dialogue_category_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^D(0[1-9]|10)$"}},
+    "spoken_hard_cta_allowed": {"const": false},
+    "vo_mode": {"enum": ["fallback_only", "none", "approved_exception"]},
+    "fourth_wall_mode": {"enum": ["inherited", "allowed_by_source", "forbidden"]},
+    "approved_offscreen_addressees": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["addressee_id", "evidence_ids"],
+        "properties": {
+          "addressee_id": {"$ref": "#/$defs/id"},
+          "evidence_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}}
+        }
+      }
+    },
+    "fourth_wall_evidence_ids": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+    "lines": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["line_id", "shot_id", "start_seconds", "end_seconds", "speaker_character_id", "addressee_id", "addressee_type", "why_now", "intent", "text_cn_review", "text_en_delivery", "tone", "voice_fingerprint", "pace", "breath", "gaze", "gesture", "blocking", "handoff_action", "visual_proof_asset_ids", "lip_sync_required"],
+        "properties": {
+          "line_id": {"$ref": "#/$defs/id"},
+          "shot_id": {"$ref": "#/$defs/id"},
+          "start_seconds": {"type": "number", "minimum": 0},
+          "end_seconds": {"type": "number", "exclusiveMinimum": 0},
+          "speaker_character_id": {"$ref": "#/$defs/id"},
+          "addressee_id": {"$ref": "#/$defs/id"},
+          "addressee_type": {"enum": ["character", "self", "object", "offscreen_established", "viewer_allowed_by_source"]},
+          "why_now": {"type": "string", "minLength": 1},
+          "intent": {"type": "string", "minLength": 1},
+          "text_cn_review": {"type": "string", "minLength": 1},
+          "text_en_delivery": {"type": "string", "minLength": 1},
+          "tone": {"type": "string", "minLength": 1},
+          "voice_fingerprint": {"type": "string", "minLength": 1},
+          "pace": {"type": "string", "minLength": 1},
+          "breath": {"type": "string", "minLength": 1},
+          "stress_words": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+          "gaze": {"type": "string", "minLength": 1},
+          "gesture": {"type": "string", "minLength": 1},
+          "blocking": {"type": "string", "minLength": 1},
+          "handoff_action": {"$ref": "#/$defs/id"},
+          "visual_proof_asset_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+          "lip_sync_required": {"type": "boolean"},
+          "dialogue_mode": {"enum": ["onscreen_dialogue", "offscreen_dialogue", "self_talk", "inner_voice", "voiceover", "none"]},
+          "forbidden_delivery": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "review_status": {"const": "approved"}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"}
+  }
+}

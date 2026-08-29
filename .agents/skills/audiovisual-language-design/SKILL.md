@@ -38,6 +38,16 @@ For every shot return: stable ID/order/duration; narrative function and irrevers
 
 Avoid empty adjectives such as “cinematic”, “premium”, or “natural” unless followed by observable parameters.
 
+For a production handoff, use these local contracts selectively:
+
+- `references/emotion-continuity-contract.schema.json`: separate character emotion, audience emotion, brand temperature, forbidden jumps, and expression rules.
+- `references/audiovisual-language-bible.schema.json`: lock creative bridge, time/rhythm, visual, directing, editing, sound, effects, and continuity systems.
+- `references/visual-direction-bible.schema.json`: lock global direction, environment anchors, shot plans, and the prompt manifest.
+
+Do not emit three large documents for a simple revision. Use the relevant fields in the current card or storyboard, and materialize a full contract only when it will be persisted or handed to another production stage.
+
 ## Contextual Studio profile
 
 This project approves static storyboard images before video generation. It may generate up to three shots separately and lets the user choose Novvy MCP or ImaRouter, revise individual shots, and combine approved results. The external `single_final_video_pass` rule is an optional strict profile only; never apply it unless the user explicitly selects that profile.
+
+The active budget and timing rules come from `config/production-profile.json`; do not copy fixed limits from external contracts.

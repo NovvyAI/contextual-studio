@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { db } from "./database.js";
+import { productionProfile } from "./production-profile.js";
 
 const execFileAsync = promisify(execFile);
 const outputDir = path.resolve("data/generated/videos");
@@ -44,7 +45,7 @@ async function mediaDuration(inputPath) {
   return value;
 }
 
-async function crossfadeShots(inputs, outputPath, transitionSeconds = 0.35) {
+async function crossfadeShots(inputs, outputPath, transitionSeconds = productionProfile.final_assembly.transition_seconds) {
   if (inputs.length === 1) {
     await fsp.copyFile(inputs[0], outputPath);
     return;
@@ -84,13 +85,15 @@ export async function finalizeVideoWithApprovedCard(sessionId, remoteVideoUrl) {
   try {
     await Promise.all([download(remoteVideoUrl, inputVideo), writeSource(finalCard, inputCard)]);
     const audio = await hasAudio(inputVideo);
-    const videoFilters = "[0:v]trim=duration=12,setpts=PTS-STARTPTS,scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=30[v0];[1:v]trim=duration=3,setpts=PTS-STARTPTS,scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=30[v1];[v0][v1]concat=n=2:v=1:a=0[v]";
+    const contentDuration = productionProfile.max_shot_duration_seconds - productionProfile.final_assembly.final_card_duration_seconds;
+    const cardDuration = productionProfile.final_assembly.final_card_duration_seconds;
+    const videoFilters = `[0:v]trim=duration=${contentDuration},setpts=PTS-STARTPTS,scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=30[v0];[1:v]trim=duration=${cardDuration},setpts=PTS-STARTPTS,scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=30[v1];[v0][v1]concat=n=2:v=1:a=0[v]`;
     const filter = audio
-      ? `${videoFilters};[0:a]atrim=duration=12,asetpts=PTS-STARTPTS,aformat=sample_rates=48000:channel_layouts=stereo[a0];anullsrc=r=48000:cl=stereo,atrim=duration=3[a1];[a0][a1]concat=n=2:v=0:a=1[a]`
+      ? `${videoFilters};[0:a]atrim=duration=${contentDuration},asetpts=PTS-STARTPTS,aformat=sample_rates=48000:channel_layouts=stereo[a0];anullsrc=r=48000:cl=stereo,atrim=duration=${cardDuration}[a1];[a0][a1]concat=n=2:v=0:a=1[a]`
       : videoFilters;
-    const args = ["-y", "-i", inputVideo, "-loop", "1", "-t", "3", "-i", inputCard, "-filter_complex", filter, "-map", "[v]"];
+    const args = ["-y", "-i", inputVideo, "-loop", "1", "-t", String(cardDuration), "-i", inputCard, "-filter_complex", filter, "-map", "[v]"];
     if (audio) args.push("-map", "[a]", "-c:a", "aac", "-b:a", "192k"); else args.push("-an");
-    args.push("-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-t", "15", outputPath);
+    args.push("-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-t", String(contentDuration + cardDuration), outputPath);
     await execFileAsync("ffmpeg", args, { maxBuffer: 8 * 1024 * 1024 });
     return `/api/generated/videos/${fileName}`;
   } finally {
@@ -100,6 +103,7 @@ export async function finalizeVideoWithApprovedCard(sessionId, remoteVideoUrl) {
 
 export async function finalizeStoryboardVideosWithApprovedCard(sessionId, shotVideoUrls) {
   if (!Array.isArray(shotVideoUrls) || !shotVideoUrls.length) throw new Error("没有可拼接的已生成镜头");
+  if (shotVideoUrls.length > productionProfile.max_shots_per_final) throw new Error(`当前生产 Profile 最多允许 ${productionProfile.max_shots_per_final} 个镜头`);
   const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
   if (!session) throw new Error("创意工作台不存在");
   const finalCard = finalCardSource(session);
@@ -125,8 +129,9 @@ export async function finalizeStoryboardVideosWithApprovedCard(sessionId, shotVi
     await crossfadeShots(normalized, joined);
     const cardPath = path.join(tempDir, "final-card.png");
     await writeSource(finalCard, cardPath);
-    const filter = "[0:v]setpts=PTS-STARTPTS[v0];[1:v]trim=duration=3,setpts=PTS-STARTPTS,scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=30[v1];[v0][v1]concat=n=2:v=1:a=0[v];[0:a]asetpts=PTS-STARTPTS[a0];anullsrc=r=48000:cl=stereo,atrim=duration=3[a1];[a0][a1]concat=n=2:v=0:a=1[a]";
-    await execFileAsync("ffmpeg", ["-y", "-i", joined, "-loop", "1", "-t", "3", "-i", cardPath, "-filter_complex", filter, "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", outputPath], { maxBuffer: 8 * 1024 * 1024 });
+    const cardDuration = productionProfile.final_assembly.final_card_duration_seconds;
+    const filter = `[0:v]setpts=PTS-STARTPTS[v0];[1:v]trim=duration=${cardDuration},setpts=PTS-STARTPTS,scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=30[v1];[v0][v1]concat=n=2:v=1:a=0[v];[0:a]asetpts=PTS-STARTPTS[a0];anullsrc=r=48000:cl=stereo,atrim=duration=${cardDuration}[a1];[a0][a1]concat=n=2:v=0:a=1[a]`;
+    await execFileAsync("ffmpeg", ["-y", "-i", joined, "-loop", "1", "-t", String(cardDuration), "-i", cardPath, "-filter_complex", filter, "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", outputPath], { maxBuffer: 8 * 1024 * 1024 });
     return `/api/generated/videos/${outputName}`;
   } finally {
     await fsp.rm(tempDir, { recursive: true, force: true });

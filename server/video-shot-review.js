@@ -1,5 +1,6 @@
 import { db, now } from "./database.js";
 import { finalizeStoryboardVideosWithApprovedCard } from "./video-finalizer.js";
+import { reviewFinalVideo } from "./video-quality-review.js";
 
 function allCards(sessionId) {
   return db.prepare("SELECT cards_json FROM creative_messages WHERE session_id=? AND cards_json IS NOT NULL ORDER BY id DESC").all(sessionId)
@@ -15,8 +16,9 @@ export async function approveAndFinalizeVideoShots(sessionId, promptCardId) {
   if (!rows.length || rows.some((row) => row.status !== "completed" || !row.result_url)) throw new Error("还有镜头没有生成完成，暂时不能拼接");
   db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(now(), sessionId);
   const finalUrl = await finalizeStoryboardVideosWithApprovedCard(sessionId, rows.map((row) => row.result_url));
+  const qc = await reviewFinalVideo(finalUrl, rows);
   db.prepare("UPDATE creative_video_shots SET status='approved',updated_at=? WHERE session_id=? AND prompt_card_id=? AND status='completed'").run(now(), sessionId, promptCardId);
-  const details = [...(promptCard.details || []).filter((item) => !["逐镜状态", "落版处理"].includes(item.label)), { label: "逐镜状态", content: `${rows.length} 个镜头已审核并按顺序拼接` }, { label: "落版处理", content: "内容镜头完整拼接后，最后 3 秒直接追加已确认原始落版图" }];
+  const details = [...(promptCard.details || []).filter((item) => !["逐镜状态", "落版处理", "技术 QC", "成片 SHA-256"].includes(item.label)), { label: "逐镜状态", content: `${rows.length} 个镜头已审核并按顺序拼接` }, { label: "落版处理", content: "内容镜头完整拼接后，最后 3 秒直接追加已确认原始落版图" }, { label: "技术 QC", content: `已通过完整解码、${qc.width}×${qc.height}、${qc.durationSeconds} 秒、${qc.videoCodec}/${qc.pixelFormat}、音轨 ${qc.audioCodec}` }, { label: "成片 SHA-256", content: qc.sha256 }];
   db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,created_at) VALUES (?,'assistant',?,?,?)").run(sessionId, "逐镜视频已经确认并合成为成片，最后追加的是已确认原始落版图。你可以播放最终成片复审。", JSON.stringify([{ ...promptCard, previewUrl: finalUrl, status: "completed", details }]), now());
   db.prepare("UPDATE creative_sessions SET stage='video_review',error_message=NULL,updated_at=? WHERE id=?").run(now(), sessionId);
   return finalUrl;

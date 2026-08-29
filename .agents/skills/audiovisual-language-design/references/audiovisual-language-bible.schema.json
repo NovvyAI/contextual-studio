@@ -1,0 +1,283 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/contextual-ad/audiovisual-language-bible.schema.json",
+  "title": "AudiovisualLanguageBible",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "bible_id", "creative_id", "version", "source_evidence_ids",
+    "creative_bridge", "time_rhythm", "visual_system", "directing_system",
+    "editing_system", "sound_system", "effects_system", "continuity", "review_status"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "bible_id": {"$ref": "#/$defs/id"},
+    "creative_id": {"$ref": "#/$defs/id"},
+    "version": {"type": "string", "minLength": 1},
+    "source_evidence_ids": {"$ref": "#/$defs/idArray"},
+    "creative_bridge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "selling_point", "slogan", "creative_summary", "script_mode", "single_take_description",
+        "multi_shot_summary", "mood_preview_policy", "plot_bridge", "performance_bridge",
+        "emotion_bridge", "picture_bridge", "character_bridge", "scene_bridge", "new_elements"
+      ],
+      "properties": {
+        "selling_point": {"type": "string", "minLength": 1},
+        "slogan": {"anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]},
+        "creative_summary": {"type": "string", "minLength": 1},
+        "script_mode": {"enum": ["single_take", "multi_shot", "hybrid"]},
+        "single_take_description": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "multi_shot_summary": {"type": "string"},
+        "mood_preview_policy": {
+          "type": "object", "additionalProperties": false,
+          "required": ["required", "reason", "format", "approval_required"],
+          "properties": {
+            "required": {"type": "boolean"}, "reason": {"type": "string"},
+            "format": {"enum": ["none", "image", "video", "image_and_video"]},
+            "approval_required": {"const": true}
+          }
+        },
+        "plot_bridge": {"type": "string", "minLength": 1},
+        "performance_bridge": {"type": "string", "minLength": 1},
+        "emotion_bridge": {"type": "string", "minLength": 1},
+        "picture_bridge": {"type": "string", "minLength": 1},
+        "character_bridge": {"type": "string", "minLength": 1},
+        "scene_bridge": {"type": "string", "minLength": 1},
+        "new_elements": {"$ref": "#/$defs/stringArray"}
+      }
+    },
+    "time_rhythm": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "total_duration_seconds", "opening_hook_end_seconds", "shot_frequency_policy",
+        "emotional_curve_summary", "climax_seconds", "release_seconds", "hold_windows", "beats"
+      ],
+      "properties": {
+        "total_duration_seconds": {"type": "number", "minimum": 2, "maximum": 120},
+        "opening_hook_end_seconds": {"type": "number", "minimum": 0, "maximum": 3},
+        "shot_frequency_policy": {"type": "string", "minLength": 1},
+        "emotional_curve_summary": {"type": "string", "minLength": 1},
+        "climax_seconds": {"type": "number", "minimum": 0},
+        "release_seconds": {"type": "number", "minimum": 0},
+        "hold_windows": {
+          "type": "array", "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["start_seconds", "end_seconds", "purpose", "sound_policy"],
+            "properties": {
+              "start_seconds": {"type": "number", "minimum": 0},
+              "end_seconds": {"type": "number", "minimum": 0},
+              "purpose": {"type": "string"}, "sound_policy": {"type": "string"}
+            }
+          }
+        },
+        "beats": {
+          "type": "array", "minItems": 1, "items": {
+            "type": "object", "additionalProperties": false,
+            "required": [
+              "beat_id", "node_id", "start_seconds", "end_seconds", "narrative_task", "character_emotion",
+              "audience_emotion", "tension", "shot_duration_policy", "transition", "audio_cue"
+            ],
+            "properties": {
+              "beat_id": {"$ref": "#/$defs/id"}, "node_id": {"$ref": "#/$defs/id"},
+              "start_seconds": {"type": "number", "minimum": 0},
+              "end_seconds": {"type": "number", "minimum": 0},
+              "narrative_task": {"type": "string", "minLength": 1},
+              "character_emotion": {"type": "string"}, "audience_emotion": {"type": "string"},
+              "tension": {"type": "number", "minimum": 0, "maximum": 10},
+              "shot_duration_policy": {"type": "string"}, "transition": {"type": "string"},
+              "audio_cue": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "visual_system": {
+      "type": "object", "additionalProperties": false,
+      "required": ["art_style", "production_design", "props", "lighting", "image_tone", "color_grade", "perspective"],
+      "properties": {
+        "art_style": {
+          "type": "object", "additionalProperties": false,
+          "required": ["rendering_type", "medium", "texture", "realism_level", "aesthetic_keywords", "forbidden_drift"],
+          "properties": {
+            "rendering_type": {"enum": ["live_action_realistic", "stylized_live_action", "cg_realistic", "cg_stylized", "two_dimensional_animation", "mixed_unknown"]},
+            "medium": {"type": "string"}, "texture": {"type": "string"}, "realism_level": {"type": "string"},
+            "aesthetic_keywords": {"$ref": "#/$defs/stringArray"}, "forbidden_drift": {"$ref": "#/$defs/stringArray"}
+          }
+        },
+        "production_design": {
+          "type": "object", "additionalProperties": false,
+          "required": ["period", "location_type", "spatial_layout", "atmosphere", "material_palette", "environment_details", "setting_reference_ids", "generation_constraints"],
+          "properties": {
+            "period": {"type": "string"}, "location_type": {"type": "string"}, "spatial_layout": {"type": "string"},
+            "atmosphere": {"type": "string"}, "material_palette": {"$ref": "#/$defs/stringArray"},
+            "environment_details": {"$ref": "#/$defs/stringArray"}, "setting_reference_ids": {"$ref": "#/$defs/idArray"},
+            "generation_constraints": {"$ref": "#/$defs/stringArray"}
+          }
+        },
+        "props": {
+          "type": "array", "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["prop_id", "narrative_function", "silhouette", "material", "style", "scale", "entry_moment", "state_changes", "evidence_ids"],
+            "properties": {
+              "prop_id": {"$ref": "#/$defs/id"}, "narrative_function": {"type": "string"},
+              "silhouette": {"type": "string"}, "material": {"type": "string"}, "style": {"type": "string"},
+              "scale": {"type": "string"}, "entry_moment": {"type": "string"},
+              "state_changes": {"$ref": "#/$defs/stringArray"}, "evidence_ids": {"$ref": "#/$defs/idArray"}
+            }
+          }
+        },
+        "lighting": {
+          "type": "object", "additionalProperties": false,
+          "required": ["motivation", "key", "fill", "backlight", "practicals", "contrast_ratio", "exposure_policy", "per_shot_change_rules", "forbidden_changes"],
+          "properties": {
+            "motivation": {"type": "string"}, "key": {"$ref": "#/$defs/light"}, "fill": {"$ref": "#/$defs/light"},
+            "backlight": {"$ref": "#/$defs/light"}, "practicals": {"$ref": "#/$defs/stringArray"},
+            "contrast_ratio": {"type": "string"}, "exposure_policy": {"type": "string"},
+            "per_shot_change_rules": {"$ref": "#/$defs/stringArray"}, "forbidden_changes": {"$ref": "#/$defs/stringArray"}
+          }
+        },
+        "image_tone": {
+          "type": "object", "additionalProperties": false,
+          "required": ["brightness", "contrast", "dynamic_range", "black_level", "highlight_behavior", "mood"],
+          "properties": {
+            "brightness": {"type": "string"}, "contrast": {"type": "string"}, "dynamic_range": {"type": "string"},
+            "black_level": {"type": "string"}, "highlight_behavior": {"type": "string"}, "mood": {"type": "string"}
+          }
+        },
+        "color_grade": {
+          "type": "object", "additionalProperties": false,
+          "required": ["palette", "color_bias", "saturation", "skin_tone", "film_emulation", "lut_id", "scene_matching_rules"],
+          "properties": {
+            "palette": {"$ref": "#/$defs/stringArray"}, "color_bias": {"type": "string"}, "saturation": {"type": "string"},
+            "skin_tone": {"type": "string"}, "film_emulation": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "lut_id": {"anyOf": [{"$ref": "#/$defs/id"}, {"type": "null"}]}, "scene_matching_rules": {"$ref": "#/$defs/stringArray"}
+          }
+        },
+        "perspective": {
+          "type": "object", "additionalProperties": false,
+          "required": ["intensity", "field_of_view_policy", "wide_angle_control", "special_perspective", "spatial_continuity_rules"],
+          "properties": {
+            "intensity": {"type": "string"}, "field_of_view_policy": {"type": "string"}, "wide_angle_control": {"type": "string"},
+            "special_perspective": {"$ref": "#/$defs/stringArray"}, "spatial_continuity_rules": {"$ref": "#/$defs/stringArray"}
+          }
+        }
+      }
+    },
+    "directing_system": {
+      "type": "object", "additionalProperties": false,
+      "required": ["observable_style", "narrative_point_of_view", "dramatic_distance", "storyboard_grammar", "blocking", "performance", "camera_choreography"],
+      "properties": {
+        "observable_style": {"$ref": "#/$defs/stringArray"}, "narrative_point_of_view": {"type": "string"},
+        "dramatic_distance": {"type": "string"}, "storyboard_grammar": {"type": "string"},
+        "blocking": {
+          "type": "object", "additionalProperties": false,
+          "required": ["entry_exit_logic", "positioning", "movement_paths", "axis_policy", "eyeline_policy", "allowed_zones", "collision_prevention"],
+          "properties": {
+            "entry_exit_logic": {"type": "string"}, "positioning": {"type": "string"}, "movement_paths": {"$ref": "#/$defs/stringArray"},
+            "axis_policy": {"type": "string"}, "eyeline_policy": {"type": "string"}, "allowed_zones": {"$ref": "#/$defs/stringArray"},
+            "collision_prevention": {"$ref": "#/$defs/stringArray"}
+          }
+        },
+        "performance": {
+          "type": "object", "additionalProperties": false,
+          "required": ["facial_range", "subtext", "body_language", "gesture_policy", "reaction_timing", "continuity_rules", "forbidden_performance"],
+          "properties": {
+            "facial_range": {"type": "string"}, "subtext": {"type": "string"}, "body_language": {"type": "string"},
+            "gesture_policy": {"type": "string"}, "reaction_timing": {"type": "string"},
+            "continuity_rules": {"$ref": "#/$defs/stringArray"}, "forbidden_performance": {"$ref": "#/$defs/stringArray"}
+          }
+        },
+        "camera_choreography": {
+          "type": "object", "additionalProperties": false,
+          "required": ["support_types", "shot_size_grammar", "camera_height_policy", "pitch_yaw_policy", "movements", "speed_easing", "movement_motivation", "forbidden_moves"],
+          "properties": {
+            "support_types": {"$ref": "#/$defs/stringArray"}, "shot_size_grammar": {"type": "string"},
+            "camera_height_policy": {"type": "string"}, "pitch_yaw_policy": {"type": "string"},
+            "movements": {"$ref": "#/$defs/stringArray"}, "speed_easing": {"type": "string"},
+            "movement_motivation": {"type": "string"}, "forbidden_moves": {"$ref": "#/$defs/stringArray"}
+          }
+        }
+      }
+    },
+    "editing_system": {
+      "type": "object", "additionalProperties": false,
+      "required": ["assembly_logic", "pace", "transition_preferences", "match_cut_rules", "j_cut_l_cut_rules", "montage_policy", "forbidden_concealment"],
+      "properties": {
+        "assembly_logic": {"type": "string"}, "pace": {"type": "string"},
+        "transition_preferences": {"$ref": "#/$defs/stringArray"}, "match_cut_rules": {"$ref": "#/$defs/stringArray"},
+        "j_cut_l_cut_rules": {"$ref": "#/$defs/stringArray"}, "montage_policy": {"type": "string"},
+        "forbidden_concealment": {"$ref": "#/$defs/stringArray"}
+      }
+    },
+    "sound_system": {
+      "type": "object", "additionalProperties": false,
+      "required": ["room_tone", "ambience", "dialogue_perspective", "foley", "ui_vfx_sound", "music", "mixing", "silence_policy"],
+      "properties": {
+        "room_tone": {"type": "string"}, "ambience": {"$ref": "#/$defs/stringArray"},
+        "dialogue_perspective": {"type": "string"}, "foley": {"$ref": "#/$defs/stringArray"},
+        "ui_vfx_sound": {"$ref": "#/$defs/stringArray"},
+        "music": {
+          "type": "object", "additionalProperties": false,
+          "required": ["style", "instruments", "tempo", "harmony", "dynamics", "entry_exit_rules"],
+          "properties": {
+            "style": {"type": "string"}, "instruments": {"$ref": "#/$defs/stringArray"},
+            "tempo": {"type": "string"}, "harmony": {"type": "string"}, "dynamics": {"type": "string"},
+            "entry_exit_rules": {"$ref": "#/$defs/stringArray"}
+          }
+        },
+        "mixing": {"type": "string"}, "silence_policy": {"type": "string"}
+      }
+    },
+    "effects_system": {
+      "type": "object", "additionalProperties": false,
+      "required": ["transitions", "stylization", "visual_effects", "game_ui", "scene_system_3d"],
+      "properties": {
+        "transitions": {"$ref": "#/$defs/effectRules"}, "stylization": {"$ref": "#/$defs/effectRules"},
+        "visual_effects": {"$ref": "#/$defs/effectRules"}, "game_ui": {"$ref": "#/$defs/effectRules"},
+        "scene_system_3d": {
+          "type": "object", "additionalProperties": false,
+          "required": ["enabled", "purpose", "locked_dimensions", "forbidden_use"],
+          "properties": {
+            "enabled": {"type": "boolean"}, "purpose": {"type": "string"},
+            "locked_dimensions": {"$ref": "#/$defs/stringArray"}, "forbidden_use": {"$ref": "#/$defs/stringArray"}
+          }
+        }
+      }
+    },
+    "continuity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["environment_anchor_ids", "asset_lock_ids", "look_signature", "audio_field_id", "shot_match_rules", "branch_rules", "other_material_handoffs"],
+      "properties": {
+        "environment_anchor_ids": {"$ref": "#/$defs/idArray"}, "asset_lock_ids": {"$ref": "#/$defs/idArray"},
+        "look_signature": {"type": "string", "minLength": 1}, "audio_field_id": {"$ref": "#/$defs/id"},
+        "shot_match_rules": {"$ref": "#/$defs/stringArray"}, "branch_rules": {"$ref": "#/$defs/stringArray"},
+        "other_material_handoffs": {"$ref": "#/$defs/stringArray"}
+      }
+    },
+    "review_status": {"enum": ["draft", "in_review", "approved", "needs_revision", "rejected"]}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+    "idArray": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/id"}},
+    "stringArray": {"type": "array", "items": {"type": "string"}},
+    "light": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_type", "direction", "hardness", "intensity", "color_temperature"],
+      "properties": {
+        "source_type": {"type": "string"}, "direction": {"type": "string"}, "hardness": {"type": "string"},
+        "intensity": {"type": "string"}, "color_temperature": {"type": "string"}
+      }
+    },
+    "effectRules": {
+      "type": "object", "additionalProperties": false,
+      "required": ["allowed", "types", "trigger_rules", "intensity", "style", "forbidden_use"],
+      "properties": {
+        "allowed": {"type": "boolean"}, "types": {"$ref": "#/$defs/stringArray"},
+        "trigger_rules": {"$ref": "#/$defs/stringArray"}, "intensity": {"type": "string"},
+        "style": {"type": "string"}, "forbidden_use": {"$ref": "#/$defs/stringArray"}
+      }
+    }
+  }
+}

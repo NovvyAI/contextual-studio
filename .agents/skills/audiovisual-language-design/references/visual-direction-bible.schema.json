@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/contextual-ad/visual-direction-bible.schema.json",
+  "title": "VisualDirectionBible",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "bible_id", "creative_id", "version", "audiovisual_language_bible", "global_direction", "environment_anchors", "shot_plans", "prompt_manifest", "review_status"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"}, "bible_id": {"$ref": "#/$defs/id"},
+    "creative_id": {"$ref": "#/$defs/id"}, "version": {"type": "string", "minLength": 1},
+    "audiovisual_language_bible": {"$ref": "#/$defs/contractRef"},
+    "global_direction": {
+      "type": "object", "additionalProperties": false,
+      "required": ["world_period", "visual_tone", "rendering_type", "production_design", "lighting_policy", "look_signature", "color_pipeline", "lens_perspective_policy", "editing_grammar", "sound_field", "forbidden_style_drift"],
+      "properties": {
+        "world_period": {"type": "string"}, "visual_tone": {"type": "array", "items": {"type": "string"}},
+        "rendering_type": {"enum": ["live_action_realistic", "cartoon_animation", "cg_realistic", "mixed_unknown"]},
+        "production_design": {"type": "string"}, "lighting_policy": {"type": "string"},
+        "look_signature": {"type": "object", "additionalProperties": false, "required": ["color_pipeline_id", "lighting_family", "grain_profile"], "properties": {"color_pipeline_id": {"$ref": "#/$defs/id"}, "lighting_family": {"type": "string", "minLength": 1}, "grain_profile": {"type": "string", "minLength": 1}}},
+        "color_pipeline": {"type": "object", "required": ["source_look_evidence_ids", "contrast", "color_temperature", "saturation", "black_level", "highlight_behavior"], "properties": {"source_look_evidence_ids": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/id"}}, "contrast": {"type": "string"}, "color_temperature": {"type": "string"}, "saturation": {"type": "string"}, "black_level": {"type": "string"}, "highlight_behavior": {"type": "string"}}},
+        "lens_perspective_policy": {"type": "string"}, "editing_grammar": {"type": "string"},
+        "sound_field": {"type": "string"}, "forbidden_style_drift": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "environment_anchors": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["environment_anchor_id", "environment_asset_id", "master_path", "master_sha256", "evidence_ids", "wide_master_path", "wide_master_sha256", "floorplan_depth", "coordinate_system", "topology", "entrances_exits", "occluders", "fixed_objects", "key_props", "fixed_object_states", "key_light_direction", "practical_lights", "reflected_light", "color_anchor", "audio_anchor", "axis", "screen_direction", "allowed_camera_zones", "forbidden_changes", "review_status"],
+        "properties": {
+          "environment_anchor_id": {"$ref": "#/$defs/id"}, "environment_asset_id": {"$ref": "#/$defs/id"},
+          "master_path": {"$ref": "#/$defs/absolutePath"}, "master_sha256": {"$ref": "#/$defs/sha256"},
+          "evidence_ids": {"$ref": "#/$defs/idArray"},
+          "wide_master_path": {"$ref": "#/$defs/absolutePath"}, "wide_master_sha256": {"$ref": "#/$defs/sha256"},
+          "floorplan_depth": {"anyOf": [{"$ref": "#/$defs/fileRef"}, {"type": "null"}]},
+          "coordinate_system": {"type": "string", "minLength": 1},
+          "topology": {"type": "string", "minLength": 1}, "fixed_object_states": {"type": "array", "items": {"type": "string"}},
+          "entrances_exits": {"$ref": "#/$defs/spatialItems"}, "occluders": {"$ref": "#/$defs/spatialItems"},
+          "fixed_objects": {"$ref": "#/$defs/spatialItems"}, "key_props": {"$ref": "#/$defs/spatialItems"},
+          "key_light_direction": {"type": "string"}, "practical_lights": {"$ref": "#/$defs/stringArray"},
+          "reflected_light": {"type": "string"}, "color_anchor": {"type": "string"}, "audio_anchor": {"type": "string"},
+          "axis": {"type": "string"}, "screen_direction": {"type": "string"},
+          "allowed_camera_zones": {"type": "array", "items": {"type": "string"}},
+          "forbidden_changes": {"type": "array", "items": {"type": "string"}}, "review_status": {"const": "approved"}
+        }
+      }
+    },
+    "shot_plans": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["shot_id", "sequence_id", "shot_order", "node_id", "duration_seconds", "in_seconds", "out_seconds", "location", "time_of_day", "character_ids", "dialogue_line_ids", "asset_ids", "environment_anchor_id", "state_before", "action", "state_after", "visible_objects", "narrative_task", "peak_action_moment", "shot_size", "shot_size_reason", "composition", "camera_zone", "camera_height", "pitch_yaw", "roll_degrees", "subject_orientation", "camera_angle_reason", "focal_length_mm", "lens_feel", "crop", "depth_of_field", "focus", "focus_move", "background_ratio", "foreground_midground_background", "axis_eyeline", "camera_move", "camera_move_reason", "camera_movement", "lighting_state", "material_state", "sound_state", "edit_in", "edit_out", "edit_connection", "performance_beats", "vfx_state_ids", "ui_state_ids", "continuity_snapshot", "evidence_ids", "reference_ids", "prompt_id", "review_status"],
+        "properties": {
+          "shot_id": {"$ref": "#/$defs/id"}, "sequence_id": {"$ref": "#/$defs/id"}, "shot_order": {"type": "integer", "minimum": 1},
+          "node_id": {"$ref": "#/$defs/id"}, "duration_seconds": {"type": "number", "exclusiveMinimum": 0},
+          "in_seconds": {"type": "number", "minimum": 0}, "out_seconds": {"type": "number", "exclusiveMinimum": 0},
+          "location": {"type": "string"}, "time_of_day": {"type": "string"},
+          "character_ids": {"type": "array", "items": {"$ref": "#/$defs/id"}},
+          "dialogue_line_ids": {"type": "array", "items": {"$ref": "#/$defs/id"}}, "asset_ids": {"$ref": "#/$defs/idArray"},
+          "environment_anchor_id": {"$ref": "#/$defs/id"}, "state_before": {"type": "string"},
+          "action": {"type": "string"}, "state_after": {"type": "string"}, "visible_objects": {"$ref": "#/$defs/stringArray"},
+          "narrative_task": {"type": "object", "required": ["new_information", "emotion_change", "action_result"], "properties": {"new_information": {"type": "string"}, "emotion_change": {"type": "string"}, "action_result": {"type": "string"}}},
+          "peak_action_moment": {"type": "string", "minLength": 1}, "shot_size": {"type": "string"}, "shot_size_reason": {"type": "string", "minLength": 1},
+          "composition": {"$ref": "#/$defs/composition"}, "camera_zone": {"type": "string"},
+          "camera_height": {"type": "string"}, "pitch_yaw": {"type": "string"}, "roll_degrees": {"type": "number"}, "subject_orientation": {"type": "string"},
+          "camera_angle_reason": {"type": "string", "minLength": 1}, "focal_length_mm": {"type": "number", "exclusiveMinimum": 0},
+          "lens_feel": {"type": "string"}, "crop": {"type": "string"}, "depth_of_field": {"type": "string"},
+          "focus": {"type": "string"}, "focus_move": {"type": "string"}, "background_ratio": {"type": "number", "minimum": 0, "maximum": 1},
+          "foreground_midground_background": {"type": "string"}, "axis_eyeline": {"type": "string"},
+          "camera_move": {"type": "string"}, "camera_move_reason": {"type": "string"}, "camera_movement": {"$ref": "#/$defs/cameraMovement"},
+          "lighting_state": {"$ref": "#/$defs/lightingState"}, "material_state": {"type": "string"},
+          "sound_state": {"$ref": "#/$defs/soundState"}, "edit_in": {"$ref": "#/$defs/editPoint"}, "edit_out": {"$ref": "#/$defs/editPoint"},
+          "edit_connection": {"type": "string"},
+          "performance_beats": {"type": "array", "items": {"type": "object", "required": ["character_id", "entry_pose", "body_weight", "gaze_target", "action_path", "relationship_goal", "reaction_time", "exit_pose"], "properties": {"character_id": {"$ref": "#/$defs/id"}, "entry_pose": {"type": "string"}, "body_weight": {"type": "string"}, "gaze_target": {"type": "string"}, "action_path": {"type": "string"}, "relationship_goal": {"type": "string"}, "reaction_time": {"type": "number", "minimum": 0}, "exit_pose": {"type": "string"}}}},
+          "vfx_state_ids": {"type": "array", "items": {"$ref": "#/$defs/id"}}, "ui_state_ids": {"type": "array", "items": {"$ref": "#/$defs/id"}},
+          "continuity_snapshot": {"$ref": "#/$defs/fileRef"}, "evidence_ids": {"$ref": "#/$defs/idArray"},
+          "reference_ids": {"type": "array", "items": {"$ref": "#/$defs/id"}}, "prompt_id": {"$ref": "#/$defs/id"},
+          "review_status": {"const": "approved"}
+        }
+      }
+    },
+    "prompt_manifest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "sha256", "review_status"],
+      "properties": {"path": {"$ref": "#/$defs/absolutePath"}, "sha256": {"$ref": "#/$defs/sha256"}, "review_status": {"const": "approved"}}
+    },
+    "review_status": {"enum": ["draft", "in_review", "approved", "needs_revision", "rejected"]}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+    "absolutePath": {"type": "string", "pattern": "^/"},
+    "sha256": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"},
+    "idArray": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/id"}},
+    "stringArray": {"type": "array", "items": {"type": "string"}},
+    "fileRef": {"type": "object", "additionalProperties": false, "required": ["path", "sha256"], "properties": {"path": {"$ref": "#/$defs/absolutePath"}, "sha256": {"$ref": "#/$defs/sha256"}}},
+    "spatialItems": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["item_id", "position", "state"], "properties": {"item_id": {"$ref": "#/$defs/id"}, "position": {"type": "string"}, "state": {"type": "string"}}}},
+    "composition": {"type": "object", "additionalProperties": false, "required": ["subject_screen_position", "subject_scale", "headroom", "lead_room", "negative_space", "horizon", "safe_zone"], "properties": {"subject_screen_position": {"type": "string"}, "subject_scale": {"type": "string"}, "headroom": {"type": "string"}, "lead_room": {"type": "string"}, "negative_space": {"type": "string"}, "horizon": {"type": "string"}, "safe_zone": {"type": "string"}}},
+    "cameraMovement": {"type": "object", "additionalProperties": false, "required": ["type", "start_frame", "end_frame", "path", "direction", "speed", "easing", "stabilization", "motivation"], "properties": {"type": {"type": "string"}, "start_frame": {"type": "string"}, "end_frame": {"type": "string"}, "path": {"type": "string"}, "direction": {"type": "string"}, "speed": {"type": "string"}, "easing": {"type": "string"}, "stabilization": {"type": "string"}, "motivation": {"type": "string"}}},
+    "lightingState": {"type": "object", "additionalProperties": false, "required": ["key", "fill", "backlight", "practicals", "exposure", "color", "material_response"], "properties": {"key": {"type": "string"}, "fill": {"type": "string"}, "backlight": {"type": "string"}, "practicals": {"type": "string"}, "exposure": {"type": "string"}, "color": {"type": "string"}, "material_response": {"type": "string"}}},
+    "soundState": {"type": "object", "additionalProperties": false, "required": ["dialogue", "ambience", "foley", "music", "ui_vfx", "silence"], "properties": {"dialogue": {"type": "string"}, "ambience": {"type": "string"}, "foley": {"type": "string"}, "music": {"type": "string"}, "ui_vfx": {"type": "string"}, "silence": {"type": "string"}}},
+    "editPoint": {"type": "object", "additionalProperties": false, "required": ["type", "match", "audio_relation"], "properties": {"type": {"type": "string"}, "match": {"type": "string"}, "audio_relation": {"type": "string"}}},
+    "contractRef": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "sha256", "review_status"],
+      "properties": {
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "review_status": {"const": "approved"}
+      }
+    }
+  }
+}

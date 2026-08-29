@@ -15,6 +15,7 @@ import { resumeImaRouterVideoGeneration, startImaRouterVideoGeneration } from ".
 import { approveStoryboardImages, startStoryboardImageGeneration, startStoryboardImageRegeneration, startStoryboardImageRegenerationByNumber } from "./storyboard-generator.js";
 import { approveAndFinalizeVideoShots, approveFinalVideo } from "./video-shot-review.js";
 import { generatedVideoPath } from "./video-finalizer.js";
+import { productionProfile } from "./production-profile.js";
 import { landingPackagePath, packageLandingPage } from "./landing-page-packager.js";
 import { startAssetCreation, startAssetRegeneration, startAttachmentImageEdit } from "./asset-generator.js";
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
@@ -311,6 +312,7 @@ const server = http.createServer(async (req, res) => {
       const cardId = decodeURIComponent(videoGenerateMatch[2]);
       const body = JSON.parse((await requestBody(req)).toString("utf8") || "{}");
       const provider = body.provider === "imarouter" ? "imarouter" : "novvy";
+      if (!productionProfile.allowed_video_providers.includes(provider)) return json(res, 400, { error: `当前生产 Profile 不允许视频提供者：${provider}` });
       if (provider === "imarouter") startImaRouterVideoGeneration(id, cardId);
       else startVideoGeneration(id, cardId);
       return json(res, 202, { id, cardId, provider, status: "working" });

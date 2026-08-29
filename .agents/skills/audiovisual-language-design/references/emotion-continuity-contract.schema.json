@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/contextual-ad/emotion-continuity-contract.schema.json",
+  "title": "EmotionContinuityContract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "contract_id", "creative_id", "experience_mode", "source_baseline", "brand_temperature", "curve", "forbidden_jumps", "expression_rules", "review_status"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"}, "contract_id": {"$ref": "#/$defs/id"},
+    "creative_id": {"$ref": "#/$defs/id"}, "experience_mode": {"enum": ["linear", "branching_interactive"]},
+    "source_baseline": {"$ref": "#/$defs/emotionState"},
+    "brand_temperature": {"type": "object", "required": ["minimum", "maximum", "target_words", "forbidden_words"], "properties": {"minimum": {"type": "number", "minimum": 0, "maximum": 10}, "maximum": {"type": "number", "minimum": 0, "maximum": 10}, "target_words": {"type": "array", "items": {"type": "string"}}, "forbidden_words": {"type": "array", "items": {"type": "string"}}}},
+    "curve": {
+      "type": "array", "minItems": 2,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["beat_id", "node_id", "order", "character_emotion", "audience_emotion", "intensity", "temperature", "function"],
+        "properties": {
+          "beat_id": {"$ref": "#/$defs/id"}, "node_id": {"$ref": "#/$defs/id"}, "order": {"type": "integer", "minimum": 0},
+          "character_emotion": {"type": "string", "minLength": 1}, "audience_emotion": {"type": "string", "minLength": 1},
+          "intensity": {"type": "number", "minimum": 0, "maximum": 10}, "temperature": {"type": "number", "minimum": 0, "maximum": 10},
+          "function": {"enum": ["inherit", "continue", "raise", "release", "choice_tension", "consequence", "return_motivation", "rejoin"]}
+        }
+      }
+    },
+    "forbidden_jumps": {"type": "array", "items": {"type": "object", "required": ["from", "to", "reason"], "properties": {"from": {"type": "string"}, "to": {"type": "string"}, "reason": {"type": "string"}}}},
+    "expression_rules": {
+      "type": "object", "additionalProperties": false,
+      "required": ["performance", "camera", "lighting_color", "editing", "music_sound"],
+      "properties": {
+        "performance": {"type": "array", "items": {"type": "string"}}, "camera": {"type": "array", "items": {"type": "string"}},
+        "lighting_color": {"type": "array", "items": {"type": "string"}}, "editing": {"type": "array", "items": {"type": "string"}},
+        "music_sound": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "review_status": {"enum": ["draft", "in_review", "approved", "needs_revision", "rejected"]}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+    "emotionState": {"type": "object", "required": ["character_emotion", "audience_emotion", "intensity", "temperature", "open_loop"], "properties": {"character_emotion": {"type": "string"}, "audience_emotion": {"type": "string"}, "intensity": {"type": "number", "minimum": 0, "maximum": 10}, "temperature": {"type": "number", "minimum": 0, "maximum": 10}, "open_loop": {"type": "string"}}}
+  }
+}

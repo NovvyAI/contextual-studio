@@ -38,6 +38,10 @@ Produce an evidence-based narrative and creative analysis from the video itself.
    - Label direct observations, strong inferences, and speculative interpretations.
    - State when missing subtitles, inaudible audio, sparse sampling, or absent preceding episodes limits certainty.
 
+7. Preserve a production-grade evidence shape when the result will enter Contextual Studio.
+   - Use `references/drama-understanding-package.schema.json` as the field inventory for series, characters, episodes, audiovisual archive, evidence, source assets, confidence, and review status.
+   - The current web analyzer may return its smaller `novvy.video-analysis.v2` projection; do not fabricate missing full-package fields merely to satisfy the larger schema. Keep the projection traceable to screenshots, timestamps, and the cached episode artifact.
+
 ## Output Shape
 
 Adapt length to the request. For a full analysis, use:
@@ -66,3 +70,4 @@ Adapt length to the request. For a full analysis, use:
 
 - `scripts/make_contact_sheets.sh`: Generate overview, dense contact sheets, media metadata, and sequential sample frames.
 - `references/analysis-rubric.md`: Use for detailed narrative, emotion, visual, and contextual-ad analysis criteria.
+- `references/drama-understanding-package.schema.json`: Use when building or mapping a persistent cross-stage drama evidence package; ordinary one-off summaries do not need to emit the full schema.

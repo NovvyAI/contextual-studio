@@ -4,6 +4,23 @@
 
 ## 未发布
 
+### Contextual Ad Skill Suite 选择性吸收
+
+- 将 Suite 的 `DramaUnderstandingPackage` 字段合同加入本地短剧分析 Skill，作为持久化整剧/跨阶段证据包的可选完整形态；保留当前网页分析使用的紧凑 `novvy.video-analysis.v2` 投影，不为满足大 Schema 虚构缺失事实。
+- 将 `EmotionContinuityContract`、`AudiovisualLanguageBible` 和 `VisualDirectionBible` 加入本地视听语言 Skill，覆盖人物/观众情绪、品牌温度、节奏、画面、导演、剪辑、声音、特效、环境锚点和逐镜方向。
+- 将 `ReferenceManifest`、`DialoguePerformanceManifest`、`CreativeProductionDossierManifest` 和 `VisualHandoffPackage` 加入本地分镜合同，用于参考用途与权限、说话者/对象/why-now/表演、自动生成审核全案和批准帧血缘；远程素材不得冒充本地文件哈希。
+- 新增项目化图片预飞合同，要求逐镜覆盖接入、实体操作、实体结果、UI反馈、人物反应、更大钩子和高风险转场，并检查人物、空间、物件、摄影、表演、玩法、UI/VFX 与精确文字边界。
+- 创意与分镜提示词接入 `输入 → 实体动作 → 实体结果 → UI反馈 → 人物反应 → 更大钩子` 因果链；UI、旁白或庆祝不得替代真实世界结果，人物反应不得先于可见结果。
+- 新增最终视频技术 QC：拼接后执行完整 FFmpeg 解码与 FFprobe 检查，验证 720×1280、有效时长和音轨，记录编码、像素格式、SHA-256，并生成 1fps 联络表与 JSON 报告；技术失败时不进入最终确认。
+- 明确未吸收的冲突项：不启用 Suite 的强制单次视频、不禁止用户授权重做、不限制 Novvy 仅生成落版图、不强制所有远程素材自动下载到本地，也不启用互动分支媒体执行。
+
+### 可配置生产 Profile
+
+- 新增版本化的 `config/production-profile.json`，把外部 Suite 硬编码的 `single_final_video_pass`、提交预算、成片数、重试、镜头数、时长、供应商和拼接参数改为项目本地可配置策略。
+- 当前默认改为 Contextual Studio 已验证的 `reviewed_storyboard_multishot`：最多 3 镜、每镜 4–15 秒且默认 8 秒、静态分镜先审、逐镜复审、允许用户明确授权后重生成、Novvy/ImaRouter 双供应商、最终一支拼接成片并追加 3 秒落版图。
+- `max_ai_video_submissions=null` 表示不设置固定总提交数；`auto_retry_allowed=false` 禁止后台失败后擅自重试，`user_authorized_retry_allowed=true` 保留用户主动重做能力。
+- 新增生产 Profile 加载与启动校验，创意提示词、分镜任务校验、供应商准入、转场时长、镜头数量和落版时长均读取同一配置文件。
+
 ### 安装体验
 
 - 新增面向全新 macOS 电脑的 `install_environment.sh` 一键环境安装脚本：自动准备 Apple 命令行工具、Homebrew、Node.js 24、Python 3、FFmpeg/FFprobe、项目 npm 依赖和可选 Google Cloud CLI，并引导完成 Novvy（Codex）登录。

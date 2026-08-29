@@ -25,6 +25,8 @@ CTR, CVR, or aesthetic preference cannot override a hard gate.
 
 Read [references/review-gates.md](references/review-gates.md) for the compact gate set.
 
+For a generated final video, also read [references/final-video-qc-contract.md](references/final-video-qc-contract.md). Technical success is necessary but does not prove identity, continuity, performance, product truth, or creative approval.
+
 ## Output
 
 Return `issue_id | stage | severity | QB/CQ | matrix_record | evidence | finding | correction | status | next approval`, followed by overall hard-gate result, CQ level, strongest quality, highest risk, and exact next action. Do not silently rewrite the artifact during a review-only request.
@@ -36,3 +38,5 @@ The imported source contains 129 quality records and 60 unique directors (45 com
 ## Contextual Studio profile
 
 Do not impose the external matrix's single-video budget on ordinary project runs. Contextual Studio supports approved static storyboard frames, up to three separately generated video shots, per-shot review/regeneration, Novvy MCP or ImaRouter, and deterministic final-card concatenation. Apply `single_final_video_pass` only when explicitly selected.
+
+The active production budget is `config/production-profile.json`. A user-authorized per-shot regeneration is valid under the default local profile and must not be reported as a Suite policy violation.

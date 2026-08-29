@@ -1,3 +1,5 @@
+import { productionProfile } from "./production-profile.js";
+
 const PLAN_VERSION = "contextual.storyboard-video.v1";
 
 function detail(card, pattern) {
@@ -12,14 +14,14 @@ export function parseStoryboardVideoPlan(card) {
   } else {
     const prompt = detail(card, /英文.*(提交|提示词)|English.*prompt/i);
     if (!prompt) throw new Error("视频提示词卡缺少分镜任务 JSON 和英文提交提示词");
-    plan = { schemaVersion: PLAN_VERSION, shots: [{ shotId: "shot-01", order: 1, durationSeconds: 12, reviewZh: detail(card, /中文.*审核/i) || card.summary, promptEn: prompt }] };
+    plan = { schemaVersion: PLAN_VERSION, shots: [{ shotId: "shot-01", order: 1, durationSeconds: productionProfile.default_shot_duration_seconds, reviewZh: detail(card, /中文.*审核/i) || card.summary, promptEn: prompt }] };
   }
-  if (plan?.schemaVersion !== PLAN_VERSION || !Array.isArray(plan.shots) || !plan.shots.length || plan.shots.length > 3) throw new Error("分镜任务 JSON 契约无效");
+  if (plan?.schemaVersion !== PLAN_VERSION || !Array.isArray(plan.shots) || !plan.shots.length || plan.shots.length > productionProfile.max_shots_per_final) throw new Error(`分镜任务 JSON 契约无效：最多 ${productionProfile.max_shots_per_final} 镜`);
   const shots = plan.shots.map((shot, index) => {
     const expectedId = `shot-${String(index + 1).padStart(2, "0")}`;
     const durationSeconds = Number(shot?.durationSeconds);
     if (shot?.shotId !== expectedId || shot?.order !== index + 1) throw new Error(`分镜顺序无效：应为 ${expectedId}`);
-    if (!Number.isInteger(durationSeconds) || durationSeconds < 4 || durationSeconds > 15) throw new Error(`${expectedId} 时长必须是 4-15 秒整数`);
+    if (!Number.isInteger(durationSeconds) || durationSeconds < productionProfile.min_shot_duration_seconds || durationSeconds > productionProfile.max_shot_duration_seconds) throw new Error(`${expectedId} 时长必须是 ${productionProfile.min_shot_duration_seconds}-${productionProfile.max_shot_duration_seconds} 秒整数`);
     const promptEn = String(shot?.promptEn || "").trim();
     if (!promptEn) throw new Error(`${expectedId} 缺少英文提示词`);
     return { shotId: expectedId, order: index + 1, durationSeconds, reviewZh: String(shot.reviewZh || "").trim(), promptEn };

@@ -22,13 +22,28 @@ Every candidate includes an overall narrative line, emotional continuation, one 
 
 Do not create a `video_prompt` when only the text storyboard is selected. Static frames must be generated and approved first.
 
+Apply this visible causal chain to every shot or state:
+
+`character_or_user_input -> physical_world_action -> physical_world_result -> ui_feedback -> character_reaction -> larger_hook`
+
+UI success, narration, or celebration cannot replace the physical result. The reaction must occur after the character can perceive that result.
+
 ## Static-frame prompt
 
 Bind exact character identities and shot composition, camera angle, spatial layout, pose, action, object positions, lighting, palette, and continuity. Generate one clean 9:16 frame—not a collage, contact sheet, captioned board, UI mockup, or image containing shot labels/subtitles/watermarks.
 
+Before unified approval, the static frames together must cover the source handoff, first complete operation, escalation when present, stage success, reaction, larger hook, and risky transition boundaries. Use `references/image-preflight-contract.md` for the compact Contextual Studio adaptation of the Suite's image preflight gates.
+
 ## Video-task contract
 
 Use [references/storyboard-video-contract.schema.json](references/storyboard-video-contract.schema.json). Keep shot ID/order stable. Chinese review text and English submission text must be equivalent. Each task describes only its content shot; do not ask the video model to recreate the final card.
+
+For richer persisted handoffs, use only the relevant local schemas:
+
+- `references/reference-manifest.schema.json` for evidence/reference purpose and permission boundaries.
+- `references/dialogue-performance-manifest.schema.json` for speaker, addressee, why-now, gaze, gesture, blocking, breathing, stress, and fourth-wall rules.
+- `references/creative-production-dossier.schema.json` for a generated review view; it must never become a second manually edited source of truth.
+- `references/visual-handoff-package.schema.json` for approved frame lineage and video readiness. Contextual Studio may keep remote provider URLs; only fields backed by real local files may claim a local hash.
 
 ## Validation
 
