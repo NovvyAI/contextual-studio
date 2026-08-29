@@ -79,6 +79,22 @@ function renderPendingChatFiles() {
   document.querySelector("#chat-attachment-hint").textContent = pendingChatFiles.length ? `已添加 ${pendingChatFiles.length}/6` : "最多 6 个附件";
 }
 
+function addPendingChatFiles(files) {
+  let unsupported = 0;
+  let overflow = 0;
+  for (const file of files) {
+    const isImage = ["image/jpeg", "image/png", "image/webp"].includes(file.type);
+    const isVideo = file.type.startsWith("video/");
+    if (!isImage && !isVideo) { unsupported += 1; continue; }
+    if (pendingChatFiles.length >= 6) { overflow += 1; continue; }
+    pendingChatFiles.push(file);
+  }
+  renderPendingChatFiles();
+  const hint = document.querySelector("#chat-attachment-hint");
+  if (overflow) hint.textContent = "最多只能添加 6 个附件";
+  else if (unsupported) hint.textContent = "仅支持 JPG、PNG、WebP 和视频";
+}
+
 function renderMessageAttachments(attachments = []) {
   const root = element("div", "chat-message-attachments");
   attachments.forEach((attachment) => {
@@ -1168,17 +1184,42 @@ document.querySelector("#source-analysis-dialog").addEventListener("click", (eve
 });
 
 document.querySelector("#chat-attachment-input").addEventListener("change", (event) => {
-  const incoming = [...event.target.files];
-  for (const file of incoming) {
-    if (pendingChatFiles.length >= 6) break;
-    const isImage = ["image/jpeg", "image/png", "image/webp"].includes(file.type);
-    const isVideo = file.type.startsWith("video/");
-    if (!isImage && !isVideo) continue;
-    pendingChatFiles.push(file);
-  }
+  addPendingChatFiles([...event.target.files]);
   event.target.value = "";
-  renderPendingChatFiles();
 });
+
+const chatPanel = document.querySelector(".chat-panel");
+const chatDropOverlay = document.querySelector("#chat-drop-overlay");
+let chatDragDepth = 0;
+function hasDraggedFiles(event) { return [...(event.dataTransfer?.types || [])].includes("Files"); }
+function hideChatDropOverlay() {
+  chatDragDepth = 0;
+  chatPanel.classList.remove("dragging-files");
+  chatDropOverlay.setAttribute("aria-hidden", "true");
+}
+chatPanel.addEventListener("dragenter", (event) => {
+  if (!hasDraggedFiles(event) || document.querySelector("#chat-attachment-input").disabled) return;
+  event.preventDefault(); chatDragDepth += 1;
+  chatPanel.classList.add("dragging-files"); chatDropOverlay.setAttribute("aria-hidden", "false");
+});
+chatPanel.addEventListener("dragover", (event) => {
+  if (!hasDraggedFiles(event) || document.querySelector("#chat-attachment-input").disabled) return;
+  event.preventDefault(); event.dataTransfer.dropEffect = "copy";
+});
+chatPanel.addEventListener("dragleave", (event) => {
+  if (!hasDraggedFiles(event)) return;
+  chatDragDepth = Math.max(0, chatDragDepth - 1);
+  if (!chatDragDepth) hideChatDropOverlay();
+});
+chatPanel.addEventListener("drop", (event) => {
+  if (!hasDraggedFiles(event)) return;
+  event.preventDefault();
+  const disabled = document.querySelector("#chat-attachment-input").disabled;
+  const files = [...(event.dataTransfer?.files || [])];
+  hideChatDropOverlay();
+  if (!disabled) { addPendingChatFiles(files); document.querySelector("#creative-chat-input").focus(); }
+});
+window.addEventListener("dragend", hideChatDropOverlay);
 
 const chatMessages = document.querySelector("#creative-messages");
 chatMessages.addEventListener("wheel", (event) => {
