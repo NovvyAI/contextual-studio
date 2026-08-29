@@ -15,6 +15,7 @@ import { resumeImaRouterVideoGeneration, startImaRouterVideoGeneration } from ".
 import { approveStoryboardImages, startStoryboardImageGeneration, startStoryboardImageRegeneration, startStoryboardImageRegenerationByNumber } from "./storyboard-generator.js";
 import { approveAndFinalizeVideoShots, approveFinalVideo } from "./video-shot-review.js";
 import { generatedVideoPath } from "./video-finalizer.js";
+import { landingPackagePath, packageLandingPage } from "./landing-page-packager.js";
 import { startAssetCreation, startAssetRegeneration, startAttachmentImageEdit } from "./asset-generator.js";
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
 
@@ -76,6 +77,17 @@ function sendFile(res, filePath, contentType) {
   fs.createReadStream(filePath).pipe(res);
 }
 
+function sendDownload(res, filePath, downloadName) {
+  if (!fs.existsSync(filePath)) return json(res, 404, { error: "文件不存在" });
+  const size = fs.statSync(filePath).size;
+  res.writeHead(200, {
+    "content-type": "application/zip",
+    "content-length": size,
+    "content-disposition": `attachment; filename="${downloadName}"`,
+  });
+  fs.createReadStream(filePath).pipe(res);
+}
+
 function sendVideoFile(req, res, filePath) {
   if (!fs.existsSync(filePath)) return json(res, 404, { error: "视频不存在" });
   const size = fs.statSync(filePath).size;
@@ -133,6 +145,13 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && generatedVideoMatch) {
       const filePath = generatedVideoPath(decodeURIComponent(generatedVideoMatch[1]));
       return filePath ? sendVideoFile(req, res, filePath) : json(res, 404, { error: "视频不存在" });
+    }
+
+    const landingPackageMatch = url.pathname.match(/^\/api\/generated\/landing-pages\/([^/]+)$/);
+    if (req.method === "GET" && landingPackageMatch) {
+      const fileName = decodeURIComponent(landingPackageMatch[1]);
+      const filePath = landingPackagePath(fileName);
+      return filePath ? sendDownload(res, filePath, fileName) : json(res, 404, { error: "落地页包不存在" });
     }
 
     const chatAttachmentMatch = url.pathname.match(/^\/api\/creative\/chat-attachments\/(\d+)\/([^/]+)$/);
@@ -311,6 +330,13 @@ const server = http.createServer(async (req, res) => {
       const cardId = decodeURIComponent(finalVideoApproveMatch[2]);
       approveFinalVideo(id, cardId);
       return json(res, 200, serializeCreativeSession(db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(id)));
+    }
+
+    const landingPackageCreateMatch = url.pathname.match(/^\/api\/creative\/sessions\/(\d+)\/cards\/([^/]+)\/package-landing-page$/);
+    if (req.method === "POST" && landingPackageCreateMatch) {
+      const id = Number(landingPackageCreateMatch[1]);
+      const cardId = decodeURIComponent(landingPackageCreateMatch[2]);
+      return json(res, 201, await packageLandingPage(id, cardId));
     }
 
     const storyboardGenerateMatch = url.pathname.match(/^\/api\/creative\/sessions\/(\d+)\/cards\/([^/]+)\/generate-storyboard-images$/);

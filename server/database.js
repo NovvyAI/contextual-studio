@@ -108,6 +108,19 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_creative_video_shots_session
     ON creative_video_shots(session_id, prompt_card_id, shot_order, version);
+
+  CREATE TABLE IF NOT EXISTS creative_landing_packages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES creative_sessions(id) ON DELETE CASCADE,
+    prompt_card_id TEXT NOT NULL,
+    file_name TEXT NOT NULL UNIQUE,
+    store_url TEXT NOT NULL,
+    app_name TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_creative_landing_packages_session
+    ON creative_landing_packages(session_id, id);
 `);
 
 const creativeMessageColumns = new Set(db.prepare("PRAGMA table_info(creative_messages)").all().map((column) => column.name));
@@ -306,6 +319,14 @@ export function serializeCreativeSession(row) {
   const drama = db.prepare("SELECT * FROM drama_analyses WHERE id = ?").get(row.drama_id);
   const game = db.prepare("SELECT * FROM game_analyses WHERE id = ?").get(row.game_id);
   const messages = db.prepare("SELECT id, role, content, cards_json, attachments_json, created_at FROM creative_messages WHERE session_id = ? AND COALESCE(visibility,'chat')='chat' ORDER BY id").all(row.id);
+  const landingPackages = db.prepare("SELECT prompt_card_id,file_name,store_url,app_name,created_at FROM creative_landing_packages WHERE session_id=? ORDER BY id DESC").all(row.id).map((item) => ({
+    promptCardId: item.prompt_card_id,
+    fileName: item.file_name,
+    storeUrl: item.store_url,
+    appName: item.app_name,
+    createdAt: item.created_at,
+    downloadUrl: `/api/generated/landing-pages/${encodeURIComponent(item.file_name)}`,
+  }));
   return {
     id: row.id, title: row.title, stage: row.stage,
     workspace: row.workspace_json ? JSON.parse(row.workspace_json) : null,
@@ -321,6 +342,7 @@ export function serializeCreativeSession(row) {
     })),
     assets: creativeAssets(row.id),
     screenshots: creativeScreenshotAssets(row.id),
+    landingPackages,
     createdAt: row.created_at, updatedAt: row.updated_at,
   };
 }

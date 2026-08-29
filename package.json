@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node --env-file-if-exists=.env --watch server/index.js",
     "start": "node --env-file-if-exists=.env server/index.js",
-    "check": "node --check server/index.js && node --check server/analyzer.js && node --check server/game-analyzer.js && node --check server/creative-agent.js && node --check server/chat-media.js && node --check server/image-generator.js && node --check server/character-generator.js && node --check server/storyboard-generator.js && node --check server/storyboard-video-plan.js && node --check server/video-shot-review.js && node --check server/asset-generator.js && node --check server/video-finalizer.js && node --check server/video-generator.js && node --check server/imarouter-video-generator.js && node --check server/novvy-mcp-client.js && node --check public/app.js && node --check public/workbench.js"
+    "check": "node --check server/index.js && node --check server/analyzer.js && node --check server/game-analyzer.js && node --check server/creative-agent.js && node --check server/chat-media.js && node --check server/image-generator.js && node --check server/character-generator.js && node --check server/storyboard-generator.js && node --check server/storyboard-video-plan.js && node --check server/video-shot-review.js && node --check server/asset-generator.js && node --check server/video-finalizer.js && node --check server/landing-page-packager.js && node --check server/video-generator.js && node --check server/imarouter-video-generator.js && node --check server/novvy-mcp-client.js && node --check public/app.js && node --check public/workbench.js"
   },
   "engines": {
     "node": ">=24"

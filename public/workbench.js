@@ -8,6 +8,7 @@ const canvasDetailsOpenState = new Map();
 const pendingChatFiles = [];
 let pendingChatPreviewUrls = [];
 const selectedCharacterIds = new Set();
+let currentSession = null;
 
 function updateCharacterSelectionUI() {
   document.querySelectorAll("input[data-character-id]").forEach((input) => {
@@ -601,7 +602,28 @@ function renderChatCard(card, disabled) {
         feedback.setCustomValidity(error.message); feedback.reportValidity(); feedback.setCustomValidity("");
       }
   });
-  actions.append(regenerate, adopt); editor.append(feedback, actions); node.append(editor);
+  actions.append(regenerate, adopt);
+  if (isFinalVideo && card.status === "confirmed") {
+    const latestPackage = currentSession?.landingPackages?.find((item) => item.promptCardId === card.id);
+    const packageButton = element("button", "landing-package-button", "一键打包落地页"); packageButton.type = "button"; packageButton.disabled = disabled;
+    packageButton.addEventListener("click", async () => {
+      try {
+        packageButton.disabled = true; packageButton.textContent = "正在压缩并打包…";
+        const result = await api(`/api/creative/sessions/${sessionId}/cards/${encodeURIComponent(card.id)}/package-landing-page`, { method: "POST" });
+        await refreshSession();
+        location.href = result.downloadUrl;
+      } catch (error) {
+        packageButton.disabled = false; packageButton.textContent = "重新打包落地页"; alert(`落地页打包失败：${error.message}`);
+      }
+    });
+    actions.append(packageButton);
+    if (latestPackage) {
+      const download = element("a", "landing-package-download", `下载最近的落地页包 · ${latestPackage.appName}`);
+      download.href = latestPackage.downloadUrl; download.download = latestPackage.fileName;
+      actions.append(download);
+    }
+  }
+  editor.append(feedback, actions); node.append(editor);
   return node;
 }
 
@@ -1095,6 +1117,7 @@ async function refreshSession() {
   if (!Number.isInteger(sessionId) || sessionId <= 0) return renderError(new Error("工作台地址无效，请从项目列表重新进入。"));
   try {
     const session = await api(`/api/creative/sessions/${sessionId}`);
+    currentSession = session;
     renderCanvas(session);
     renderMessages(session);
     clearTimeout(pollTimer);

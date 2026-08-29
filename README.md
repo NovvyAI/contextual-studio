@@ -59,7 +59,8 @@ contextual-studio/
 ├── data/
 │   ├── contextual-studio.sqlite     SQLite 数据库
 │   ├── uploads/                     上传的短剧原视频
-│   └── chat-uploads/                对话图片、视频及视频关键帧
+│   ├── chat-uploads/                对话图片、视频及视频关键帧
+│   └── generated/landing-pages/     一键打包生成的 HTML5 落地页及 ZIP
 ├── public/
 │   ├── index.html                   主页面
 │   ├── app.js                       短剧、游戏及入口逻辑
@@ -79,7 +80,8 @@ contextual-studio/
 │   ├── storyboard-generator.js      分镜图生成
 │   ├── video-generator.js           Novvy MCP 视频生成
 │   ├── imarouter-video-generator.js ImaRouter 视频生成
-│   └── video-finalizer.js           视频拼接与最终成片
+│   ├── video-finalizer.js           视频拼接与最终成片
+│   └── landing-page-packager.js     成片压缩与 HTML5 落地页一键打包
 ├── .env.example                     环境变量示例
 ├── AGENTS.md                        项目本地 Skill 规则
 ├── CHANGELOG.md                     中文修改历史
@@ -94,6 +96,7 @@ contextual-studio/
 - Node.js 24 或更高版本
 - npm
 - `ffmpeg` 和 `ffprobe`
+- `zip`（用于生成可下载的 HTML5 落地页包）
 - 已安装并登录的 Codex CLI / Codex SDK 运行环境
 - 使用 ImaRouter 上传本地截图时，需要安装并登录 Google Cloud CLI（`gcloud`）
 
@@ -104,6 +107,7 @@ node --version
 npm --version
 ffmpeg -version
 ffprobe -version
+zip -v
 ```
 
 ## 配置环境变量
@@ -181,8 +185,13 @@ npm run check
 - 工作台状态：`creative_sessions.workspace_json`
 - 对话与资产卡：`creative_messages`
 - 逐镜视频任务：`creative_video_shots`
+- 落地页打包记录：`creative_landing_packages`
+- 最终成片：`data/generated/videos/`
+- HTML5 落地页目录和 ZIP：`data/generated/landing-pages/`
 
 生成后的远程图片和视频保存在对应服务商提供的对象存储中，数据库保存其 URL 和任务 ID。后续上 GCP 时，原视频、截图、图片与成片计划统一迁移到 GCS。
+
+最终成片确认后，成片卡片会显示“一键打包落地页”。系统将成片压缩为不超过 5 MB 的 H.264 MP4，连同自包含的 `index.html`、`analytics.js`、游戏图标和商店 CTA 打成 ZIP；CTA 在视频播放 3 秒后出现。游戏图标无法下载时会使用游戏名称首字母，不阻止打包。
 
 ## 项目本地 Skills
 
