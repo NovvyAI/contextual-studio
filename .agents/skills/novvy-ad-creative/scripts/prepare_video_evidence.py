@@ -16,7 +16,8 @@ def plugin_root_from_script() -> Path:
     for parent in Path(__file__).resolve().parents:
         if (parent / ".codex-plugin" / "plugin.json").exists():
             return parent
-    return Path(__file__).resolve().parents[3]
+    # Vendored project-local skills are not wrapped in a plugin bundle.
+    return Path(__file__).resolve().parents[1]
 
 
 PLUGIN_ROOT = plugin_root_from_script()
@@ -53,7 +54,7 @@ def require_binary(name: str) -> str:
 
 
 def content_fingerprint(video_path: Path) -> str:
-    """Return a stable, inexpensive fingerprint covering three file regions."""
+    """Build a stable, fast fingerprint from file size and three content regions."""
     size = video_path.stat().st_size
     digest = hashlib.sha256()
     digest.update(str(size).encode("ascii"))
@@ -126,7 +127,7 @@ def timestamps_for(duration: float, requested_frame_count: int) -> list[float]:
         return [0.0]
 
     requested = max(1, requested_frame_count)
-    count = min(requested, max(1, math.ceil(duration)))
+    count = requested
     end = max(duration - 0.1, 0.0)
     if count == 1:
         return [min(end / 2, end)]
@@ -360,14 +361,30 @@ def extract_audio_preview(ffmpeg: str, video_path: Path, output_dir: Path) -> st
 
 def extract_tail_audio_preview(ffmpeg: str, video_path: Path, output_dir: Path, duration: float) -> str | None:
     if duration <= 35:
-        preview = output_dir / "audio_preview.wav"
-        return str(preview) if preview.is_file() else None
+        return str(output_dir / "audio_preview.wav") if (output_dir / "audio_preview.wav").is_file() else None
     audio_path = output_dir / "audio_tail_preview.wav"
-    ok = run([
-        ffmpeg, "-hide_banner", "-loglevel", "error", "-sseof", "-30", "-i", str(video_path),
-        "-vn", "-ac", "1", "-ar", "16000", "-y", str(audio_path),
-    ])
-    return str(audio_path) if ok and audio_path.exists() else None
+    ok = run(
+        [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-sseof",
+            "-30",
+            "-i",
+            str(video_path),
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-y",
+            str(audio_path),
+        ]
+    )
+    if ok and audio_path.exists():
+        return str(audio_path)
+    return None
 
 
 def write_markdown(output_dir: Path, summary: dict) -> str:
@@ -443,39 +460,80 @@ def codex_ui_images(overview_sheets: list[dict]) -> list[dict]:
     return images
 
 
-def cached_summary(output_dir: Path, video_fingerprint: str, requested_frame_count: int, audio_requested: bool) -> dict | None:
+def cached_summary(
+    output_dir: Path,
+    *,
+    video_path: Path,
+    video_fingerprint: str,
+    requested_frame_count: int,
+    audio_requested: bool,
+) -> dict | None:
     metadata_path = output_dir / "metadata.json"
     try:
         summary = json.loads(metadata_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
+
     if summary.get("schemaVersion") != EVIDENCE_SCHEMA_VERSION:
         return None
-    if summary.get("sourceFingerprint") != video_fingerprint or summary.get("requestedFrameCount") != requested_frame_count:
+    if summary.get("sourceFingerprint") != video_fingerprint:
         return None
-    required = [item.get("path") for item in summary.get("frames", []) + summary.get("overviewSheets", [])]
-    if not required or any(not value or not Path(value).is_file() for value in required):
+    if summary.get("requestedFrameCount") != requested_frame_count:
         return None
-    if audio_requested and summary.get("audioPreview") and not Path(summary["audioPreview"]).is_file():
+    if not summary.get("overviewSheets") or len(summary["overviewSheets"]) != 1:
         return None
-    summary["cacheHit"] = True
+
+    required_paths = [sheet.get("path") for sheet in summary["overviewSheets"]]
+    required_paths.extend(frame.get("path") for frame in summary.get("frames", []))
+    if any(not path or not Path(path).is_file() for path in required_paths):
+        return None
+    if audio_requested:
+        if not summary.get("audioPreviewRequested"):
+            return None
+        if summary.get("audioPreview") and not Path(summary["audioPreview"]).is_file():
+            return None
+        if summary.get("audioTailPreview") and not Path(summary["audioTailPreview"]).is_file():
+            return None
+    else:
+        summary["audioPreviewRequested"] = False
+        summary["audioPreviewStatus"] = "disabled"
+        summary["audioPreview"] = None
+        summary["audioTailPreview"] = None
+
+    previous_source = summary.get("source")
+    summary["source"] = str(video_path)
+    summary["cachedFromSource"] = previous_source if previous_source != str(video_path) else None
+    summary["evidenceCacheHit"] = True
+    summary["codexUiImages"] = codex_ui_images(summary["overviewSheets"])
+    metadata_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return summary
 
 
+def clear_generated_evidence(output_dir: Path) -> None:
+    for directory_name in ("frames", "overview_sheets", "overview_inputs"):
+        target = output_dir / directory_name
+        if target.is_dir():
+            shutil.rmtree(target)
+    for file_name in ("audio_preview.wav", "audio_tail_preview.wav", "evidence.md", "metadata.json"):
+        target = output_dir / file_name
+        if target.exists():
+            target.unlink()
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Prepare bounded video evidence for analysis.")
+    parser = argparse.ArgumentParser(description="Sample one video into at most 20 frames and one contact sheet.")
     parser.add_argument("video", nargs="?", help="Local video file path")
     parser.add_argument("--input", dest="input_video", help="Local video file path. Alias for the positional video argument.")
     parser.add_argument(
         "--output-dir",
         help="Output directory. Defaults to the content-addressed cache inside ~/novvy_ad_workplace/video-memory",
     )
-    parser.add_argument("--frame-count", type=int, default=DEFAULT_FRAME_COUNT, help="Uniformly sample this many frames across the full video")
-    parser.add_argument("--frame-interval-seconds", type=float, default=None, help="Deprecated compatibility option; use --frame-count")
-    parser.add_argument("--overview-frame-count", type=int, default=20, help="Maximum frames per overview sheet")
-    parser.add_argument("--max-frames", type=int, default=0, help="Optional hard cap for sampled frames. 0 means no cap")
-    parser.add_argument("--audio-preview", dest="audio_preview", action="store_true", default=True, help="Extract first 30 seconds as 16 kHz mono wav. Enabled by default")
-    parser.add_argument("--no-audio-preview", dest="audio_preview", action="store_false", help="Disable the default 30 second audio preview")
+    parser.add_argument("--frame-count", type=int, default=DEFAULT_FRAME_COUNT, help="Maximum uniformly sampled frames. Defaults to 20")
+    parser.add_argument("--max-frames", type=int, default=0, help="Deprecated compatibility cap; when set, lowers --frame-count")
+    parser.add_argument("--frame-interval-seconds", type=float, help=argparse.SUPPRESS)
+    parser.add_argument("--overview-frame-count", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--audio-preview", dest="audio_preview", action="store_true", default=False, help="Optionally extract the first and final 30 seconds as 16 kHz mono wav. Disabled by default")
+    parser.add_argument("--no-audio-preview", dest="audio_preview", action="store_false", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     if args.video and args.input_video:
@@ -489,22 +547,22 @@ def main() -> int:
     if not video_path.exists():
         print(f"Video file not found: {video_path}", file=sys.stderr)
         return 2
+    if not video_path.is_file():
+        print(f"Expected one video file, not a directory: {video_path}", file=sys.stderr)
+        return 2
 
-    requested_frame_count = max(args.max_frames or args.frame_count, 1)
-    overview_frame_count = max(args.overview_frame_count, 1)
-    video_fingerprint = content_fingerprint(video_path)
+    requested_frame_count = max(args.frame_count, 1)
+    if args.max_frames > 0:
+        requested_frame_count = min(requested_frame_count, args.max_frames)
+    requested_frame_count = min(requested_frame_count, DEFAULT_FRAME_COUNT)
     try:
+        video_fingerprint = content_fingerprint(video_path)
         requested_output_dir = Path(args.output_dir) if args.output_dir else default_output_dir(video_fingerprint)
         output_dir = ensure_workspace_output(requested_output_dir, "Output directory")
         output_dir.mkdir(parents=True, exist_ok=True)
     except (RuntimeError, OSError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
-
-    cached = cached_summary(output_dir, video_fingerprint, requested_frame_count, args.audio_preview)
-    if cached is not None:
-        print(json.dumps(cached, indent=2, ensure_ascii=False))
-        return 0
 
     try:
         ffmpeg = require_binary("ffmpeg")
@@ -516,19 +574,37 @@ def main() -> int:
 
     duration = parse_duration(metadata)
     stream = video_stream(metadata)
+    cached = cached_summary(
+        output_dir,
+        video_path=video_path,
+        video_fingerprint=video_fingerprint,
+        requested_frame_count=requested_frame_count,
+        audio_requested=args.audio_preview,
+    )
+    if cached is not None:
+        print(json.dumps(cached, indent=2, ensure_ascii=False))
+        return 0
+
+    clear_generated_evidence(output_dir)
     timestamps = timestamps_for(duration, requested_frame_count)
     frames = extract_frames(ffmpeg, video_path, output_dir, timestamps)
-    overview_sheets = make_overview_sheets(ffmpeg, frames, output_dir, overview_frame_count)
+    overview_sheets = make_overview_sheets(ffmpeg, frames, output_dir, max(len(frames), 1))
+    if not frames or len(overview_sheets) != 1:
+        print("Unable to extract video frames and create exactly one overview sheet", file=sys.stderr)
+        return 1
     overview_batches = overview_input_batches(overview_sheets, 20)
     audio_preview = extract_audio_preview(ffmpeg, video_path, output_dir) if args.audio_preview else None
-    audio_tail_preview = extract_tail_audio_preview(ffmpeg, video_path, output_dir, duration) if args.audio_preview else None
+    audio_tail_preview = (
+        extract_tail_audio_preview(ffmpeg, video_path, output_dir, duration) if args.audio_preview and audio_preview else None
+    )
     project_dir = project_dir_for_output(output_dir)
 
     summary = {
         "schemaVersion": EVIDENCE_SCHEMA_VERSION,
-        "cacheHit": False,
-        "sourceFingerprint": video_fingerprint,
         "source": str(video_path),
+        "sourceFingerprint": video_fingerprint,
+        "fingerprintStrategy": "sha256-size-head-middle-tail-1MiB",
+        "evidenceCacheHit": False,
         "projectName": project_dir.name,
         "projectDir": str(project_dir),
         "outputDir": str(output_dir),
@@ -536,14 +612,17 @@ def main() -> int:
         "width": stream.get("width"),
         "height": stream.get("height"),
         "avgFrameRate": stream.get("avg_frame_rate"),
+        "samplingMode": "uniform_across_full_duration",
         "requestedFrameCount": requested_frame_count,
         "actualFrameCount": len(frames),
-        "overviewFrameCount": overview_frame_count,
+        "overviewFrameCount": len(frames),
         "maxImagesPerMultimodalRequest": 20,
         "frames": frames,
         "overviewSheets": overview_sheets,
         "overviewInputBatches": overview_batches,
         "contactSheet": overview_sheets[0]["path"] if overview_sheets else None,
+        "audioPreviewRequested": args.audio_preview,
+        "audioPreviewStatus": "created" if audio_preview else "not_available" if args.audio_preview else "disabled",
         "audioPreview": audio_preview,
         "audioTailPreview": audio_tail_preview,
     }

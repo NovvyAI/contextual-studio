@@ -9,7 +9,7 @@ Contextual Studio 是一个面向短剧与游戏广告创意制作的本地 Web 
 ### 短剧分析
 
 - 上传本地短剧视频并保存历史记录。
-- 使用 Codex SDK 和项目内 `$analyze-short-drama` Skill 分析覆盖全片的20张独立高清帧。
+- 使用 Codex SDK 和项目内 `$analyze-short-drama` Skill：全片均匀截取 20 帧并合成唯一概览拼图，一次纯视觉模型分析后持久化结果；不读取或转写音频。20 张独立截图仍保存到数据库，供人物候选和资产区使用。
 - 输出剧情梗概、完整时间线、人物关系、情绪曲线、关键台词、视听母题、开场钩子和结尾悬念。
 - 自动选择男女主人公正面与侧面候选截图。
 - 原视频保存在本地文件系统；关键截图和分析 JSON 保存在 SQLite。
@@ -88,6 +88,7 @@ contextual-studio/
 ├── CHANGELOG.md                     中文修改历史
 ├── TODO.md                          后续开发及云端部署事项
 ├── package.json
+├── install_environment.sh           全新 macOS 一键环境安装脚本
 └── start_server.sh                  本地启动脚本
 ```
 
@@ -134,6 +135,48 @@ cp .env.example .env
 仅执行 `cp .env.example .env` 不会自动获得 Novvy MCP 权限。其他开发者如果没有安装包含有效 `.mcp.json` 的 Novvy 插件，必须在自己的 `.env` 中填写有效的 `NOVVY_MCP_AUTHORIZATION`，否则落版图、人物图和分镜图生成会持续失败。
 
 ## 启动项目
+
+### 全新电脑一键安装（推荐）
+
+如果电脑没有安装 Node.js、Python、FFmpeg 或其他开发工具，在项目目录中运行：
+
+```bash
+chmod +x install_environment.sh start_server.sh
+./install_environment.sh
+```
+
+脚本会自动完成：
+
+- 安装 Apple 命令行工具和 Homebrew。
+- 安装 Node.js 24、npm、Python 3、FFmpeg/FFprobe。
+- 安装 Google Cloud CLI，供 ImaRouter 上传本地参考图。
+- 执行 `npm install`。
+- 在不存在时从 `.env.example` 创建 `.env`，但不会写入或覆盖团队密钥。
+- 检查项目代码，并打开浏览器引导完成 `npx codex login`。
+
+Apple 命令行工具第一次安装时，macOS 会弹出系统窗口。安装完成后，需要再次运行 `./install_environment.sh`。输入电脑密码时终端不显示字符属于正常现象。
+
+如果暂时不使用 ImaRouter，可执行：
+
+```bash
+./install_environment.sh --without-gcloud
+```
+
+如果只想安装软件、稍后再登录，可执行：
+
+```bash
+./install_environment.sh --skip-login
+```
+
+安装完成后启动：
+
+```bash
+./start_server.sh
+```
+
+> 一键脚本只负责安装本地软件，不能自动获得团队的 Novvy MCP 或 ImaRouter 密钥。管理员仍需把有效凭据配置到本机 `.env`。
+
+### 手动安装
 
 首次 Clone 后，先安装依赖并登录 Codex：
 
@@ -205,7 +248,7 @@ npm run check
 - `.agents/skills/creative-quality-review`
 - `.agents/skills/storyboard-production-contract`
 
-其中，视听语言 Skill 负责把创意转译为可执行镜头参数，质量审核 Skill 内置 129 条项目质量矩阵，分镜生产 Skill 负责最多三镜的文字分镜、静态分镜图和逐镜视频任务合同。外部资料中的 `single_final_video_pass` 在本项目中仅为用户明确选择时的严格模式；默认仍使用静态分镜图审核、逐镜生成/修改、Novvy MCP 或 ImaRouter、审核后拼接的现有流程。
+其中，视听语言 Skill 负责把创意转译为可执行镜头参数，质量审核 Skill 与 `novvy-ad-creative` 的只读视听质量库提供 129 条规则和 60 个唯一导演样本，运行时只查询必要记录并转成可观察参数；分镜生产 Skill 负责最多三镜的文字分镜、静态分镜图和逐镜视频任务合同。内容镜头默认使用 0.35 秒音画交叉淡化，再确定性追加已确认落版图。外部资料中的 `single_final_video_pass` 在本项目中仅为用户明确选择时的严格模式；默认仍使用静态分镜图审核、逐镜生成/修改、Novvy MCP 或 ImaRouter、审核后拼接的现有流程。
 
 个人目录、插件缓存和其他项目里的同名 Skill 仅作为参考。外部 Skill 更新时，应先比较差异，再选择性合并到项目本地版本，不能覆盖项目定制逻辑。
 

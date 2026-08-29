@@ -13,15 +13,16 @@ description: 使用 Novvy MCP 产品列表和参考视频，用中文分析剧�
 
 - 商品分析：拿到原始产品候选后，读取 `references/product-analysis-subagent.md`。
 - 视频分析：拿到参考视频或视频证据后，读取 `references/video-analysis-subagent.md`。
-- 片尾植入和后续制作：生成推荐表、创意方案、落版图审核、视频提示词和二次修改时，读取 `references/tail-ad-insertion.md`。
+- 剧情高相关广告与后续制作：生成推荐表、创意方案、落版图审核、视频提示词和二次修改时，读取 `references/drama-related-ad.md`；`references/tail-ad-insertion.md` 仅保留为本项目历史兼容参考。
 - 本地参考图上传：落版图审核通过且参考图组槽位满足后，读取 `references/local-upload-subagent.md`，并交给独立上传 subagent。
 - 叙事与台词建模：创意策略阶段读取 `references/narrative-dialogue-prompt-reference.md`。
-- 创意策略与制作契约：在同一个创意 Codex session 内依次读取 `references/creative-strategy-phase.md` 与 `references/creative-production-phase.md`；它们是结构化阶段，不创建新的 Codex task。
-- 参考图像素审核：上传前读取 `references/reference-image-audit-phase.md`，并按 `references/reference-review.schema.json` 校验结果。
+- 创意策略与制作契约：在同一个创意 Codex session 内依次使用 `references/creative-strategy-subagent.md` 与 `references/creative-production-subagent.md` 的输入隔离和 JSON 契约；在本项目中它们是结构化阶段，不创建新的 Codex task。旧的 `*-phase.md` 仅保留为兼容说明。
+- 参考图像素审核：上传前使用 `references/reference-image-audit-subagent.md` 的逐图审核契约，并按 `references/reference-review.schema.json` 校验结果；在本项目中仍是同一 session 内的隔离阶段。
 - 最终视频分镜：按 `references/storyboard-prompt.schema.json` 生成结构化 JSON，并通过 `scripts/storyboard_prompt_contract.py` 确定性编译中文审核稿和英文逐镜任务。
 - 视听语言：创意方案、文字分镜、分镜图提示词与逐镜视频提示词阶段使用项目本地 `$audiovisual-language-design`，把“电影感”编译成构图、机位、焦段、运镜触发、调度、光色、剪辑和声音参数。
 - 分镜合同：人物参考组确认后使用项目本地 `$storyboard-production-contract` 生成和校验最多三镜的文字分镜、静态分镜图与逐镜视频任务。
 - 创意质量：候选交付用户审核前使用项目本地 `$creative-quality-review` 做相关字段的轻量检查；硬门与 CQ 创作分级分开，普通运行不得套用外部单次视频硬预算。
+- 外部视听质量库：策略和制作阶段按需读取 `references/audiovisual-creative-quality.md`，通过 `scripts/query_audiovisual_quality.py` 查询 `references/audiovisual-quality-matrix.json` 中必要的模块、记录或导演风格；不得把整份矩阵塞入模型上下文，也不得用导演名代替可观察制作参数。
 
 ## Contextual Studio 本地架构覆盖
 
@@ -33,14 +34,17 @@ description: 使用 Novvy MCP 产品列表和参考视频，用中文分析剧�
 - 视频生成保留 `Novvy MCP` 与 `ImaRouter` 两种方式；每个视频镜头独立生成、独立版本化和复审，全部通过后按顺序拼接。
 - 真人模式沿用本项目的落版逻辑：视频模型不重绘已确认落版图。内容镜头拼接完成后，由后端把已确认原始落版图确定性追加为结尾静态片段。
 - 外部视听资料中的 `single_final_video_pass` 只作为用户明确选择时的严格 profile；默认工作台继续允许最多三镜独立生成、单镜修改、Novvy MCP/ImaRouter 选择和审核后拼接。
+- 外部新版要求的整剧证据流程应用于短剧分析：每集固定均匀 20 帧、合成一张概览拼图、每集一次视觉分析并持久化 JSON，最后一次整剧汇总；精确缓存命中时不再调用模型。网页上传单个文件时，把它视为一集或用户提供的完整合辑，不臆测缺失集数。
+- 外部新版的 `8s` 单镜默认值用于新建逐镜任务，仍允许按内容在 `4-15s` 调整；最多三镜和先审静态分镜图的本地规则不变。
+- 内容镜头之间默认使用 `0.35s` 画面与音频交叉淡化；最终已确认落版图仍由本项目后端确定性追加，不交给视频模型重绘。
 
 ## 本地参数和工具边界
 
-所有技能脚本默认读取 `~/novvy_ad_workplace/novvy-plugin-config.json`；也可通过 `NOVVY_WORKSPACE_DIR` 或 `NOVVY_CONFIG_FILE` 改位置。配置由 `$novvy-env-check` 创建和回填。分发到新电脑时，用户优先在插件根目录 `novvy-plugin-local.json` 填写本机私有的 `admin_user.apikey`，再单独运行 `$novvy-env-check` 同步到本地参数文件和 `.mcp.json`；不要在广告主流程中复述、展示或保存真实 key。
+所有技能脚本默认读取 `~/novvy_ad_workplace/novvy-plugin-config.json`；也可通过 `NOVVY_WORKSPACE_DIR` 或 `NOVVY_CONFIG_FILE` 改位置。Contextual Studio 部署优先使用项目 `.env` 与调用方显式传入的 `.mcp.json`；兼容插件本地 `novvy-plugin-local.json`。不要在广告主流程中复述、展示或保存真实 key。
 
 运行技能内置脚本前，必须先把 `SKILL_DIR` 设为当前已加载 `novvy-ad-creative/SKILL.md` 所在目录，也就是包含 `scripts/` 和 `references/` 的目录，再用 `"$SKILL_DIR/scripts/..."` 绝对路径调用；不要假设当前工作目录就是 skill 根目录。如果 Codex 沙盒拒写默认 `~/novvy_ad_workplace`，请求用户授予该目录写权限后重试一次；不要把 `NOVVY_WORKSPACE_DIR` 改到当前 task 的 `work/` 目录，也不得写到系统临时目录、视频源目录或插件目录。
 
-不要在广告主流程中自动运行 `$novvy-env-check`。如果脚本报告 Python、ffmpeg、ffprobe、Pillow、workspace 权限问题，或 HTTP 上传返回 `Invalid token`，告诉用户先配置本机 `novvy-plugin-local.json` 再单独执行 `$novvy-env-check`，然后从当前业务步骤继续。
+不要在广告主流程中自动运行外部插件的 `$novvy-env-check`。如果脚本报告 Python、ffmpeg、ffprobe、Pillow、workspace 权限问题，按项目 README 的本地环境说明修复；HTTP 上传返回 `Invalid token` 时检查项目 `.env`/`.mcp.json` 鉴权，然后从当前业务步骤继续。
 
 默认不要调用 shell、终端、命令行、文件写入工具，或任何非 Novvy 的系统状态工具。只允许以下窄例外：
 
@@ -67,8 +71,8 @@ SKILL_DIR="<novvy-ad-creative skill 根目录>"
 NOVVY_PYTHON_BIN="$("$SKILL_DIR/scripts/novvy_python.sh")" && "$NOVVY_PYTHON_BIN" "$SKILL_DIR/scripts/prepare_video_evidence.py" "<视频路径>" --frame-count 20 --overview-frame-count 20
 ```
 
-   - 脚本默认在全片均匀抽取 20 帧并合成 `overviewSheets`，避免只覆盖视频开头；输出按视频内容指纹缓存，并在 `metadata.json` 写入每批最多 20 张图片的 `overviewInputBatches` 和供 UI 渲染的概览图。默认同时提取开头 30 秒和片尾 30 秒音频预览，只有明确不需要音频证据时才加 `--no-audio-preview`。
-   - 抽帧成功后，必须把 `metadata.json` 的 `codexUiImages` 中所有本地图片按顺序用绝对路径 Markdown 图片标签展示在 Codex UI，例如 `![frame_001](/Users/wing/novvy_ad_workplace/.../frame_001_00000.00s.png)`；不要只展示文件路径或路径表格。
+   - 单文件脚本默认在全片均匀抽取 20 帧并合成唯一概览拼图，避免只覆盖视频开头；输出按视频内容指纹缓存。短剧视觉分析默认不读取或转写音频，不探测 ASR；只有用户明确要求声音分析时才单独处理音频证据。
+   - 抽帧成功后，必须把 `metadata.json` 的 `codexUiImages` 中所有本地图片按顺序用绝对路径 Markdown 图片标签展示在 Codex UI，例如 `![overview](</absolute/novvy-workspace/.../overview.png>)`；不要只展示文件路径或路径表格。
    - 如果脚本只因参数格式或权限调用方式错误失败，在同一次视频分析操作内按 resolver 调用格式自动重试一次。其他失败只说明原因和可替代输入，不追加本地探测命令。
 
 3. 获取相互隔离的商品分析和视频理解。
@@ -80,7 +84,7 @@ NOVVY_PYTHON_BIN="$("$SKILL_DIR/scripts/novvy_python.sh")" && "$NOVVY_PYTHON_BIN
 4. 汇总输入摘要。
    - 等两个子流程都完成后，区分展示商品分析结论、视频理解结论和主 agent 综合判断。
    - 汇总产品玩法/卖点/受众、视频剧情/人物/画风/结尾入口、剧游连接、情绪接续、转化路径、参考图素材、人物一致性、创意约束、假设和未知项。
-   - 汇总后直接读取 `references/tail-ad-insertion.md` 生成推荐表，不等待用户确认。
+   - 汇总后直接读取 `references/drama-related-ad.md` 生成推荐表，不等待用户确认。
 
 5. 生成片尾广告植入推荐表。
    - 给 3-4 个可选择方案，必须是片尾植入，不做中插。
@@ -93,7 +97,7 @@ NOVVY_PYTHON_BIN="$("$SKILL_DIR/scripts/novvy_python.sh")" && "$NOVVY_PYTHON_BIN
    - 每张聊天卡片独立接受修改意见。用户从卡片发起修改时，只重写同一 id 的卡片及必要的当前草稿字段，不连带修改其他候选，不自动确认。
 
 6. 推进已选方案。
-   - 用户选择方案后，按 `references/tail-ad-insertion.md` 生成创意方案、GPT-image-2 落版图计划、参考图组规划和视频提示词。
+   - 用户选择方案后，按 `references/drama-related-ad.md` 生成创意方案、GPT-image-2 落版图计划、参考图组规划和视频提示词。
    - 多选时，每个方案用独立 subagent 处理自己的编号；任何消耗型任务前都必须把待确认内容返回主 agent。
    - 落版图只生成最终片尾品牌/CTA 卡面，不重绘人物脸。`novvy_create_image_generation` 只用于 GPT-image-2 落版图。
    - 落版图结果 URL 出来后，用 Markdown 链接展示为网页跳转，例如 `[落版图预览](<结果URL>)`；不要把远程结果 URL 放进图片 Markdown 里渲染。后续 `final_card` 槽位可直接使用该结果 URL；只有用户要求本地保存或远程 URL 无法用于后续上传时，才运行 `scripts/download_result_asset.py` 保存本地副本。

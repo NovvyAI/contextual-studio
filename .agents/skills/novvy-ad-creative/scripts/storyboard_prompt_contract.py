@@ -8,7 +8,6 @@ import hashlib
 import json
 import os
 import re
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +16,7 @@ SCHEMA_VERSION = "novvy.storyboard-prompts.v1"
 MODEL = "seedance-2.0-fast"
 RATIO = "9:16"
 RESOLUTION = "720p"
+DEFAULT_DURATION_SECONDS = 8
 SHOT_ID_PATTERN = re.compile(r"^shot-(\d{2})$")
 PLAN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 CJK_PATTERN = re.compile(r"[\u3400-\u9fff\uf900-\ufaff]")
@@ -43,7 +43,20 @@ ROOT_KEYS = {
     "shots",
 }
 VISUAL_STYLE_KEYS = {"renderingType", "reviewLabelZh", "promptLabelEn"}
-REFERENCE_KEYS = {"snapshotId", "referenceField", "slotOrder", "referenceUrls", "summaryZh"}
+LEGACY_REFERENCE_KEYS = {
+    "snapshotId",
+    "referenceField",
+    "slotOrder",
+    "referenceUrls",
+    "previewItems",
+    "summaryZh",
+}
+MIXED_REFERENCE_KEYS = LEGACY_REFERENCE_KEYS | {
+    "imageSlotOrder",
+    "imageUrls",
+    "humanSlotOrder",
+    "humanImageUrls",
+}
 GENERATION_KEYS = {"model", "ratio", "resolution", "generateAudio"}
 BILINGUAL_KEYS = {"zh", "en"}
 SHOT_KEYS = {
@@ -70,6 +83,7 @@ SHOT_KEYS = {
     "finalCard",
 }
 REFERENCE_BINDING_KEYS = {"slot", "purpose"}
+REFERENCE_PREVIEW_KEYS = {"slot", "localImagePath"}
 DIALOGUE_KEYS = {"speakerEn", "targetEn", "lineEn"}
 FINAL_CARD_KEYS = {"productNameEn", "benefitEn", "ctaEn", "destinationEn", "layout"}
 
@@ -148,17 +162,39 @@ def validate_bilingual_array(value: object, path: str) -> list[dict[str, str]]:
     return [validate_bilingual(item, f"{path}[{index}]") for index, item in enumerate(require_list(value, path))]
 
 
+def validate_reference_previews(value: object, slot_order: list[str]) -> list[dict[str, str]]:
+    previews = []
+    for index, raw in enumerate(require_list(value, "referenceSnapshot.previewItems")):
+        path = f"referenceSnapshot.previewItems[{index}]"
+        item = require_dict(raw, path)
+        require_exact_keys(item, REFERENCE_PREVIEW_KEYS, path)
+        slot = require_string(item["slot"], f"{path}.slot")
+        local_image_path = require_string(item["localImagePath"], f"{path}.localImagePath")
+        preview_path = Path(local_image_path)
+        if not preview_path.is_absolute():
+            raise ContractError(f"{path}.localImagePath must be an absolute local path")
+        if not preview_path.is_file():
+            raise ContractError(f"{path}.localImagePath is not a readable local file")
+        previews.append({"slot": slot, "localImagePath": str(preview_path.resolve())})
+    if [item["slot"] for item in previews] != slot_order:
+        raise ContractError("referenceSnapshot.previewItems must exactly follow referenceSnapshot.slotOrder")
+    return previews
+
+
 def validate_reference_snapshot(value: object, rendering_type: str) -> dict[str, Any]:
     snapshot = require_dict(value, "referenceSnapshot")
-    require_exact_keys(snapshot, REFERENCE_KEYS, "referenceSnapshot")
     snapshot_id = require_string(snapshot["snapshotId"], "referenceSnapshot.snapshotId")
     reference_field = require_string(snapshot["referenceField"], "referenceSnapshot.referenceField")
-    if reference_field not in {"imageUrls", "humanImageUrls"}:
-        raise ContractError("referenceSnapshot.referenceField must be imageUrls or humanImageUrls")
+    expected_keys = MIXED_REFERENCE_KEYS if reference_field == "mixed" else LEGACY_REFERENCE_KEYS
+    require_exact_keys(snapshot, expected_keys, "referenceSnapshot")
+    if reference_field not in {"imageUrls", "humanImageUrls", "mixed"}:
+        raise ContractError("referenceSnapshot.referenceField must be imageUrls, humanImageUrls, or mixed")
     if rendering_type == "live_action_realistic" and reference_field != "humanImageUrls":
-        raise ContractError("live_action_realistic plans must use a reviewed humanImageUrls snapshot")
+        if reference_field != "mixed":
+            raise ContractError("live_action_realistic plans must use a reviewed humanImageUrls or mixed snapshot")
     if rendering_type in {"cartoon_animation", "mixed_unknown"} and reference_field != "imageUrls":
-        raise ContractError(f"{rendering_type} plans must use imageUrls")
+        if reference_field != "mixed":
+            raise ContractError(f"{rendering_type} plans must use imageUrls or mixed")
 
     slots = validate_string_array(snapshot["slotOrder"], "referenceSnapshot.slotOrder")
     urls = validate_string_array(snapshot["referenceUrls"], "referenceSnapshot.referenceUrls")
@@ -166,19 +202,50 @@ def validate_reference_snapshot(value: object, rendering_type: str) -> dict[str,
         raise ContractError("referenceSnapshot.slotOrder and referenceUrls must have the same length")
     if len(set(slots)) != len(slots):
         raise ContractError("referenceSnapshot.slotOrder must not contain duplicates")
+    previews = validate_reference_previews(snapshot["previewItems"], slots)
     if reference_field == "humanImageUrls" and "final_card" in slots:
         raise ContractError("humanImageUrls snapshots must not contain final_card")
     for index, url in enumerate(urls):
-        if reference_field == "humanImageUrls" and not url.startswith("asset://"):
-            raise ContractError(f"referenceSnapshot.referenceUrls[{index}] must be an asset:// reference")
+        if reference_field == "humanImageUrls" and not url.lower().startswith(("https://", "asset://")):
+            raise ContractError(f"referenceSnapshot.referenceUrls[{index}] must be HTTPS or asset://")
         if reference_field == "imageUrls" and not url.lower().startswith(("http://", "https://")):
             raise ContractError(f"referenceSnapshot.referenceUrls[{index}] must be an HTTP(S) reference")
-    return {
+    normalized = {
         "snapshotId": snapshot_id,
         "referenceField": reference_field,
         "slotOrder": slots,
         "referenceUrls": urls,
+        "previewItems": previews,
         "summaryZh": require_string(snapshot["summaryZh"], "referenceSnapshot.summaryZh"),
+    }
+    if reference_field != "mixed":
+        return normalized
+
+    image_slots = validate_string_array(snapshot["imageSlotOrder"], "referenceSnapshot.imageSlotOrder")
+    image_urls = validate_string_array(snapshot["imageUrls"], "referenceSnapshot.imageUrls")
+    human_slots = validate_string_array(snapshot["humanSlotOrder"], "referenceSnapshot.humanSlotOrder")
+    human_urls = validate_string_array(snapshot["humanImageUrls"], "referenceSnapshot.humanImageUrls")
+    if len(image_slots) != len(image_urls) or len(human_slots) != len(human_urls):
+        raise ContractError("mixed snapshot group slot and URL counts must match")
+    if not image_slots or not human_slots:
+        raise ContractError("mixed snapshot must contain both imageUrls and humanImageUrls")
+    if len(set(image_slots + human_slots)) != len(slots) or set(image_slots + human_slots) != set(slots):
+        raise ContractError("mixed snapshot group slots must partition slotOrder exactly")
+    if "final_card" in human_slots:
+        raise ContractError("final_card must use imageUrls, not humanImageUrls")
+    if any(not url.lower().startswith(("http://", "https://")) for url in image_urls):
+        raise ContractError("mixed snapshot imageUrls must contain only HTTP(S) references")
+    if any(not url.lower().startswith(("https://", "asset://")) for url in human_urls):
+        raise ContractError("mixed snapshot humanImageUrls must contain only HTTPS or asset:// references")
+    reference_by_slot = dict(zip(image_slots, image_urls)) | dict(zip(human_slots, human_urls))
+    if [reference_by_slot[slot] for slot in slots] != urls:
+        raise ContractError("mixed snapshot referenceUrls must follow slotOrder across both reference groups")
+    return {
+        **normalized,
+        "imageSlotOrder": image_slots,
+        "imageUrls": image_urls,
+        "humanSlotOrder": human_slots,
+        "humanImageUrls": human_urls,
     }
 
 
@@ -187,7 +254,7 @@ def validate_final_card(value: object, path: str) -> dict[str, Any] | None:
         return None
     card = require_dict(value, path)
     require_exact_keys(card, FINAL_CARD_KEYS, path)
-    result = {
+    result: dict[str, Any] = {
         key: validate_english(require_string(card[key], f"{path}.{key}"), f"{path}.{key}")
         for key in ("productNameEn", "benefitEn", "ctaEn", "destinationEn")
     }
@@ -332,6 +399,16 @@ def list_or_none(values: list[str]) -> str:
     return "；".join(values) if values else "无"
 
 
+def markdown_table_text(value: str) -> str:
+    return value.replace("|", "\\|").replace("\n", "<br>")
+
+
+def markdown_local_image(slot: str, local_image_path: str) -> str:
+    safe_slot = slot.replace("[", "\\[").replace("]", "\\]")
+    safe_path = local_image_path.replace(">", "%3E")
+    return f"![{safe_slot}](<{safe_path}>)"
+
+
 def render_review(plan: dict[str, Any]) -> str:
     snapshot = plan["referenceSnapshot"]
     generation = plan["generation"]
@@ -389,9 +466,17 @@ def render_shot_review(plan: dict[str, Any], shot: dict[str, Any]) -> list[str]:
         "【参考图绑定】",
         f"快照 ID：{snapshot['snapshotId']}",
         f"实际槽位顺序：{' -> '.join(snapshot['slotOrder'])}",
+        "",
+        "| 顺序 | 槽位 | 参考图 | 一致性用途 |",
+        "|---:|---|---|---|",
     ]
+    preview_by_slot = {item["slot"]: item["localImagePath"] for item in snapshot["previewItems"]}
     for index, binding in enumerate(shot["referenceBindings"], start=1):
-        lines.append(f"{index}. {binding['slot']}：{binding['purpose']['zh']}")
+        slot = binding["slot"]
+        lines.append(
+            f"| {index} | `{slot}` | {markdown_local_image(slot, preview_by_slot[slot])} | "
+            f"{markdown_table_text(binding['purpose']['zh'])} |"
+        )
     lines.extend(
         [
             "",
@@ -431,7 +516,6 @@ def english_list(values: list[str]) -> str:
 
 
 def render_prompt(plan: dict[str, Any], shot: dict[str, Any]) -> str:
-    snapshot = plan["referenceSnapshot"]
     bindings = [f"{index}. {item['slot']}: {item['purpose']['en']}" for index, item in enumerate(shot["referenceBindings"], start=1)]
     identity = [item["en"] for item in shot["identityConstraints"]]
     dialogue = [f"{item['speakerEn']} to {item['targetEn']}: \"{item['lineEn']}\"" for item in shot["dialogue"]]
@@ -513,8 +597,12 @@ def compile_plan(value: object, shot_id: str = "") -> dict[str, Any]:
             "duration": shot["durationSeconds"],
             "resolution": RESOLUTION,
             "generateAudio": True,
-            snapshot["referenceField"]: list(snapshot["referenceUrls"]),
         }
+        if snapshot["referenceField"] == "mixed":
+            payload["imageUrls"] = list(snapshot["imageUrls"])
+            payload["humanImageUrls"] = list(snapshot["humanImageUrls"])
+        else:
+            payload[snapshot["referenceField"]] = list(snapshot["referenceUrls"])
         tasks.append(
             {
                 "shotId": shot["shotId"],
@@ -618,4 +706,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

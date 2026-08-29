@@ -44,38 +44,57 @@
       }
     },
     "referenceSnapshot": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["snapshotId", "referenceField", "slotOrder", "referenceUrls", "summaryZh"],
-      "properties": {
-        "snapshotId": {
-          "type": "string",
-          "minLength": 1
-        },
-        "referenceField": {
-          "enum": ["imageUrls", "humanImageUrls"]
-        },
-        "slotOrder": {
-          "type": "array",
-          "minItems": 1,
-          "items": {
-            "type": "string",
-            "minLength": 1
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["snapshotId", "referenceField", "slotOrder", "referenceUrls", "previewItems", "summaryZh"],
+          "properties": {
+            "snapshotId": {"type": "string", "minLength": 1},
+            "referenceField": {"enum": ["imageUrls", "humanImageUrls"]},
+            "slotOrder": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+            "referenceUrls": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+            "previewItems": {
+              "type": "array",
+              "minItems": 1,
+              "items": {"$ref": "#/$defs/referencePreview"}
+            },
+            "summaryZh": {"type": "string", "minLength": 1}
           }
         },
-        "referenceUrls": {
-          "type": "array",
-          "minItems": 1,
-          "items": {
-            "type": "string",
-            "minLength": 1
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "snapshotId",
+            "referenceField",
+            "slotOrder",
+            "referenceUrls",
+            "imageSlotOrder",
+            "imageUrls",
+            "humanSlotOrder",
+            "humanImageUrls",
+            "previewItems",
+            "summaryZh"
+          ],
+          "properties": {
+            "snapshotId": {"type": "string", "minLength": 1},
+            "referenceField": {"const": "mixed"},
+            "slotOrder": {"type": "array", "minItems": 2, "items": {"type": "string", "minLength": 1}},
+            "referenceUrls": {"type": "array", "minItems": 2, "items": {"type": "string", "minLength": 1}},
+            "imageSlotOrder": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+            "imageUrls": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+            "humanSlotOrder": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+            "humanImageUrls": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+            "previewItems": {
+              "type": "array",
+              "minItems": 2,
+              "items": {"$ref": "#/$defs/referencePreview"}
+            },
+            "summaryZh": {"type": "string", "minLength": 1}
           }
-        },
-        "summaryZh": {
-          "type": "string",
-          "minLength": 1
         }
-      }
+      ]
     },
     "generation": {
       "type": "object",
@@ -106,6 +125,21 @@
     }
   },
   "$defs": {
+    "referencePreview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slot", "localImagePath"],
+      "properties": {
+        "slot": {
+          "type": "string",
+          "minLength": 1
+        },
+        "localImagePath": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
     "bilingual": {
       "type": "object",
       "additionalProperties": false,
@@ -222,7 +256,8 @@
         "durationSeconds": {
           "type": "integer",
           "minimum": 4,
-          "maximum": 15
+          "maximum": 15,
+          "default": 8
         },
         "narrativeStage": {
           "enum": ["real_operation", "stage_success", "causal_escalation", "agency_handoff"]
@@ -310,4 +345,3 @@
     }
   }
 }
-

@@ -20,6 +20,9 @@ from typing import Any
 
 
 DEFAULT_MAX_DOWNLOAD_MB = 2048
+DEFAULT_TRANSITION_SECONDS = 0.35
+MIN_TRANSITION_SECONDS = 0.1
+MAX_TRANSITION_SECONDS = 1.5
 RETRYABLE_HTTP_STATUSES = {408, 425, 429, 500, 502, 503, 504}
 SHOT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 CONCAT_MANIFEST_VERSION = "novvy.approved-storyboard.v1"
@@ -55,25 +58,6 @@ def ensure_workspace_path(path: Path, label: str) -> Path:
             safe_next_step="choose_output_inside_novvy_workspace",
         ) from exc
     return resolved
-
-
-def plugin_root_from_script() -> Path:
-    for parent in Path(__file__).resolve().parents:
-        if (parent / ".codex-plugin" / "plugin.json").exists():
-            return parent
-    return Path(__file__).resolve().parents[3]
-
-
-def resolve_download_token() -> str:
-    plugin_root = plugin_root_from_script()
-    shared_scripts = plugin_root / "scripts"
-    if str(shared_scripts) not in sys.path:
-        sys.path.insert(0, str(shared_scripts))
-    try:
-        from novvy_config import configured_api_key, mcp_api_key  # noqa: WPS433
-    except (ImportError, OSError):
-        return ""
-    return configured_api_key(plugin_root=plugin_root) or mcp_api_key(plugin_root)
 
 
 def is_http_url(value: str) -> bool:
@@ -201,16 +185,16 @@ def retry_after_seconds(headers: Any) -> float:
     if headers is None:
         return 0.0
     value = headers.get("Retry-After") if hasattr(headers, "get") else None
+    if not isinstance(value, (str, int, float)):
+        return 0.0
     try:
         return max(0.0, min(float(value), 8.0))
     except (TypeError, ValueError):
         return 0.0
 
 
-def download_once(url: str, output: Path, token: str, max_bytes: int) -> None:
+def download_once(url: str, output: Path, max_bytes: int) -> None:
     headers = {"Accept": "video/*,application/octet-stream,*/*"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(request, timeout=180) as response, output.open("wb") as target:
         total = 0
@@ -234,18 +218,12 @@ def download_once(url: str, output: Path, token: str, max_bytes: int) -> None:
         )
 
 
-def download_remote_clip(url: str, output: Path, token: str, max_bytes: int) -> None:
+def download_remote_clip(url: str, output: Path, max_bytes: int) -> None:
     for attempt in range(1, 4):
         try:
-            download_once(url, output, "", max_bytes)
+            download_once(url, output, max_bytes)
             return
         except urllib.error.HTTPError as exc:
-            if exc.code in {401, 403} and token:
-                try:
-                    download_once(url, output, token, max_bytes)
-                    return
-                except urllib.error.HTTPError as auth_exc:
-                    exc = auth_exc
             retryable = exc.code in RETRYABLE_HTTP_STATUSES or exc.code >= 500
             if not retryable or attempt == 3:
                 raise ConcatError(
@@ -276,7 +254,6 @@ def safe_remote_suffix(url: str) -> str:
 def materialize_clips(
     clips: list[dict[str, str]],
     temp_dir: Path,
-    token: str,
     max_download_bytes: int,
 ) -> list[dict[str, Any]]:
     materialized: list[dict[str, Any]] = []
@@ -285,7 +262,7 @@ def materialize_clips(
         if is_http_url(source):
             suffix = safe_remote_suffix(source)
             local_path = temp_dir / f"download-{index:03d}{suffix}"
-            download_remote_clip(source, local_path, token, max_download_bytes)
+            download_remote_clip(source, local_path, max_download_bytes)
             source_type = "remote"
             source_name = Path(urllib.parse.urlparse(source).path).name or f"shot-{index:03d}{suffix}"
         else:
@@ -327,6 +304,8 @@ def run_command(command: list[str], *, failed_step: str, safe_next_step: str) ->
 
 
 def parse_float(value: object) -> float:
+    if not isinstance(value, (str, int, float)):
+        return 0.0
     try:
         number = float(value)
     except (TypeError, ValueError):
@@ -463,6 +442,111 @@ def even_dimension(value: int, label: str) -> int:
     return value
 
 
+def transition_seconds(value: float) -> float:
+    if value < MIN_TRANSITION_SECONDS or value > MAX_TRANSITION_SECONDS:
+        raise ConcatError(
+            f"--transition-seconds must be between {MIN_TRANSITION_SECONDS} and {MAX_TRANSITION_SECONDS}.",
+            failed_step="cli_arguments",
+            safe_next_step="choose_a_short_storyboard_crossfade_duration",
+        )
+    return value
+
+
+def build_crossfade_filter(durations: list[float], duration: float) -> tuple[str, str, str]:
+    if len(durations) < 2:
+        raise ConcatError(
+            "At least two clips are required for a crossfade transition.",
+            failed_step="transition_setup",
+            safe_next_step="provide_two_or_more_approved_storyboard_clips",
+        )
+    if any(item <= duration for item in durations):
+        raise ConcatError(
+            "Every storyboard clip must be longer than the crossfade duration.",
+            failed_step="transition_setup",
+            safe_next_step="shorten_the_transition_or_replace_the_too_short_storyboard_clip",
+        )
+
+    filters = []
+    for index in range(len(durations)):
+        filters.append(f"[{index}:v]settb=AVTB,setpts=PTS-STARTPTS[v{index}]")
+        filters.append(f"[{index}:a]asetpts=PTS-STARTPTS[a{index}]")
+
+    video_label = "v0"
+    audio_label = "a0"
+    elapsed = durations[0]
+    for index in range(1, len(durations)):
+        next_video = f"vx{index}"
+        next_audio = f"ax{index}"
+        offset = elapsed - duration
+        filters.append(
+            f"[{video_label}][v{index}]xfade=transition=fade:duration={duration:.6f}:offset={offset:.6f}[{next_video}]"
+        )
+        filters.append(
+            f"[{audio_label}][a{index}]acrossfade=d={duration:.6f}:c1=tri:c2=tri[{next_audio}]"
+        )
+        video_label = next_video
+        audio_label = next_audio
+        elapsed += durations[index] - duration
+    return ";".join(filters), video_label, audio_label
+
+
+def crossfade_normalized_clips(
+    ffmpeg: str,
+    sources: list[Path],
+    durations: list[float],
+    output: Path,
+    *,
+    fps: int,
+    crf: int,
+    duration: float,
+) -> None:
+    filter_complex, video_label, audio_label = build_crossfade_filter(durations, duration)
+    command = [ffmpeg, "-v", "error"]
+    for source in sources:
+        command.extend(["-i", str(source)])
+    command.extend(
+        [
+            "-filter_complex",
+            filter_complex,
+            "-map",
+            f"[{video_label}]",
+            "-map",
+            f"[{audio_label}]",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "medium",
+            "-crf",
+            str(crf),
+            "-pix_fmt",
+            "yuv420p",
+            "-r",
+            str(fps),
+            "-fps_mode",
+            "cfr",
+            "-video_track_timescale",
+            "90000",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-ar",
+            "48000",
+            "-ac",
+            "2",
+            "-movflags",
+            "+faststart",
+            "-y",
+            str(output),
+        ]
+    )
+    run_command(
+        command,
+        failed_step="crossfade_concat",
+        safe_next_step="inspect_the_normalized_clips_or_reduce_the_transition_duration",
+    )
+
+
 def normalize_clip(
     ffmpeg: str,
     source: Path,
@@ -524,7 +608,7 @@ def normalize_clip(
     )
 
 
-def normalize_and_concat(
+def normalize_and_crossfade(
     ffmpeg: str,
     items: list[dict[str, Any]],
     output: Path,
@@ -534,6 +618,7 @@ def normalize_and_concat(
     height: int,
     fps: int,
     crf: int,
+    transition_duration: float,
 ) -> None:
     normalized: list[Path] = []
     for index, item in enumerate(items, start=1):
@@ -549,7 +634,15 @@ def normalize_and_concat(
             crf=crf,
         )
         normalized.append(normalized_path)
-    concat_stream_copy(ffmpeg, normalized, output, temp_dir)
+    crossfade_normalized_clips(
+        ffmpeg,
+        normalized,
+        [item["probe"]["duration"] for item in items],
+        output,
+        fps=fps,
+        crf=crf,
+        duration=transition_duration,
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -574,6 +667,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--height", type=int, default=0, help="Normalized height; defaults to the first clip height")
     parser.add_argument("--fps", type=int, default=30, help="Normalized frame rate. Defaults to 30")
     parser.add_argument("--crf", type=int, default=18, help="H.264 CRF used only when normalization is needed")
+    parser.add_argument(
+        "--transition-seconds",
+        type=float,
+        default=DEFAULT_TRANSITION_SECONDS,
+        help=f"Crossfade duration at every shot boundary. Defaults to {DEFAULT_TRANSITION_SECONDS}",
+    )
     parser.add_argument("--max-download-mb", type=int, default=DEFAULT_MAX_DOWNLOAD_MB)
     parser.add_argument("--ffmpeg", default="", help="Optional explicit ffmpeg executable")
     parser.add_argument("--ffprobe", default="", help="Optional explicit ffprobe executable")
@@ -623,6 +722,7 @@ def validate_args(args: argparse.Namespace) -> tuple[list[dict[str, str]], Path,
             failed_step="cli_arguments",
             safe_next_step="fix_storyboard_h264_crf",
         )
+    transition_seconds(args.transition_seconds)
     if args.max_download_mb < 1 or args.max_download_mb > 4096:
         raise ConcatError(
             "--max-download-mb must be between 1 and 4096.",
@@ -664,38 +764,26 @@ def main() -> int:
             items = materialize_clips(
                 clips,
                 temp_dir,
-                resolve_download_token(),
                 args.max_download_mb * 1024 * 1024,
             )
             for item in items:
                 item["probe"] = probe_media(ffprobe, item["path"])
 
-            mode = "stream_copy"
-            if stream_copy_compatible(items):
-                try:
-                    concat_stream_copy(ffmpeg, [item["path"] for item in items], partial_output, temp_dir)
-                except ConcatError:
-                    partial_output.unlink(missing_ok=True)
-                    mode = "normalized"
-                    warnings.append("Stream-copy concat failed; inputs were normalized before concatenation.")
-            else:
-                mode = "normalized"
-                warnings.append("Input stream specifications differed; inputs were normalized before concatenation.")
-
-            if mode == "normalized":
-                first_video = items[0]["probe"]["video"]
-                width = even_dimension(args.width or int(first_video["width"]), "Output width")
-                height = even_dimension(args.height or int(first_video["height"]), "Output height")
-                normalize_and_concat(
-                    ffmpeg,
-                    items,
-                    partial_output,
-                    temp_dir,
-                    width=width,
-                    height=height,
-                    fps=args.fps,
-                    crf=args.crf,
-                )
+            mode = "normalized_crossfade"
+            first_video = items[0]["probe"]["video"]
+            width = even_dimension(args.width or int(first_video["width"]), "Output width")
+            height = even_dimension(args.height or int(first_video["height"]), "Output height")
+            normalize_and_crossfade(
+                ffmpeg,
+                items,
+                partial_output,
+                temp_dir,
+                width=width,
+                height=height,
+                fps=args.fps,
+                crf=args.crf,
+                transition_duration=args.transition_seconds,
+            )
 
             output_probe = probe_media(ffprobe, partial_output)
             partial_output.replace(output)
@@ -712,6 +800,12 @@ def main() -> int:
                     "clips": [compact_clip_summary(item) for item in items],
                     "inputDurationSeconds": round(sum(item["probe"]["duration"] for item in items), 3),
                     "outputDurationSeconds": round(output_probe["duration"], 3),
+                    "transition": {
+                        "type": "crossfade",
+                        "durationSeconds": args.transition_seconds,
+                        "boundaryCount": len(items) - 1,
+                        "audioCrossfade": True,
+                    },
                     "warnings": warnings,
                 }
             )
@@ -751,4 +845,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

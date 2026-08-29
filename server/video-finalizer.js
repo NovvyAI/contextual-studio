@@ -37,6 +37,39 @@ async function hasAudio(inputPath) {
   } catch { return false; }
 }
 
+async function mediaDuration(inputPath) {
+  const { stdout } = await execFileAsync("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", inputPath]);
+  const value = Number.parseFloat(stdout.trim());
+  if (!Number.isFinite(value) || value <= 0) throw new Error(`无法读取镜头时长：${path.basename(inputPath)}`);
+  return value;
+}
+
+async function crossfadeShots(inputs, outputPath, transitionSeconds = 0.35) {
+  if (inputs.length === 1) {
+    await fsp.copyFile(inputs[0], outputPath);
+    return;
+  }
+  const durations = await Promise.all(inputs.map(mediaDuration));
+  const filters = [];
+  let elapsed = durations[0];
+  let videoLabel = "0:v";
+  let audioLabel = "0:a";
+  for (let index = 1; index < inputs.length; index += 1) {
+    const offset = Math.max(0, elapsed - transitionSeconds).toFixed(3);
+    const nextVideo = `vx${index}`;
+    const nextAudio = `ax${index}`;
+    filters.push(`[${videoLabel}][${index}:v]xfade=transition=fade:duration=${transitionSeconds}:offset=${offset}[${nextVideo}]`);
+    filters.push(`[${audioLabel}][${index}:a]acrossfade=d=${transitionSeconds}:c1=tri:c2=tri[${nextAudio}]`);
+    videoLabel = nextVideo;
+    audioLabel = nextAudio;
+    elapsed += durations[index] - transitionSeconds;
+  }
+  const args = ["-y"];
+  inputs.forEach((input) => args.push("-i", input));
+  args.push("-filter_complex", filters.join(";"), "-map", `[${videoLabel}]`, "-map", `[${audioLabel}]`, "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", outputPath);
+  await execFileAsync("ffmpeg", args, { maxBuffer: 8 * 1024 * 1024 });
+}
+
 export async function finalizeVideoWithApprovedCard(sessionId, remoteVideoUrl) {
   const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
   if (!session) throw new Error("创意工作台不存在");
@@ -88,10 +121,8 @@ export async function finalizeStoryboardVideosWithApprovedCard(sessionId, shotVi
       await execFileAsync("ffmpeg", args, { maxBuffer: 8 * 1024 * 1024 });
       normalized.push(target);
     }
-    const listPath = path.join(tempDir, "shots.txt");
-    await fsp.writeFile(listPath, normalized.map((item) => `file '${item.replaceAll("'", "'\\''")}'`).join("\n") + "\n");
     const joined = path.join(tempDir, "joined.mp4");
-    await execFileAsync("ffmpeg", ["-y", "-f", "concat", "-safe", "0", "-i", listPath, "-c", "copy", joined], { maxBuffer: 8 * 1024 * 1024 });
+    await crossfadeShots(normalized, joined);
     const cardPath = path.join(tempDir, "final-card.png");
     await writeSource(finalCard, cardPath);
     const filter = "[0:v]setpts=PTS-STARTPTS[v0];[1:v]trim=duration=3,setpts=PTS-STARTPTS,scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=30[v1];[v0][v1]concat=n=2:v=1:a=0[v];[0:a]asetpts=PTS-STARTPTS[a0];anullsrc=r=48000:cl=stereo,atrim=duration=3[a1];[a0][a1]concat=n=2:v=0:a=1[a]";

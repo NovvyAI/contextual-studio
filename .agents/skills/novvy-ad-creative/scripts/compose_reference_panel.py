@@ -17,7 +17,7 @@ def plugin_root_from_script() -> Path:
     for parent in Path(__file__).resolve().parents:
         if (parent / ".codex-plugin" / "plugin.json").exists():
             return parent
-    return Path(__file__).resolve().parents[3]
+    return Path(__file__).resolve().parents[1]
 
 
 PLUGIN_ROOT = plugin_root_from_script()

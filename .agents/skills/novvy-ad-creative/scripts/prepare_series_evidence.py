@@ -15,21 +15,20 @@ from prepare_video_evidence import ensure_workspace_output, workspace_dir
 from video_analysis_memory import ANALYSIS_VERSION, MEMORY_SCHEMA_VERSION, lookup
 
 
-WORKFLOW_VERSION = 2
-MAX_FRAMES_PER_EPISODE = 20
+WORKFLOW_VERSION = 3
+FRAMES_PER_EPISODE = 20
 
 
-def run_episode_evidence(video_path: Path, no_audio_preview: bool) -> tuple[dict[str, Any] | None, str]:
+def run_episode_evidence(video_path: Path) -> tuple[dict[str, Any] | None, str]:
     evidence_script = Path(__file__).resolve().with_name("prepare_video_evidence.py")
     command = [
         sys.executable,
         str(evidence_script),
         str(video_path),
         "--frame-count",
-        str(MAX_FRAMES_PER_EPISODE),
+        str(FRAMES_PER_EPISODE),
+        "--no-audio-preview",
     ]
-    if no_audio_preview:
-        command.append("--no-audio-preview")
 
     environment = dict(os.environ)
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -44,8 +43,8 @@ def run_episode_evidence(video_path: Path, no_audio_preview: bool) -> tuple[dict
 
     frames = evidence.get("frames") if isinstance(evidence, dict) else None
     sheets = evidence.get("overviewSheets") if isinstance(evidence, dict) else None
-    if not isinstance(frames, list) or not 1 <= len(frames) <= MAX_FRAMES_PER_EPISODE:
-        return None, f"episode evidence must contain 1-{MAX_FRAMES_PER_EPISODE} frames"
+    if not isinstance(frames, list) or len(frames) != FRAMES_PER_EPISODE:
+        return None, f"episode evidence must contain exactly {FRAMES_PER_EPISODE} frames"
     if not isinstance(sheets, list) or len(sheets) != 1:
         return None, "episode evidence must contain exactly one overview sheet"
     return evidence, ""
@@ -58,7 +57,6 @@ def default_manifest_path(series_key: str) -> Path:
 def build_manifest(
     series_folder: Path,
     *,
-    no_audio_preview: bool,
     force_reanalyze: bool,
 ) -> tuple[dict[str, Any], bool]:
     memory = lookup(series_folder, include_analysis=False)
@@ -82,7 +80,7 @@ def build_manifest(
             evidence_error = ""
         else:
             evidence_script_call_count += 1
-            evidence_summary, evidence_error = run_episode_evidence(Path(episode["source"]), no_audio_preview)
+            evidence_summary, evidence_error = run_episode_evidence(Path(episode["source"]))
             evidence_status = "ready" if evidence_summary is not None else "failed"
             if evidence_summary is None:
                 evidence_failures.append(
@@ -120,6 +118,7 @@ def build_manifest(
                 },
                 "analysis": {
                     "action": analysis_action,
+                    "requiredVisualAnalysisPassCount": 1 if analysis_action == "analyze_in_series_agent" else 0,
                     "cachedAnalysisPath": episode["analysisPath"] if reuse_episode or exact_series_hit else None,
                 },
             }
@@ -152,18 +151,24 @@ def build_manifest(
             "seriesKey": memory["seriesKey"],
             "episodeCount": memory["episodeCount"],
             "exactSeriesMemoryHit": exact_series_hit,
+            "modelAnalysisRequired": not exact_series_hit,
             "cachedSeriesAnalysisPath": memory["seriesAnalysisPath"] if exact_series_hit else None,
         },
         "fixedInvariants": {
-            "maxFramesPerEpisode": MAX_FRAMES_PER_EPISODE,
+            "framesPerEpisode": FRAMES_PER_EPISODE,
             "overviewSheetsPerEpisode": 1,
+            "audioEvidenceEnabled": False,
             "evidencePreparedOnlyForAnalysisMisses": True,
             "maxEvidenceScriptCallsPerMissedEpisode": 1,
+            "visualAnalysisPassesPerMissedEpisode": 1,
+            "seriesAggregationPasses": 1 if series_agent_action == "analyze_entire_series" else 0,
             "oneSeriesAgentOwnsAllEpisodes": True,
             "parentMaySubmitEpisodeTasks": False,
             "parentMaySubmitAggregationTask": False,
             "seriesAgentMayCreateChildAgents": False,
             "modelMaySelectRepresentativeEpisodes": False,
+            "exactSeriesHitRequiresZeroEpisodeModelPasses": True,
+            "exactSeriesHitRequiresZeroAggregationPasses": True,
         },
         "evidenceScriptCallCount": evidence_script_call_count,
         "analysisEpisodeIndexes": analysis_episode_indexes,
@@ -172,6 +177,9 @@ def build_manifest(
         "seriesAgent": {
             "action": series_agent_action,
             "requiredAgentCount": required_agent_count,
+            "modelAnalysisRequired": not exact_series_hit and not evidence_failures,
+            "requiredEpisodeModelPassCount": len(analysis_episode_indexes),
+            "requiredAggregationPassCount": 1 if series_agent_action == "analyze_entire_series" else 0,
             "requiredEpisodeCount": memory["episodeCount"],
             "inputOrder": [job["episodeIndex"] for job in episode_jobs],
             "cachedSeriesAnalysisPath": memory["seriesAnalysisPath"] if exact_series_hit else None,
@@ -187,7 +195,6 @@ def main() -> int:
     )
     parser.add_argument("series_folder", help="Folder containing all episode video files")
     parser.add_argument("--output", help="Manifest JSON path inside the Novvy workspace")
-    parser.add_argument("--no-audio-preview", action="store_true", help="Disable per-episode audio previews")
     parser.add_argument(
         "--force-reanalyze",
         action="store_true",
@@ -203,7 +210,6 @@ def main() -> int:
     try:
         manifest, ready = build_manifest(
             series_folder,
-            no_audio_preview=args.no_audio_preview,
             force_reanalyze=args.force_reanalyze,
         )
         requested_output = Path(args.output) if args.output else default_manifest_path(manifest["series"]["seriesKey"])
@@ -221,4 +227,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

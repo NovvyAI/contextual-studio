@@ -16,7 +16,7 @@ from prepare_video_evidence import content_fingerprint, default_output_dir, ensu
 
 
 MEMORY_SCHEMA_VERSION = 1
-ANALYSIS_VERSION = "novvy-video-analysis-v2"
+ANALYSIS_VERSION = "novvy-video-analysis-v5-drama-only-persistent"
 VIDEO_EXTENSIONS = {
     ".3gp",
     ".avi",
@@ -41,6 +41,7 @@ def natural_key(path: Path) -> list[tuple[int, object]]:
 
 
 def discover_videos(input_path: Path) -> list[Path]:
+    input_path = input_path.expanduser().resolve()
     if input_path.is_file():
         if input_path.suffix.casefold() not in VIDEO_EXTENSIONS:
             raise ValueError(f"Unsupported video extension: {input_path.suffix or '<none>'}")
@@ -102,6 +103,7 @@ def read_record(path: Path) -> dict[str, Any] | None:
 
 
 def identity_for(input_path: Path) -> dict[str, Any]:
+    input_path = input_path.expanduser().resolve()
     videos = discover_videos(input_path)
     if not videos:
         raise ValueError(f"No supported video files found in series folder: {input_path}")
@@ -130,13 +132,13 @@ def identity_for(input_path: Path) -> dict[str, Any]:
 
     key = series_key(fingerprints)
     path = series_analysis_path(key)
-    series_record = read_record(path) if input_path.is_dir() else None
+    series_record = read_record(path)
     return {
         "inputType": "series_folder" if input_path.is_dir() else "single_video",
         "source": str(input_path),
         "episodeCount": len(episodes),
-        "seriesKey": key if input_path.is_dir() else None,
-        "seriesAnalysisPath": str(path) if input_path.is_dir() else None,
+        "seriesKey": key,
+        "seriesAnalysisPath": str(path),
         "seriesAnalysisRecord": series_record,
         "episodes": episodes,
     }
@@ -153,9 +155,9 @@ def lookup(input_path: Path, include_analysis: bool) -> dict[str, Any]:
 
     series_hit = series_record is not None
     all_episodes_hit = all(episode["analysisHit"] for episode in episodes)
-    if identity["inputType"] == "single_video":
-        recommendation = "reuse_episode_analysis" if all_episodes_hit else "analyze_only_missed_episodes"
-    elif series_hit:
+    reused_indexes = [episode["episodeIndex"] for episode in episodes if episode["analysisHit"]]
+    missed_indexes = [episode["episodeIndex"] for episode in episodes if not episode["analysisHit"]]
+    if series_hit:
         recommendation = "reuse_series_analysis"
     elif all_episodes_hit:
         recommendation = "reuse_episode_analyses_and_merge"
@@ -169,10 +171,22 @@ def lookup(input_path: Path, include_analysis: bool) -> dict[str, Any]:
             "seriesAnalysisHit": series_hit,
             "allEpisodesAnalysisHit": all_episodes_hit,
             "reuseRecommendation": recommendation,
+            "modelAnalysisRequired": not series_hit,
+            "requiredEpisodeModelPassCount": (
+                0 if series_hit else sum(1 for episode in episodes if not episode["analysisHit"])
+            ),
+            "requiredSeriesAggregationPassCount": 0 if series_hit else 1,
+            "analysisArtifactPath": identity["seriesAnalysisPath"] if series_hit else None,
+            "episodeAnalysisPaths": [episode["analysisPath"] for episode in episodes],
+            "currentRunReusedEpisodeIndexes": (
+                [episode["episodeIndex"] for episode in episodes] if series_hit else reused_indexes
+            ),
+            "currentRunAnalyzedEpisodeIndexes": [] if series_hit else missed_indexes,
         }
     )
     if include_analysis and series_record is not None:
         identity["seriesAnalysis"] = series_record["analysis"]
+        identity["wholeSeriesAnalysis"] = series_record["analysis"]
     return identity
 
 
@@ -204,9 +218,11 @@ def validate_episode_analysis(analysis: dict[str, Any], expected_episode_key: st
     if not isinstance(episode_index, int) or isinstance(episode_index, bool) or episode_index < 1:
         raise ValueError("Episode analysis must contain episodeIndex >= 1")
     episode_key_value = analysis.get("episodeKey")
-    if episode_key_value and episode_key_value != expected_episode_key:
+    if episode_key_value != expected_episode_key:
         raise ValueError("Episode analysis episodeKey does not match the video content fingerprint")
-    for field in ("plotSignals", "narrativeContinuity", "audienceAndMarketSignals", "visualStyle", "referenceImageCandidates"):
+    if not isinstance(analysis.get("oneLineSummary"), str) or not analysis["oneLineSummary"].strip():
+        raise ValueError("Episode analysis must contain non-empty oneLineSummary")
+    for field in ("plotSignals", "seriesContinuity", "audienceAndMarketSignals", "visualStyle", "referenceImageCandidates"):
         if not isinstance(analysis.get(field), dict):
             raise ValueError(f"Episode analysis must contain object field: {field}")
     if not isinstance(analysis.get("risksAndUncertainties"), list):
@@ -216,6 +232,8 @@ def validate_episode_analysis(analysis: dict[str, Any], expected_episode_key: st
 def validate_series_analysis(analysis: dict[str, Any], expected_episode_count: int) -> None:
     if analysis.get("ok") is not True:
         raise ValueError("Incomplete or failed series analysis cannot be cached")
+    if analysis.get("coverageScope") != "whole_series" or analysis.get("wholeSeriesEvidenceSufficient") is not True:
+        raise ValueError("Series analysis must confirm sufficient whole-series evidence")
     if analysis.get("episodeCount") != expected_episode_count:
         raise ValueError("Series analysis episodeCount does not match discovered videos")
     episodes = analysis.get("episodeAnalyses")
@@ -233,11 +251,55 @@ def validate_series_analysis(analysis: dict[str, Any], expected_episode_count: i
     series_summary = analysis.get("seriesAnalysis")
     if not isinstance(series_summary, dict):
         raise ValueError("Series analysis must contain seriesAnalysis object")
-    opportunities = series_summary.get("episodeEndingOpportunities")
-    if not isinstance(opportunities, list) or len(opportunities) < expected_episode_count:
-        raise ValueError("Series analysis must include an ending opportunity for every episode")
+    if not isinstance(series_summary.get("oneLineSeriesSummary"), str) or not series_summary[
+        "oneLineSeriesSummary"
+    ].strip():
+        raise ValueError("Series analysis must contain non-empty oneLineSeriesSummary")
+    if not isinstance(series_summary.get("seriesPremiseAndTheme"), str) or not series_summary[
+        "seriesPremiseAndTheme"
+    ].strip():
+        raise ValueError("Series analysis must contain non-empty seriesPremiseAndTheme")
+    coverage = series_summary.get("episodeAdEvidenceCoverage")
+    if not isinstance(coverage, list) or len(coverage) < expected_episode_count:
+        raise ValueError("Series analysis must include ad-relevance evidence for every episode")
+    anchors = series_summary.get("seriesAdAnchors")
+    if not isinstance(anchors, dict):
+        raise ValueError("Series analysis must include seriesAdAnchors object")
+    if not anchors.get("themeAndCoreConflict"):
+        raise ValueError("Series ad anchors must include themeAndCoreConflict")
+    if not anchors.get("characterAndRelationshipArcs"):
+        raise ValueError("Series ad anchors must include characterAndRelationshipArcs")
+    optional_anchor_fields = (
+        "worldRulesAndRecurringActions",
+        "visualMotifsAndIconicAssets",
+        "crossEpisodeEmotionalPayoffs",
+        "viewerMotivations",
+    )
+    if not any(anchors.get(field) for field in optional_anchor_fields):
+        raise ValueError("Series ad anchors must include at least one additional cross-episode evidence category")
     if analysis.get("failedEpisodes"):
         raise ValueError("Series analysis with failedEpisodes cannot be cached")
+
+
+def validate_persisted_episode_analyses(identity: dict[str, Any], analysis: dict[str, Any]) -> list[str]:
+    persisted_paths = []
+    for expected, episode_analysis in zip(identity["episodes"], analysis["episodeAnalyses"], strict=True):
+        if episode_analysis.get("episodeKey") != expected["episodeKey"]:
+            raise ValueError(
+                f"Episode {expected['episodeIndex']} analysis episodeKey does not match the ordered series content"
+            )
+        path = Path(expected["analysisPath"])
+        record = read_record(path)
+        if record is None:
+            raise ValueError(
+                f"Episode {expected['episodeIndex']} full model summary must be stored before the series summary"
+            )
+        if record["analysis"] != episode_analysis:
+            raise ValueError(
+                f"Episode {expected['episodeIndex']} cached model summary differs from series episodeAnalyses"
+            )
+        persisted_paths.append(str(path))
+    return persisted_paths
 
 
 def store_episode(video_path: Path, analysis: dict[str, Any]) -> dict[str, Any]:
@@ -259,11 +321,12 @@ def store_episode(video_path: Path, analysis: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "stored": "episode", "episodeKey": episode["episodeKey"], "analysisPath": str(path)}
 
 
-def store_series(folder_path: Path, analysis: dict[str, Any]) -> dict[str, Any]:
-    if not folder_path.is_dir():
-        raise ValueError("store-series requires a series folder")
-    identity = identity_for(folder_path)
+def store_series(input_path: Path, analysis: dict[str, Any]) -> dict[str, Any]:
+    identity = identity_for(input_path)
     validate_series_analysis(analysis, identity["episodeCount"])
+    if analysis.get("seriesKey") != identity["seriesKey"]:
+        raise ValueError("Series analysis seriesKey does not match the ordered whole-series content")
+    episode_analysis_paths = validate_persisted_episode_analyses(identity, analysis)
     path = Path(identity["seriesAnalysisPath"])
     record = {
         "memorySchemaVersion": MEMORY_SCHEMA_VERSION,
@@ -271,17 +334,31 @@ def store_series(folder_path: Path, analysis: dict[str, Any]) -> dict[str, Any]:
         "kind": "series",
         "seriesKey": identity["seriesKey"],
         "episodeKeys": [episode["episodeKey"] for episode in identity["episodes"]],
-        "sourceAtStoreTime": str(folder_path),
+        "inputType": identity["inputType"],
+        "sourceAtStoreTime": str(input_path),
         "storedAt": datetime.now(timezone.utc).isoformat(),
+        "completeEpisodeAnalysesPersisted": True,
+        "episodeAnalysisPaths": episode_analysis_paths,
+        "finalSeriesSummaryPersisted": True,
         "analysis": analysis,
     }
     write_record(path, record)
+    stored_record = read_record(path)
+    cache_ready = stored_record is not None and stored_record["analysis"] == analysis
+    if not cache_ready:
+        raise ValueError("Whole-series analysis artifact could not be read back after storage")
     return {
         "ok": True,
         "stored": "series",
         "seriesKey": identity["seriesKey"],
         "episodeCount": identity["episodeCount"],
         "analysisPath": str(path),
+        "analysisArtifactPath": str(path),
+        "episodeAnalysisPaths": episode_analysis_paths,
+        "completeEpisodeAnalysesPersisted": True,
+        "finalSeriesSummaryPersisted": True,
+        "cacheReadyForExactReuse": cache_ready,
+        "nextLookupModelAnalysisRequired": False,
     }
 
 
@@ -304,8 +381,8 @@ def main() -> int:
     episode_parser.add_argument("video", help="One video file")
     add_analysis_input(episode_parser)
 
-    series_parser = subparsers.add_parser("store-series", help="Store one merged series analysis")
-    series_parser.add_argument("folder", help="Series folder")
+    series_parser = subparsers.add_parser("store-series", help="Store one complete whole-series analysis artifact")
+    series_parser.add_argument("input", help="Whole-series compilation video or series folder")
     add_analysis_input(series_parser)
 
     args = parser.parse_args()
@@ -315,7 +392,7 @@ def main() -> int:
         elif args.command == "store-episode":
             result = store_episode(Path(args.video).expanduser().resolve(), parse_analysis(args))
         else:
-            result = store_series(Path(args.folder).expanduser().resolve(), parse_analysis(args))
+            result = store_series(Path(args.input).expanduser().resolve(), parse_analysis(args))
     except (OSError, ValueError, FileNotFoundError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -326,4 +403,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

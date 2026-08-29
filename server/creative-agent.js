@@ -78,7 +78,7 @@ function sourceContext(session, drama, game) {
   const screenshots = creativeScreenshotAssets(session.id);
   const assetIndex = assets.length ? assets.map((asset) => `${asset.reference}：${asset.title}；${asset.description}；URL=${asset.url}`).join("\n") : "当前还没有图片资产";
   const screenshotIndex = screenshots.length ? screenshots.map((asset) => `${asset.reference}：${asset.title}；${asset.description}；URL=${asset.url}`).join("\n") : "当前还没有视频截图";
-  return `你正在运行 Novvy 创意视频工作台。请使用项目内 .agents/skills/novvy-ad-creative/SKILL.md；创意与逐镜设计同时使用 .agents/skills/audiovisual-language-design/SKILL.md、.agents/skills/storyboard-production-contract/SKILL.md，并按 .agents/skills/creative-quality-review/SKILL.md 做当前阶段的轻量质量检查。所有 Skill 都必须使用项目本地版本。
+  return `你正在运行 Novvy 创意视频工作台。请使用项目内 .agents/skills/novvy-ad-creative/SKILL.md；创意与逐镜设计同时使用 .agents/skills/audiovisual-language-design/SKILL.md、.agents/skills/storyboard-production-contract/SKILL.md，并按 .agents/skills/creative-quality-review/SKILL.md 做当前阶段的轻量质量检查。策略与制作阶段按需使用 novvy-ad-creative/references/audiovisual-creative-quality.md，并只通过 query_audiovisual_quality.py 查询必要记录；把命中的规则转成可观察参数，不要把整份矩阵或导演姓名直接写进方案。所有 Skill 都必须使用项目本地版本。
 
 短剧分析 JSON：\n${drama.analysis_json}
 

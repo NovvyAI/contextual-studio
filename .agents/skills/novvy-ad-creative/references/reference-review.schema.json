@@ -14,7 +14,7 @@
       "minLength": 1
     },
     "requestedUploadMode": {
-      "enum": ["asset", "seedance-human"]
+      "enum": ["asset", "seedance-human", "mixed"]
     },
     "requiredSlots": {
       "type": "array",
@@ -105,4 +105,3 @@
     }
   }
 }
-

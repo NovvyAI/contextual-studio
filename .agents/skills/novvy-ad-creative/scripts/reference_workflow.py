@@ -15,7 +15,7 @@ from typing import Any
 REVIEW_SCHEMA_VERSION = "novvy.reference-review.v1"
 RECOVERY_SCHEMA_VERSION = "novvy.generation-recovery.v1"
 RECOVERY_STATE_VERSION = "novvy.generation-recovery-state.v1"
-UPLOAD_MODES = {"asset", "seedance-human"}
+UPLOAD_MODES = {"asset", "seedance-human", "mixed"}
 VISUAL_CLASSES = {"human_photorealistic", "non_human", "uncertain"}
 REVIEW_DECISIONS = {"pass", "exclude", "block"}
 MATCH_RESULTS = {"pass", "fail", "unknown", "not_applicable"}
@@ -107,8 +107,19 @@ def sha256_file(path: Path) -> str:
 
 def validate_local_fingerprint(source: str, fingerprint: str, path: str) -> None:
     if source.lower().startswith(("http://", "https://")):
-        return
-    local_path = Path(source).expanduser().resolve()
+        raise WorkflowError(
+            f"{path}.source must be a materialized local image so it can be pixel-reviewed, previewed, and uploaded unchanged",
+            error_class="source_invalid",
+            safe_next_step="download_the_remote_image_inside_novvy_workspace_then_repeat_pixel_review",
+        )
+    local_path = Path(source).expanduser()
+    if not local_path.is_absolute():
+        raise WorkflowError(
+            f"{path}.source must be an absolute local image path",
+            error_class="source_invalid",
+            safe_next_step="use_the_reviewed_image_absolute_path_inside_novvy_workspace",
+        )
+    local_path = local_path.resolve()
     if not local_path.is_file():
         raise WorkflowError(
             f"{path}.source is not a readable local file",
@@ -141,7 +152,7 @@ def validate_review(value: object) -> dict[str, Any]:
         )
     mode = require_string(review["requestedUploadMode"], "requestedUploadMode")
     if mode not in UPLOAD_MODES:
-        raise WorkflowError("requestedUploadMode is invalid", error_class="contract", safe_next_step="choose_asset_or_seedance_human")
+        raise WorkflowError("requestedUploadMode is invalid", error_class="contract", safe_next_step="choose_asset_seedance_human_or_mixed")
     required_slots = [require_string(item, f"requiredSlots[{index}]") for index, item in enumerate(require_list(review["requiredSlots"], "requiredSlots"))]
     waived_slots = [require_string(item, f"waivedSlots[{index}]") for index, item in enumerate(require_list(review["waivedSlots"], "waivedSlots"))]
     if len(set(required_slots)) != len(required_slots) or len(set(waived_slots)) != len(waived_slots):
@@ -165,8 +176,8 @@ def validate_review(value: object) -> dict[str, Any]:
             "summary": require_string(prior_failure["summary"], "priorFailure.summary"),
         }
 
-    slots = []
-    seen = set()
+    slots: list[dict[str, Any]] = []
+    seen: set[str] = set()
     for index, raw in enumerate(require_list(review["slots"], "slots")):
         path = f"slots[{index}]"
         item = require_dict(raw, path)
@@ -201,18 +212,23 @@ def validate_review(value: object) -> dict[str, Any]:
                 safe_next_step="render_and_reinspect_every_candidate_image_then_rebuild_the_review_manifest",
             )
         validate_local_fingerprint(source, fingerprint, path)
-        if mode == "seedance-human":
-            if source.lower().startswith(("http://", "https://")):
+        source = str(Path(source).expanduser().resolve())
+        if mode in {"seedance-human", "mixed"}:
+            if visual_class == "human_photorealistic" and source.lower().startswith(("http://", "https://")):
                 raise WorkflowError(
                     f"{slot} uses a mutable remote URL",
                     error_class="source_invalid",
                     safe_next_step="materialize_the_remote_image_inside_novvy_workspace_then_review_and_upload_the_same_bytes",
                 )
-            expected_decision = {
-                "human_photorealistic": "pass",
-                "non_human": "exclude",
-                "uncertain": "block",
-            }[visual_class]
+            expected_decision = (
+                {
+                    "human_photorealistic": "pass",
+                    "non_human": "exclude",
+                    "uncertain": "block",
+                }[visual_class]
+                if mode == "seedance-human"
+                else "block" if visual_class == "uncertain" else "pass"
+            )
             if decision != expected_decision:
                 raise WorkflowError(
                     f"{slot} decision must be {expected_decision} for {visual_class}",
@@ -225,7 +241,7 @@ def validate_review(value: object) -> dict[str, Any]:
                     error_class="material_not_human",
                     safe_next_step="exclude_the_non_human_slot_and_repeat_pixel_review",
                 )
-            if decision == "pass" and (identity_match != "pass" or view_match != "pass"):
+            if visual_class == "human_photorealistic" and decision == "pass" and (identity_match != "pass" or view_match != "pass"):
                 raise WorkflowError(
                     f"{slot} cannot pass without identity and view matches",
                     error_class="human_review_required",
@@ -235,7 +251,7 @@ def validate_review(value: object) -> dict[str, Any]:
             expected_decision = "block" if visual_class == "uncertain" else "pass"
             if decision != expected_decision:
                 raise WorkflowError(
-                    f"{slot} decision must be {expected_decision} for {visual_class} in asset mode",
+                    f"{slot} decision must be {expected_decision} for {visual_class} in {mode} mode",
                     error_class="contract",
                     safe_next_step="fix_reference_review_decision",
                 )
@@ -306,11 +322,20 @@ def plan_upload(value: object) -> dict[str, Any]:
             error_class="human_review_required" if mode == "seedance-human" else "source_invalid",
             safe_next_step="provide_at_least_one_valid_reference_image",
         )
-    order = {slot: index for index, slot in enumerate(REFERENCE_SLOT_ORDER)}
+    order = {slot: index for index, slot in enumerate(REFERENCE_SLOT_ORDER) if slot != "final_card"}
+
+    def slot_sort_key(index: int, item: dict[str, Any]) -> tuple[int, int]:
+        slot = item["slot"]
+        if slot == "final_card":
+            return (2, index)
+        if slot in order:
+            return (0, order[slot])
+        return (1, index)
+
     accepted = [
         item
         for _key, item in sorted(
-            ((order.get(item["slot"], len(order) + index), item) for index, item in enumerate(accepted)),
+            ((slot_sort_key(index, item), item) for index, item in enumerate(accepted)),
             key=lambda pair: pair[0],
         )
     ]
@@ -322,13 +347,41 @@ def plan_upload(value: object) -> dict[str, Any]:
             error_class="human_review_required",
             safe_next_step="replace_missing_required_references_or_record_an_explicit_user_waiver_before_upload",
         )
-    args = []
-    for item in accepted:
-        args.extend(["--slot", f"{item['slot']}={item['source']}"])
-    if mode == "seedance-human":
-        for item in accepted:
-            args.extend(["--confirmed-human-slot", item["slot"]])
-    args.extend(["--mode", mode])
+    def upload_group(group_mode: str, group_items: list[dict[str, Any]]) -> dict[str, Any]:
+        args = []
+        for item in group_items:
+            args.extend(["--slot", f"{item['slot']}={item['source']}"])
+        if group_mode == "seedance-human":
+            for item in group_items:
+                args.extend(["--confirmed-human-slot", item["slot"]])
+        args.extend(["--mode", group_mode])
+        return {
+            "uploadMode": group_mode,
+            "acceptedSlots": group_items,
+            "confirmedHumanSlots": [item["slot"] for item in group_items] if group_mode == "seedance-human" else [],
+            "uploadArgs": args,
+        }
+
+    if mode == "mixed":
+        group_items = {
+            "asset": [item for item in accepted if item["visualClass"] == "non_human"],
+            "seedance-human": [item for item in accepted if item["visualClass"] == "human_photorealistic"],
+        }
+        upload_groups = {
+            group_mode: upload_group(group_mode, items)
+            for group_mode, items in group_items.items()
+            if items
+        }
+        if set(upload_groups) != {"asset", "seedance-human"}:
+            raise WorkflowError(
+                "mixed mode requires at least one reviewed human and one reviewed non-human reference",
+                error_class="human_review_required",
+                safe_next_step="provide_and_review_both_human_and_non_human_reference_images",
+            )
+        args = []
+    else:
+        upload_groups = {mode: upload_group(mode, accepted)}
+        args = upload_groups[mode]["uploadArgs"]
     canonical = {
         "reviewId": review["reviewId"],
         "uploadMode": mode,
@@ -360,6 +413,7 @@ def plan_upload(value: object) -> dict[str, Any]:
             {"slot": item["slot"], "visualClass": item["visualClass"], "reason": item["reviewReason"]} for item in skipped
         ],
         "uploadArgs": args,
+        "uploadGroups": upload_groups,
         "limits": {"maxScriptRuns": 3, "maxSameErrorClassRepairRuns": 1},
     }
 
@@ -389,11 +443,23 @@ def build_snapshot(upload_result: object, upload_plan: object, supersedes_snapsh
             {
                 "slot": accepted_names[index],
                 "reference": reference,
+                "localPreviewPath": require_string(item.get("source"), f"uploadPlan.acceptedSlots[{index}].source"),
                 "sourceFingerprint": require_string(item.get("sourceFingerprint"), f"uploadPlan.acceptedSlots[{index}].sourceFingerprint"),
                 "visualClass": require_string(item.get("visualClass"), f"uploadPlan.acceptedSlots[{index}].visualClass"),
             }
         )
-    canonical = {"referenceField": field, "orderedSlots": ordered}
+    canonical = {
+        "referenceField": field,
+        "orderedSlots": [
+            {
+                "slot": item["slot"],
+                "reference": item["reference"],
+                "sourceFingerprint": item["sourceFingerprint"],
+                "visualClass": item["visualClass"],
+            }
+            for item in ordered
+        ],
+    }
     snapshot_id = "ref-" + hashlib.sha256(
         json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     ).hexdigest()[:20]
@@ -405,7 +471,87 @@ def build_snapshot(upload_result: object, upload_plan: object, supersedes_snapsh
         "referenceField": field,
         "referenceUrls": [item["reference"] for item in ordered],
         "slotOrder": [item["slot"] for item in ordered],
-        "summaryZh": "、".join(item["slot"] for item in ordered) + f"，共 {len(ordered)} 张已审核参考图",
+        "previewItems": [
+            {"slot": item["slot"], "localImagePath": item["localPreviewPath"]} for item in ordered
+        ],
+        "orderedSlots": ordered,
+        "auditId": plan.get("auditId", ""),
+    }
+
+
+def build_mixed_snapshot(
+    asset_upload_result: object,
+    human_upload_result: object,
+    upload_plan: object,
+    supersedes_snapshot_id: str = "",
+) -> dict[str, Any]:
+    plan = require_dict(upload_plan, "uploadPlan")
+    if plan.get("uploadMode") != "mixed":
+        raise WorkflowError(
+            "uploadPlan.uploadMode must be mixed",
+            error_class="contract",
+            safe_next_step="build_a_mixed_review_and_upload_plan",
+        )
+    groups = require_dict(plan.get("uploadGroups"), "uploadPlan.uploadGroups")
+    snapshots: dict[str, dict[str, Any]] = {}
+    for mode, result in (("asset", asset_upload_result), ("seedance-human", human_upload_result)):
+        group = require_dict(groups.get(mode), f"uploadPlan.uploadGroups.{mode}")
+        group_plan = {
+            "uploadMode": mode,
+            "acceptedSlots": group.get("acceptedSlots"),
+            "auditId": plan.get("auditId", ""),
+        }
+        snapshots[mode] = build_snapshot(result, group_plan)
+
+    by_slot: dict[str, dict[str, Any]] = {}
+    for mode, snapshot in snapshots.items():
+        field = "imageUrls" if mode == "asset" else "humanImageUrls"
+        for item in snapshot["orderedSlots"]:
+            by_slot[item["slot"]] = {**item, "referenceField": field}
+    accepted = require_list(plan.get("acceptedSlots"), "uploadPlan.acceptedSlots")
+    slot_order = [require_string(item.get("slot"), f"uploadPlan.acceptedSlots[{index}].slot") for index, item in enumerate(accepted) if isinstance(item, dict)]
+    if set(slot_order) != set(by_slot) or len(slot_order) != len(by_slot):
+        raise WorkflowError(
+            "mixed upload results do not exactly match the reviewed slots",
+            error_class="response_contract",
+            safe_next_step="recover_or_repeat_only_the_incomplete_upload_group",
+        )
+    ordered = [by_slot[slot] for slot in slot_order]
+    canonical = {
+        "referenceField": "mixed",
+        "orderedSlots": [
+            {
+                "slot": item["slot"],
+                "reference": item["reference"],
+                "sourceFingerprint": item["sourceFingerprint"],
+                "visualClass": item["visualClass"],
+                "referenceField": item["referenceField"],
+            }
+            for item in ordered
+        ],
+    }
+    snapshot_id = "ref-" + hashlib.sha256(
+        json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    ).hexdigest()[:20]
+    image_slots = snapshots["asset"]["slotOrder"]
+    human_slots = snapshots["seedance-human"]["slotOrder"]
+    image_urls = snapshots["asset"]["referenceUrls"]
+    human_urls = snapshots["seedance-human"]["referenceUrls"]
+    return {
+        "ok": True,
+        "schemaVersion": "novvy.reference-snapshot.v1",
+        "snapshotId": snapshot_id,
+        "supersedesSnapshotId": supersedes_snapshot_id,
+        "referenceField": "mixed",
+        "referenceUrls": [item["reference"] for item in ordered],
+        "slotOrder": slot_order,
+        "imageSlotOrder": image_slots,
+        "imageUrls": image_urls,
+        "humanSlotOrder": human_slots,
+        "humanImageUrls": human_urls,
+        "previewItems": [
+            {"slot": item["slot"], "localImagePath": item["localPreviewPath"]} for item in ordered
+        ],
         "orderedSlots": ordered,
         "auditId": plan.get("auditId", ""),
     }
@@ -687,6 +833,13 @@ def parse_args() -> argparse.Namespace:
     snapshot_parser.add_argument("--supersedes-snapshot-id", default="")
     snapshot_parser.add_argument("--output-dir", type=Path, required=True)
 
+    mixed_snapshot_parser = subparsers.add_parser("build-mixed-snapshot")
+    mixed_snapshot_parser.add_argument("asset_upload_result", type=Path)
+    mixed_snapshot_parser.add_argument("human_upload_result", type=Path)
+    mixed_snapshot_parser.add_argument("upload_plan", type=Path)
+    mixed_snapshot_parser.add_argument("--supersedes-snapshot-id", default="")
+    mixed_snapshot_parser.add_argument("--output-dir", type=Path, required=True)
+
     recovery_parser = subparsers.add_parser("plan-recovery")
     recovery_parser.add_argument("input", type=Path)
     recovery_parser.add_argument("--output-dir", type=Path, required=True)
@@ -718,6 +871,17 @@ def main() -> int:
                 "acceptedSlots": [item["slot"] for item in result["acceptedSlots"]],
                 "confirmedHumanSlots": result["confirmedHumanSlots"],
                 "skippedSlots": result["skippedSlots"],
+                "uploadGroups": {
+                    mode: {
+                        "acceptedSlots": [item["slot"] for item in group["acceptedSlots"]],
+                        "confirmedHumanSlots": group["confirmedHumanSlots"],
+                    }
+                    for mode, group in result["uploadGroups"].items()
+                },
+                "previewItems": [
+                    {"slot": item["slot"], "localImagePath": item["source"]}
+                    for item in result["acceptedSlots"]
+                ],
                 "reviewManifestPath": str(args.input.expanduser().resolve()),
                 "uploadPlanPath": str(output_path),
             }
@@ -731,6 +895,27 @@ def main() -> int:
                 "supersedesSnapshotId": result["supersedesSnapshotId"],
                 "referenceField": result["referenceField"],
                 "slotOrder": result["slotOrder"],
+                "previewItems": result["previewItems"],
+                "outputPath": str(output_path),
+            }
+        elif args.command == "build-mixed-snapshot":
+            result = build_mixed_snapshot(
+                load_json(args.asset_upload_result),
+                load_json(args.human_upload_result),
+                load_json(args.upload_plan),
+                args.supersedes_snapshot_id,
+            )
+            output_path = write_internal_result(result, output_dir, f"{result['snapshotId']}-snapshot")
+            public = {
+                "ok": True,
+                "state": "SNAPSHOT_READY",
+                "snapshotId": result["snapshotId"],
+                "supersedesSnapshotId": result["supersedesSnapshotId"],
+                "referenceField": "mixed",
+                "slotOrder": result["slotOrder"],
+                "imageSlotOrder": result["imageSlotOrder"],
+                "humanSlotOrder": result["humanSlotOrder"],
+                "previewItems": result["previewItems"],
                 "outputPath": str(output_path),
             }
         elif args.command == "plan-recovery":
