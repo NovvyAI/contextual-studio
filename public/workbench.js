@@ -53,6 +53,126 @@ function element(tag, className, text) {
   return node;
 }
 
+function annotationInstruction(items) {
+  if (!items.length) return "";
+  const lines = items.map((item, index) => {
+    const label = `区域 ${index + 1}`;
+    const request = item.note?.trim() ? `；修改要求：${item.note.trim()}` : "；修改要求：请结合用户的总体说明处理这个位置";
+    if (item.type === "point") return `${label}：点选位置 x=${item.x}%, y=${item.y}%${request}`;
+    if (item.type === "arrow") return `${label}：箭头从 x=${item.x1}%, y=${item.y1}% 指向 x=${item.x2}%, y=${item.y2}%${request}`;
+    return `${label}：框选范围 x=${item.x}%-${item.x + item.width}%, y=${item.y}%-${item.y + item.height}%${request}`;
+  });
+  return `\n\n图片标注（坐标按图片左上角为原点，宽高均归一化为 0%-100%）：\n${lines.join("\n")}\n请把用户文字中的区域编号与以上位置对应，并保留未被点名的区域。`;
+}
+
+function openImageAnnotator(imageUrl, title, onApply) {
+  const dialog = element("dialog", "image-annotator-dialog");
+  const header = element("header", "image-annotator-header");
+  header.append(element("div", "", "标注修改位置"));
+  const close = element("button", "image-annotator-close", "×"); close.type = "button"; close.setAttribute("aria-label", "关闭标注");
+  header.append(close);
+  const help = element("p", "image-annotator-help", `${title} · 在图片上点选、框选或画箭头，标注会自动编号。`);
+  const toolbar = element("div", "image-annotator-toolbar");
+  let tool = "rect";
+  const toolButtons = [["point", "点选"], ["rect", "框选"], ["arrow", "箭头"]].map(([value, label]) => {
+    const button = element("button", value === tool ? "active" : "", label); button.type = "button";
+    button.addEventListener("click", () => { tool = value; toolButtons.forEach((item) => item.classList.toggle("active", item === button)); });
+    toolbar.append(button); return button;
+  });
+  const undo = element("button", "", "撤销"); undo.type = "button";
+  const clear = element("button", "", "清空"); clear.type = "button";
+  toolbar.append(undo, clear);
+  const stage = element("div", "image-annotator-stage");
+  const image = element("img"); image.src = imageUrl; image.alt = title;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg"); svg.setAttribute("viewBox", "0 0 100 100"); svg.setAttribute("preserveAspectRatio", "none");
+  const defs = document.createElementNS(svg.namespaceURI, "defs");
+  const marker = document.createElementNS(svg.namespaceURI, "marker"); marker.id = "annotation-arrowhead"; marker.setAttribute("markerWidth", "10"); marker.setAttribute("markerHeight", "10"); marker.setAttribute("refX", "8.5"); marker.setAttribute("refY", "5"); marker.setAttribute("orient", "auto"); marker.setAttribute("markerUnits", "strokeWidth");
+  const arrowPath = document.createElementNS(svg.namespaceURI, "path"); arrowPath.setAttribute("d", "M0,0 L10,5 L0,10 L2.5,5 Z"); marker.append(arrowPath); defs.append(marker); svg.append(defs);
+  stage.append(image, svg);
+  const list = element("ol", "image-annotation-list");
+  const footer = element("footer", "image-annotator-footer");
+  const cancel = element("button", "image-annotator-cancel", "取消"); cancel.type = "button";
+  const apply = element("button", "image-annotator-apply", "使用这些标注"); apply.type = "button";
+  footer.append(cancel, apply);
+  dialog.append(header, help, toolbar, stage, list, footer); document.body.append(dialog);
+  const annotations = [];
+  let start = null;
+  const pct = (event) => { const bounds = svg.getBoundingClientRect(); return { x: Math.max(0, Math.min(100, Math.round((event.clientX - bounds.left) / bounds.width * 100))), y: Math.max(0, Math.min(100, Math.round((event.clientY - bounds.top) / bounds.height * 100))) }; };
+  const render = () => {
+    [...svg.querySelectorAll(".image-annotation-shape")].forEach((node) => node.remove()); list.replaceChildren();
+    annotations.forEach((item, index) => {
+      let shape;
+      if (item.type === "point") { shape = document.createElementNS(svg.namespaceURI, "circle"); shape.setAttribute("cx", item.x); shape.setAttribute("cy", item.y); shape.setAttribute("r", "2.2"); }
+      else if (item.type === "arrow") {
+        shape = document.createElementNS(svg.namespaceURI, "line"); shape.setAttribute("x1", item.x1); shape.setAttribute("y1", item.y1); shape.setAttribute("x2", item.x2); shape.setAttribute("y2", item.y2); shape.setAttribute("marker-end", "url(#annotation-arrowhead)"); shape.classList.add("image-annotation-arrow");
+        const origin = document.createElementNS(svg.namespaceURI, "circle"); origin.setAttribute("cx", item.x1); origin.setAttribute("cy", item.y1); origin.setAttribute("r", "1.5"); origin.setAttribute("class", "image-annotation-shape image-annotation-arrow-origin"); svg.append(origin);
+      }
+      else { shape = document.createElementNS(svg.namespaceURI, "rect"); shape.setAttribute("x", item.x); shape.setAttribute("y", item.y); shape.setAttribute("width", item.width); shape.setAttribute("height", item.height); }
+      shape.setAttribute("class", "image-annotation-shape"); svg.append(shape);
+      const badge = document.createElementNS(svg.namespaceURI, "text"); badge.setAttribute("x", item.type === "arrow" ? item.x2 : item.x); badge.setAttribute("y", Math.max(4, (item.type === "arrow" ? item.y2 : item.y) - 1)); badge.setAttribute("class", "image-annotation-shape image-annotation-badge"); badge.textContent = String(index + 1); svg.append(badge);
+      const row = element("li", "image-annotation-item");
+      const rowTitle = element("label", ""); rowTitle.append(element("b", "", `区域 ${index + 1}`), element("span", "", item.type === "point" ? "点选" : item.type === "arrow" ? "箭头" : "框选"));
+      const note = element("textarea", "image-annotation-note"); note.rows = 2; note.placeholder = `描述区域 ${index + 1} 要怎么修改，例如：删除这里的文字`;
+      note.value = item.note || "";
+      note.addEventListener("input", () => { item.note = note.value; });
+      row.append(rowTitle, note); list.append(row);
+    });
+    apply.disabled = annotations.length === 0;
+  };
+  svg.addEventListener("pointerdown", (event) => { event.preventDefault(); start = pct(event); svg.setPointerCapture(event.pointerId); });
+  svg.addEventListener("pointerup", (event) => {
+    if (!start) return; const end = pct(event);
+    if (tool === "point") annotations.push({ type: "point", x: end.x, y: end.y });
+    else if (tool === "arrow") annotations.push({ type: "arrow", x1: start.x, y1: start.y, x2: end.x, y2: end.y });
+    else { const x = Math.min(start.x, end.x); const y = Math.min(start.y, end.y); const width = Math.max(2, Math.abs(end.x - start.x)); const height = Math.max(2, Math.abs(end.y - start.y)); annotations.push({ type: "rect", x, y, width: Math.min(100 - x, width), height: Math.min(100 - y, height) }); }
+    start = null; render();
+  });
+  undo.addEventListener("click", () => { annotations.pop(); render(); });
+  clear.addEventListener("click", () => { annotations.length = 0; render(); });
+  const dismiss = () => { dialog.close(); dialog.remove(); };
+  close.addEventListener("click", dismiss); cancel.addEventListener("click", dismiss);
+  dialog.addEventListener("cancel", (event) => { event.preventDefault(); dismiss(); });
+  apply.addEventListener("click", () => {
+    const firstEmpty = annotations.findIndex((item) => !item.note?.trim());
+    if (firstEmpty >= 0) {
+      const input = list.querySelectorAll(".image-annotation-note")[firstEmpty];
+      input.setCustomValidity(`请填写区域 ${firstEmpty + 1} 的修改要求`); input.reportValidity(); input.setCustomValidity(""); input.focus(); return;
+    }
+    onApply(annotationInstruction(annotations)); dismiss();
+  });
+  render(); dialog.showModal();
+}
+
+function addAnnotationButton(container, imageUrl, title, textarea, disabled) {
+  if (!imageUrl || /\.(mp4|mov|webm)(\?|$)/i.test(imageUrl)) return;
+  const button = element("button", "image-annotate-button", "标注图片位置"); button.type = "button"; button.disabled = disabled;
+  button.addEventListener("click", () => openImageAnnotator(imageUrl, title, (instruction) => {
+    textarea.value = `${textarea.value.trim()}${textarea.value.trim() ? "\n" : ""}${instruction.trim()}`;
+    textarea.focus();
+  }));
+  container.append(button);
+}
+
+function openImagePreview(imageUrl, title) {
+  const dialog = element("dialog", "image-preview-dialog");
+  const header = element("header", "image-preview-header");
+  header.append(element("strong", "", title || "图片预览"));
+  const close = element("button", "image-preview-close", "×"); close.type = "button"; close.setAttribute("aria-label", "关闭大图"); header.append(close);
+  const image = element("img", "image-preview-full"); image.src = imageUrl; image.alt = title || "图片预览";
+  dialog.append(header, image); document.body.append(dialog);
+  const dismiss = () => { dialog.close(); dialog.remove(); };
+  close.addEventListener("click", dismiss);
+  dialog.addEventListener("cancel", (event) => { event.preventDefault(); dismiss(); });
+  dialog.addEventListener("click", (event) => { if (event.target === dialog) dismiss(); });
+  dialog.showModal();
+}
+
+function enableImagePreview(image, imageUrl, title) {
+  image.classList.add("image-preview-trigger"); image.tabIndex = 0; image.setAttribute("role", "button"); image.setAttribute("aria-label", `查看大图：${title}`);
+  image.addEventListener("click", () => openImagePreview(imageUrl, title));
+  image.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openImagePreview(imageUrl, title); } });
+}
+
 function canvasDetails(node, key, defaultOpen = false) {
   node.dataset.canvasDetailsKey = key;
   node.open = canvasDetailsOpenState.has(key) ? canvasDetailsOpenState.get(key) : defaultOpen;
@@ -422,7 +542,7 @@ function renderChatCard(card, disabled) {
     if (card.kind === "video_prompt" || card.kind === "video_shot" || /\.(mp4|mov|webm)(\?|$)/i.test(card.previewUrl)) {
       const video = element("video", "chat-card-preview chat-card-video"); video.src = card.previewUrl; video.controls = true; video.playsInline = true; video.preload = "metadata"; node.append(video);
     } else {
-      const image = element("img", "chat-card-preview"); image.src = card.previewUrl; image.alt = card.title; image.loading = "lazy"; node.append(image);
+      const image = element("img", "chat-card-preview"); image.src = card.previewUrl; image.alt = card.title; image.loading = "lazy"; enableImagePreview(image, card.previewUrl, card.title); node.append(image);
     }
   } else if (card.status === "generating") {
     const placeholder = element("div", "chat-card-preview chat-card-generating");
@@ -482,6 +602,7 @@ function renderChatCard(card, disabled) {
   const feedback = element("textarea", "chat-card-feedback"); feedback.rows = 2; feedback.placeholder = "填写修改意见；可直接引用图片 04、图片 06…"; feedback.disabled = disabled;
   const actions = element("div", "chat-card-actions");
   const regenerate = element("button", "chat-card-regenerate", "按意见重新生成"); regenerate.type = "button"; regenerate.disabled = disabled;
+  if (["character_image", "storyboard_image", "final_card", "prop_image", "reference_image"].includes(card.kind)) addAnnotationButton(actions, card.previewUrl, card.title, feedback, disabled);
   regenerate.addEventListener("click", async () => {
     try {
       regenerate.disabled = true; regenerate.textContent = "正在提交…";
@@ -699,8 +820,9 @@ function renderAssetLibrary(assets, screenshots, disabled) {
   const grid = element("div", "asset-library-grid");
   assets.forEach((asset) => {
     const card = element("article", "asset-library-card");
-    const media = element("a", "asset-library-media"); media.href = asset.url; media.target = "_blank"; media.rel = "noreferrer";
+    const media = element("button", "asset-library-media"); media.type = "button"; media.setAttribute("aria-label", `查看大图：${asset.reference} ${asset.title}`);
     const image = element("img"); image.src = asset.url; image.alt = `${asset.reference} ${asset.title}`; image.loading = "lazy"; media.append(image);
+    media.addEventListener("click", () => openImagePreview(asset.url, `${asset.reference} · ${asset.title}`));
     const body = element("div", "asset-library-body");
     const top = element("div", "asset-library-card-heading"); top.append(element("b", "asset-number", asset.reference), element("small", "", `V${asset.version || 1}`));
     body.append(top, element("strong", "", asset.title), element("p", "", asset.description));
@@ -730,7 +852,9 @@ function renderAssetLibrary(assets, screenshots, disabled) {
         await refreshSession();
       } catch (error) { regenerate.disabled = false; regenerate.textContent = "按意见重新生成"; alert(error.message); }
     });
-    revision.append(feedback, regenerate);
+    revision.append(feedback);
+    addAnnotationButton(revision, asset.url, `${asset.reference} ${asset.title}`, feedback, disabled);
+    revision.append(regenerate);
     const actions = element("div", "asset-actions"); actions.append(use, remove);
     body.append(actions, revision); card.append(media, body); grid.append(card);
   });
@@ -756,8 +880,9 @@ function renderAssetLibrary(assets, screenshots, disabled) {
   const screenshotGrid = element("div", "asset-library-grid asset-screenshot-grid");
   screenshots.forEach((asset) => {
     const card = element("article", "asset-library-card screenshot-asset-card");
-    const media = element("a", "asset-library-media"); media.href = asset.url; media.target = "_blank"; media.rel = "noreferrer";
+    const media = element("button", "asset-library-media"); media.type = "button"; media.setAttribute("aria-label", `查看大图：${asset.reference} ${asset.title}`);
     const image = element("img"); image.src = asset.url; image.alt = `${asset.reference} ${asset.title}`; image.loading = "lazy"; media.append(image);
+    media.addEventListener("click", () => openImagePreview(asset.url, `${asset.reference} · ${asset.title}`));
     const body = element("div", "asset-library-body");
     const top = element("div", "asset-library-card-heading"); top.append(element("b", "asset-number screenshot-number", asset.reference), element("small", "", `${Number(asset.timestampSeconds || 0).toFixed(2)}s`));
     body.append(top, element("strong", "", asset.title), element("p", "", asset.description));
