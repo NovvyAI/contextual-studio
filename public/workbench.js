@@ -10,6 +10,63 @@ let pendingChatPreviewUrls = [];
 const selectedCharacterIds = new Set();
 let currentSession = null;
 
+const workbenchSplitStorageKey = "contextual-studio:workbench-canvas-ratio";
+const defaultWorkbenchCanvasRatio = 2 / 3;
+
+function initializeWorkbenchResizer() {
+  const grid = document.querySelector(".workbench-grid");
+  const resizer = document.querySelector("#workbench-resizer");
+  if (!grid || !resizer) return;
+  let ratio = Number(localStorage.getItem(workbenchSplitStorageKey)) || defaultWorkbenchCanvasRatio;
+  let dragging = false;
+
+  const limits = () => {
+    const width = Math.max(1, grid.getBoundingClientRect().width - resizer.getBoundingClientRect().width);
+    const canvasMinimum = Math.min(420, width * 0.48);
+    const chatMinimum = Math.min(340, width * 0.42);
+    return { width, minimum: canvasMinimum / width, maximum: 1 - chatMinimum / width };
+  };
+  const applyRatio = (nextRatio, persist = false) => {
+    if (matchMedia("(max-width: 850px)").matches) return;
+    const { minimum, maximum } = limits();
+    ratio = Math.max(minimum, Math.min(maximum, Number(nextRatio) || defaultWorkbenchCanvasRatio));
+    grid.style.setProperty("--workbench-canvas-share", `${ratio}fr`);
+    grid.style.setProperty("--workbench-chat-share", `${1 - ratio}fr`);
+    resizer.setAttribute("aria-valuenow", String(Math.round(ratio * 100)));
+    if (persist) localStorage.setItem(workbenchSplitStorageKey, String(ratio));
+  };
+  const ratioFromPointer = (event) => {
+    const bounds = grid.getBoundingClientRect();
+    return (event.clientX - bounds.left) / Math.max(1, bounds.width - resizer.offsetWidth);
+  };
+
+  resizer.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || matchMedia("(max-width: 850px)").matches) return;
+    dragging = true;
+    resizer.setPointerCapture(event.pointerId);
+    document.body.classList.add("resizing-workbench");
+    applyRatio(ratioFromPointer(event));
+  });
+  resizer.addEventListener("pointermove", (event) => { if (dragging) applyRatio(ratioFromPointer(event)); });
+  const finish = (event) => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.classList.remove("resizing-workbench");
+    if (resizer.hasPointerCapture(event.pointerId)) resizer.releasePointerCapture(event.pointerId);
+    applyRatio(ratio, true);
+  };
+  resizer.addEventListener("pointerup", finish);
+  resizer.addEventListener("pointercancel", finish);
+  resizer.addEventListener("dblclick", () => applyRatio(defaultWorkbenchCanvasRatio, true));
+  resizer.addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Home"].includes(event.key)) return;
+    event.preventDefault();
+    applyRatio(event.key === "Home" ? defaultWorkbenchCanvasRatio : ratio + (event.key === "ArrowLeft" ? -0.03 : 0.03), true);
+  });
+  window.addEventListener("resize", () => applyRatio(ratio));
+  applyRatio(ratio);
+}
+
 function updateCharacterSelectionUI() {
   document.querySelectorAll("input[data-character-id]").forEach((input) => {
     input.checked = selectedCharacterIds.has(input.dataset.characterId);
@@ -1400,4 +1457,5 @@ chatMessages.addEventListener("scroll", () => {
   chatFollowLatest = distanceFromBottom <= 24;
 }, { passive: true });
 
+initializeWorkbenchResizer();
 refreshSession();
