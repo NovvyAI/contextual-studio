@@ -110,6 +110,16 @@ function element(tag, className, text) {
   return node;
 }
 
+function readableStoryboardText(value) {
+  return String(value ?? "")
+    .replace(/\s*(?=(?:剧情功能|开始|峰值|结果|反应|人物动作|调度与表演|对白(?:\/文字)?|摄影|景别与运镜|玩法(?:展示)?|转场|声音|光色与连续性|光色与材质|因果链|剪辑与声音|参考绑定|English shot direction)\s*[：:])/gi, "\n")
+    .replace(/^\s+/, "")
+    .replace(/\n{3,}/g, "\n\n");
+}
+function storyboardDisplayValue(card, item) {
+  return ["storyboard", "storyboard_image"].includes(card?.kind) ? readableStoryboardText(item?.content) : item?.content;
+}
+
 function processingTime(session) {
   const startedAt = Date.parse(session.updatedAt || session.createdAt || "");
   return Number.isFinite(startedAt) ? Math.max(0, Date.now() - startedAt) : 0;
@@ -471,16 +481,16 @@ function renderConfirmedCard(card, expanded) {
       const image = element("img", "artifact-preview"); image.src = entry.content; image.alt = entry.label || card.title; image.loading = "lazy";
       link.append(image); item.append(link);
       const description = card.kind === "storyboard" ? (card.details || []).find((detail) => detail.label === `${entry.label}｜文字描述`)?.content : "";
-      if (description) item.append(element("figcaption", "artifact-preview-caption", description));
+      if (description) item.append(element("figcaption", "artifact-preview-caption storyboard-readable", readableStoryboardText(description)));
       gallery.append(item);
     });
     body.append(gallery);
   }
-  body.append(element("p", "artifact-summary", card.summary));
+  body.append(element("p", `artifact-summary ${card.kind === "storyboard" ? "storyboard-readable" : ""}`, card.kind === "storyboard" ? readableStoryboardText(card.summary) : card.summary));
   const details = element("dl", "artifact-details");
   (card.details || []).filter((item) => !isPreviewUrl(item.content)).forEach((item) => {
     const row = element("div");
-    row.append(element("dt", "", item.label), element("dd", "", item.content));
+    row.append(element("dt", "", item.label), element("dd", ["storyboard", "storyboard_image"].includes(card.kind) ? "storyboard-readable" : "", storyboardDisplayValue(card, item)));
     details.append(row);
   });
   body.append(details, element("small", "artifact-meta", `${card.status === "superseded" ? "已被新版替代" : "已确认"} · ${card.confirmedAt}`));
@@ -620,7 +630,7 @@ function renderChatCard(card, disabled) {
   const kindLabel = card.kind === "character_image" && candidateNumber ? `人物候选 ${candidateNumber}` : chatCardKindLabels[card.kind] || "";
   if (kindLabel) header.append(element("span", "chat-card-kind", kindLabel));
   header.append(element("span", "chat-card-status", ({ candidate: "候选", selected: "已选择", confirmed: "已确认", superseded: "已替代", generating: "生成中", completed: "已生成", failed: "生成失败" })[card.status] || card.status));
-  node.append(header, element("strong", "chat-card-title", card.title), element("p", "chat-card-summary", card.summary));
+  node.append(header, element("strong", "chat-card-title", card.title), element("p", `chat-card-summary ${["storyboard", "storyboard_image"].includes(card.kind) ? "storyboard-readable" : ""}`, ["storyboard", "storyboard_image"].includes(card.kind) ? readableStoryboardText(card.summary) : card.summary));
   if (card.previewUrl) {
     if (card.kind === "video_prompt" || card.kind === "video_shot" || /\.(mp4|mov|webm)(\?|$)/i.test(card.previewUrl)) {
       const video = element("video", "chat-card-preview chat-card-video"); video.src = card.previewUrl; video.controls = true; video.playsInline = true; video.preload = "metadata"; node.append(video);
@@ -652,7 +662,7 @@ function renderChatCard(card, disabled) {
   const details = element("details", "chat-card-details");
   details.append(element("summary", "", "查看完整内容"));
   const facts = element("dl");
-  (card.details || []).forEach((item) => { const row = element("div"); row.append(element("dt", "", item.label), element("dd", "", item.content)); facts.append(row); });
+  (card.details || []).forEach((item) => { const row = element("div"); row.append(element("dt", "", item.label), element("dd", ["storyboard", "storyboard_image"].includes(card.kind) ? "storyboard-readable" : "", storyboardDisplayValue(card, item))); facts.append(row); });
   details.append(facts); node.append(details);
   const cardErrorText = [card.summary, ...(card.details || []).map((item) => item.content)].filter((value) => typeof value === "string").join("\n");
   if (card.status === "failed" && /(?:gcloud\.storage\.cp|refreshing your current auth tokens|Reauthentication failed|gcloud auth login)/i.test(cardErrorText)) {
