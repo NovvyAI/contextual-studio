@@ -144,10 +144,10 @@ export function approveCharacterReferences(sessionId, cardIds) {
     summary: `已采用 ${selected.length} 张人物参考图，供后续剧情分镜和视频人物一致性使用。`,
     details: selected.map((card) => ({ label: card.title, content: card.previewUrl })), status: "confirmed", confirmedAt: timestamp,
   });
-  workspace.productionPlan = { ...(workspace.productionPlan || {}), referenceStatus: "approved", videoPromptStatus: "storyboard_pending" };
+  workspace.productionPlan = { ...(workspace.productionPlan || {}), referenceStatus: "approved", videoPromptStatus: "audiovisual_direction_pending" };
   db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, `统一采用人物候选：${selectedIds.join("、")}`, timestamp);
-  const autoMessage = `人物参考图组已确认，共采用 ${selected.length} 张真实图片。现在自动生成 3 个视频剧情与分镜候选；必须结合已确认创意、落版图和人物参考槽位，输出 storyboard-A/B/C，不要提交视频生成。`;
-  db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)").run(sessionId, `已采用你勾选的 ${selected.length} 张人物图。我现在自动生成视频剧情与分镜候选，不需要你再发送指令。`, timestamp);
+  const autoMessage = `人物参考图组已确认，共采用 ${selected.length} 张真实图片。现在先生成一张 audiovisual-direction-v1 视听方向卡：总结可执行的视听语言 Bible，并提供 AI 推荐、2-3 个可替换导演参考和“不使用导演参考”。进入 audiovisual_review 等待用户确认，不要生成 storyboard。`;
+  db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)").run(sessionId, `已采用你勾选的 ${selected.length} 张人物图。接下来先确认视听方向；你可以采用 AI 推荐、改选其他导演参考，或完全不使用导演参考。确认后会自动生成剧情与分镜。`, timestamp);
   db.prepare("UPDATE creative_sessions SET stage='working',workspace_json=?,error_message=NULL,updated_at=? WHERE id=?").run(JSON.stringify(workspace), timestamp, sessionId);
   recordCreativeFeedback(sessionId, `统一采用人物候选：${selectedIds.join("、")}`, { decision: "approved", stageOutputId: "reference-panel", key: `session:${sessionId}:reference-panel:approved:${timestamp}` });
   recordCreativeStage(sessionId, "reference_panel", { cards: selected.map((card) => ({ id: card.id, title: card.title, previewUrl: card.previewUrl })) }, { status: "confirmed", key: `session:${sessionId}:reference-panel:${timestamp}` });

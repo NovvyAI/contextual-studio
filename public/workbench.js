@@ -422,6 +422,7 @@ const cardKindLabels = {
   concept: "创意方案",
   final_card: "落版图",
   reference_panel: "人物与参考图",
+  audiovisual_direction: "视听方向",
   storyboard: "剧情与分镜",
   video_prompt: "视频提示词",
   video_shot: "视频镜头",
@@ -430,7 +431,7 @@ const cardKindLabels = {
 
 const chatCardKindLabels = {
   concept: "创意方案", final_card: "落版图", character_image: "人物图", prop_image: "道具图",
-  reference_image: "参考图", storyboard: "剧情与分镜", storyboard_image: "分镜图片", video_prompt: "视频提示词", video_shot: "视频镜头",
+  reference_image: "参考图", audiovisual_direction: "视听方向", storyboard: "剧情与分镜", storyboard_image: "分镜图片", video_prompt: "视频提示词", video_shot: "视频镜头",
 };
 const characterCandidateNumbers = { "reference-male_front": "01", "reference-male_side": "02", "reference-female_front": "03", "reference-female_side": "04" };
 
@@ -662,7 +663,7 @@ function renderChatCard(card, disabled) {
   const details = element("details", "chat-card-details");
   details.append(element("summary", "", "查看完整内容"));
   const facts = element("dl");
-  (card.details || []).forEach((item) => { const row = element("div"); row.append(element("dt", "", item.label), element("dd", ["storyboard", "storyboard_image"].includes(card.kind) ? "storyboard-readable" : "", storyboardDisplayValue(card, item))); facts.append(row); });
+  (card.details || []).filter((item) => card.kind !== "audiovisual_direction" || !/^(?:AI推荐导演|导演选项)｜/.test(String(item.label || ""))).forEach((item) => { const row = element("div"); row.append(element("dt", "", item.label), element("dd", ["storyboard", "storyboard_image"].includes(card.kind) ? "storyboard-readable" : "", storyboardDisplayValue(card, item))); facts.append(row); });
   details.append(facts); node.append(details);
   const cardErrorText = [card.summary, ...(card.details || []).map((item) => item.content)].filter((value) => typeof value === "string").join("\n");
   if (card.status === "failed" && /(?:gcloud\.storage\.cp|refreshing your current auth tokens|Reauthentication failed|gcloud auth login)/i.test(cardErrorText)) {
@@ -734,6 +735,24 @@ function renderChatCard(card, disabled) {
   const isVideoPromptDraft = card.kind === "video_prompt" && !card.previewUrl;
   const isShotBatchReady = isVideoPromptDraft && card.status === "completed" && (card.details || []).some((item) => item.label === "逐镜状态");
   const isFinalVideo = card.kind === "video_prompt" && Boolean(card.previewUrl);
+  let directorChoice;
+  if (card.kind === "audiovisual_direction") {
+    const picker = element("fieldset", "director-reference-picker");
+    picker.append(element("legend", "", "导演风格参考（可不选）"));
+    const options = (card.details || []).filter((item) => /^(?:AI推荐导演|导演选项)｜/.test(String(item.label || "")));
+    options.forEach((item, index) => {
+      const name = item.label.split("｜").slice(1).join("｜");
+      const label = element("label", "director-reference-option");
+      const radio = document.createElement("input"); radio.type = "radio"; radio.name = `director-${card.id}`; radio.value = name; radio.checked = index === 0; radio.disabled = disabled;
+      const copy = element("span"); copy.append(element("b", "", `${item.label.startsWith("AI推荐") ? "AI 推荐 · " : ""}${name}`), element("small", "", item.content));
+      label.append(radio, copy); picker.append(label);
+    });
+    const none = element("label", "director-reference-option");
+    const radio = document.createElement("input"); radio.type = "radio"; radio.name = `director-${card.id}`; radio.value = "不使用导演参考"; radio.disabled = disabled;
+    const copy = element("span"); copy.append(element("b", "", "不使用导演参考"), element("small", "", "只遵循原短剧证据和本卡的视听语言 Bible。"));
+    none.append(radio, copy); picker.append(none); node.append(picker);
+    directorChoice = () => picker.querySelector("input:checked")?.value || "";
+  }
   let videoProvider;
   if (isVideoPromptDraft && !isShotBatchReady) {
     const providerRow = element("label", "video-provider-picker");
@@ -744,10 +763,11 @@ function renderChatCard(card, disabled) {
     providerRow.append(videoProvider);
     actions.append(providerRow);
   }
-  const adoptLabel = card.kind === "concept" ? "选择这个方案" : card.kind === "storyboard" ? "选择并生成分镜图" : isFailedFinalCard ? "重新生成落版图" : isFinalCardDraft ? "确认并生成落版图" : isGeneratedFinalCard ? "确认使用" : isFinalVideo && card.status === "confirmed" ? "最终成片已确认" : isFinalVideo ? "确认最终成片" : isShotBatchReady ? "确认全部镜头并合成" : isVideoPromptDraft && card.status === "failed" ? "按所选方式重新生成" : isVideoPromptDraft ? "确认并生成逐镜视频" : "采用这个候选";
+  const adoptLabel = card.kind === "concept" ? "选择这个方案" : card.kind === "audiovisual_direction" ? "确认视听方向并生成剧情与分镜" : card.kind === "storyboard" ? "选择并生成分镜图" : isFailedFinalCard ? "重新生成落版图" : isFinalCardDraft ? "确认并生成落版图" : isGeneratedFinalCard ? "确认使用" : isFinalVideo && card.status === "confirmed" ? "最终成片已确认" : isFinalVideo ? "确认最终成片" : isShotBatchReady ? "确认全部镜头并合成" : isVideoPromptDraft && card.status === "failed" ? "按所选方式重新生成" : isVideoPromptDraft ? "确认并生成逐镜视频" : "采用这个候选";
   const adopt = element("button", "chat-card-adopt", adoptLabel); adopt.type = "button";
   const actionStages = card.kind === "concept" ? ["concept_review"]
-    : card.kind === "storyboard" ? ["storyboard_review"]
+    : card.kind === "audiovisual_direction" ? ["audiovisual_review"]
+      : card.kind === "storyboard" ? ["storyboard_review"]
       : isFinalCardDraft ? ["concept_selected", "final_card_review"]
         : isGeneratedFinalCard ? ["final_card_review"]
           : isVideoPromptDraft ? ["prompt_review", "ready_to_generate", "video_review"]
@@ -761,6 +781,17 @@ function renderChatCard(card, disabled) {
   if (card.kind === "character_image" || card.kind === "storyboard_image" || card.kind === "video_shot") adopt.hidden = true;
   adopt.disabled = disabled || card.status === "selected" || (card.status === "confirmed" && !isVideoPromptDraft) || card.status === "generating" || (card.status === "completed" && !isShotBatchReady && !isFinalVideo);
   adopt.addEventListener("click", async () => {
+    if (card.kind === "audiovisual_direction") {
+      adopt.disabled = true; adopt.textContent = "正在确认视听方向…";
+      try {
+        await api(`/api/creative/sessions/${sessionId}/cards/${encodeURIComponent(card.id)}/approve-audiovisual-direction`, {
+          method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ directorChoice: directorChoice?.() || "" }),
+        });
+        return refreshSession();
+      } catch (error) {
+        adopt.disabled = false; adopt.textContent = adoptLabel; alert(error.message); return;
+      }
+    }
     if (isFinalVideo) {
       adopt.disabled = true; adopt.textContent = "正在确认最终成片…";
       try {
@@ -884,6 +915,7 @@ function inferCreativeStage(session, workspace) {
   const latestCards = [...(session.messages || [])].reverse().find((message) => message.cards?.length)?.cards || [];
   if (latestCards.some((card) => card.kind === "video_prompt")) return "prompt_review";
   if (latestCards.some((card) => card.kind === "storyboard")) return "storyboard_review";
+  if (latestCards.some((card) => card.kind === "audiovisual_direction")) return "audiovisual_review";
   if (latestCards.some((card) => ["character_image", "prop_image", "reference_image"].includes(card.kind))) return "reference_review";
   if (latestCards.some((card) => card.kind === "final_card")) return "final_card_review";
   return workspace?.selectedConceptIds?.length ? "concept_selected" : "concept_review";
@@ -907,6 +939,7 @@ function currentStagePresentation(session, workspace) {
       statusKey: "finalCardStatus",
     },
     reference_review: { stage, title: "人物与参考图", heading: "人物、道具与参考图", kind: "reference_image", statusKey: "referenceStatus" },
+    audiovisual_review: { stage, title: "视听方向", heading: "视听语言 Bible 与导演参考", kind: "audiovisual_direction", statusKey: "videoPromptStatus" },
     storyboard_review: { stage, title: "剧情与分镜", heading: "视频剧情与分镜候选", kind: "storyboard", statusKey: "videoPromptStatus" },
     prompt_review: { stage, title: "视频提示词审核", heading: "正在讨论的视频提示词", kind: "video_prompt", statusKey: "videoPromptStatus" },
     ready_to_generate: { stage, title: "视频生成确认", heading: "等待确认的视频生成方案", kind: "video_prompt", statusKey: "videoGenerationStatus" },
@@ -1348,7 +1381,7 @@ function renderCurrentTask(session) {
   panel.replaceChildren();
   const stageLabels = {
     ideating: "创意方向", concept_review: "创意方案确认", concept_selected: "落版图准备",
-    final_card_review: "落版图确认", reference_review: "人物与参考图确认",
+    final_card_review: "落版图确认", reference_review: "人物与参考图确认", audiovisual_review: "视听方向确认",
     storyboard_review: "剧情与分镜确认", prompt_review: "视频提示词确认",
     ready_to_generate: "视频生成确认", video_review: "逐镜视频复审", working: "任务处理中",
   };

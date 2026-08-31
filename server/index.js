@@ -10,6 +10,7 @@ import { analyzeGame } from "./game-analyzer.js";
 import { runCreativeTurn } from "./creative-agent.js";
 import { approveFinalCard, startFinalCardGeneration, startFinalCardRegeneration } from "./image-generator.js";
 import { approveCharacterReferences, startCharacterRegeneration, startCustomCharacterGeneration } from "./character-generator.js";
+import { approveAudiovisualDirection } from "./audiovisual-direction.js";
 import { startVideoGeneration } from "./video-generator.js";
 import { resumeImaRouterVideoGeneration, startImaRouterVideoGeneration } from "./imarouter-video-generator.js";
 import { approveStoryboardImages, retryFailedStoryboardImages, startStoryboardImageGeneration, startStoryboardImageRegeneration, startStoryboardImageRegenerationByNumber } from "./storyboard-generator.js";
@@ -327,6 +328,15 @@ const server = http.createServer(async (req, res) => {
       const body = JSON.parse((await requestBody(req)).toString("utf8") || "{}");
       approveCharacterReferences(id, body.cardIds);
       return json(res, 202, { id, status: "working" });
+    }
+
+    const audiovisualApproveMatch = url.pathname.match(/^\/api\/creative\/sessions\/(\d+)\/cards\/([^/]+)\/approve-audiovisual-direction$/);
+    if (req.method === "POST" && audiovisualApproveMatch) {
+      const id = Number(audiovisualApproveMatch[1]);
+      const cardId = decodeURIComponent(audiovisualApproveMatch[2]);
+      const body = JSON.parse((await requestBody(req)).toString("utf8") || "{}");
+      approveAudiovisualDirection(id, cardId, body.directorChoice);
+      return json(res, 202, { id, cardId, status: "working" });
     }
 
     const characterCreateMatch = url.pathname.match(/^\/api\/creative\/sessions\/(\d+)\/characters\/generate$/);

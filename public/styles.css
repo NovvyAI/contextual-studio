@@ -78,3 +78,16 @@ main { width:min(1240px,92vw); margin:auto; padding:70px 0 100px; }
 @media(max-width:850px){.workbench-page .workbench-grid{grid-template-columns:1fr}.workbench-resizer{display:none}}
 .initial-creative-progress{display:grid;gap:8px;width:min(440px,80vw);margin-top:4px}.initial-creative-progress strong{font-size:13px;color:#dfe8ca}.initial-creative-progress small{font-size:10px;color:#8d9883}.initial-progress-track{height:5px;overflow:hidden;border-radius:999px;background:#2e3528}.initial-progress-track::after{content:"";display:block;width:36%;height:100%;border-radius:inherit;background:linear-gradient(90deg,#7f963f,var(--lime),#7f963f);animation:initialProgress 1.6s ease-in-out infinite}@keyframes initialProgress{0%{transform:translateX(-105%)}100%{transform:translateX(285%)}}
 .storyboard-readable{white-space:pre-wrap!important;overflow-wrap:anywhere}.chat-card-details dd.storyboard-readable,.artifact-details dd.storyboard-readable{line-height:1.75}.chat-card-summary.storyboard-readable{-webkit-line-clamp:5}
+.director-reference-picker {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0;
+  padding: 14px;
+  border: 1px solid var(--line, #3b4436);
+  border-radius: 14px;
+}
+.director-reference-picker legend { padding: 0 6px; font-weight: 700; }
+.director-reference-option { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; padding: 10px; border-radius: 10px; background: rgba(255,255,255,.035); cursor: pointer; }
+.director-reference-option input { margin-top: 4px; }
+.director-reference-option span { display: grid; gap: 4px; }
+.director-reference-option small { line-height: 1.5; color: var(--muted, #adb3a7); }
