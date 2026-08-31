@@ -222,9 +222,16 @@ def validate_episode_analysis(analysis: dict[str, Any], expected_episode_key: st
         raise ValueError("Episode analysis episodeKey does not match the video content fingerprint")
     if not isinstance(analysis.get("oneLineSummary"), str) or not analysis["oneLineSummary"].strip():
         raise ValueError("Episode analysis must contain non-empty oneLineSummary")
-    for field in ("plotSignals", "seriesContinuity", "audienceAndMarketSignals", "visualStyle", "referenceImageCandidates"):
+    for field in ("plotSignals", "audienceAndMarketSignals", "visualStyle", "referenceImageCandidates"):
         if not isinstance(analysis.get(field), dict):
             raise ValueError(f"Episode analysis must contain object field: {field}")
+    continuity = analysis.get("narrativeContinuity")
+    legacy_continuity = analysis.get("seriesContinuity")
+    if not isinstance(continuity, dict) and not isinstance(legacy_continuity, dict):
+        raise ValueError(
+            "Episode analysis must contain object field: narrativeContinuity "
+            "(legacy seriesContinuity is also accepted)"
+        )
     if not isinstance(analysis.get("risksAndUncertainties"), list):
         raise ValueError("Episode analysis must contain risksAndUncertainties array")
 

@@ -74,6 +74,38 @@ async function storeMemory(videoPath, episode) {
   const payload = JSON.stringify(episode);
   await execFileAsync(python, [path.join(skillDir, "scripts/video_analysis_memory.py"), "store-episode", videoPath, "--analysis-json", payload], { env: runtimeEnv(), maxBuffer: 16 * 1024 * 1024 });
 }
+function normalizeEpisodeContract(episode) {
+  if (!episode || typeof episode !== "object") return episode;
+  if (!episode.narrativeContinuity && episode.seriesContinuity) episode.narrativeContinuity = episode.seriesContinuity;
+  return episode;
+}
+export function recoverEpisodeFromStoreError(message) {
+  const text = String(message || "");
+  const markerIndex = text.indexOf("--analysis-json");
+  const start = markerIndex >= 0 ? text.indexOf("{", markerIndex) : -1;
+  if (start < 0) return null;
+  let depth = 0;
+  let quoted = false;
+  let escaped = false;
+  for (let index = start; index < text.length; index += 1) {
+    const character = text[index];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') quoted = false;
+      continue;
+    }
+    if (character === '"') quoted = true;
+    else if (character === "{") depth += 1;
+    else if (character === "}" && --depth === 0) {
+      try {
+        const episode = normalizeEpisodeContract(JSON.parse(text.slice(start, index + 1)));
+        return episode?.detailedAnalysis && episode?.narrativeContinuity ? episode : null;
+      } catch { return null; }
+    }
+  }
+  return null;
+}
 async function persistFrames(id, evidence) {
   db.prepare("DELETE FROM drama_screenshots WHERE analysis_id=?").run(id);
   const insert = db.prepare("INSERT INTO drama_screenshots (analysis_id,timestamp_seconds,mime_type,width,height,image_blob,created_at) VALUES (?,?,'image/jpeg',?,?,?,?)");
@@ -162,16 +194,28 @@ export async function analyzeDrama(id) {
     let episode;
     let threadId = "";
     let reused = false;
+    let recoveredFromFailure = false;
+    let memoryWarning = "";
     const cached = memory?.episodes?.[0]?.analysis;
-    if (cached?.detailedAnalysis) { episode = cached; reused = true; }
+    const recovered = recoverEpisodeFromStoreError(row.error_message);
+    if (cached?.detailedAnalysis) { episode = normalizeEpisodeContract(cached); reused = true; }
+    else if (recovered) {
+      episode = recovered; reused = true; recoveredFromFailure = true;
+      try { await storeMemory(row.video_path, episode); }
+      catch (error) { memoryWarning = error instanceof Error ? error.message : String(error); }
+    }
     else {
       const analyzed = await analyzeWithCodex(row, evidence, frames);
-      episode = analyzed.episode; threadId = analyzed.threadId;
+      episode = normalizeEpisodeContract(analyzed.episode); threadId = analyzed.threadId;
       episode.episodeIndex = 1; episode.episodeKey = String(memory?.episodes?.[0]?.episodeKey || "");
-      await storeMemory(row.video_path, episode);
+      try { await storeMemory(row.video_path, episode); }
+      catch (error) { memoryWarning = error instanceof Error ? error.message : String(error); }
     }
     attachScreenshotIds(episode, frames);
     const result = wrapResult(row, evidence, episode, reused, threadId);
+    result.evidence.analysisRecoveredFromPreviousFailure = recoveredFromFailure;
+    result.evidence.analysisMemoryStored = !memoryWarning;
+    if (memoryWarning) result.evidence.analysisMemoryWarning = memoryWarning;
     const orientation = Number(evidence.height) > Number(evidence.width) ? "vertical" : Number(evidence.width) > Number(evidence.height) ? "horizontal" : "square";
     db.prepare("UPDATE drama_analyses SET status='completed',duration_seconds=?,width=?,height=?,orientation=?,analysis_json=?,updated_at=? WHERE id=?").run(evidence.durationSeconds, evidence.width, evidence.height, orientation, JSON.stringify(result), now(), id);
   } catch (error) {
