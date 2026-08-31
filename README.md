@@ -186,11 +186,13 @@ chmod +x install_environment.sh start_server.sh
 脚本会自动完成：
 
 - 安装 Apple 命令行工具和 Homebrew。
+- 安装 Codex CLI，并登录 Codex。
+- 从 `NovvyAI/skills` 下载或更新 `novvy-ad-creative` 插件并执行安装；若在交互式终端运行且尚未配置，会用隐藏输入询问本机 `admin_user.apikey`，同步到插件运行缓存的 MCP Authorization。直接回车可跳过，之后运行 `$novvy-env-check` 补配。
 - 安装 Node.js 24、npm、Python 3、FFmpeg/FFprobe。
 - 安装 Google Cloud CLI，供 ImaRouter 上传本地参考图。
 - 执行 `npm install`。
 - 在不存在时从 `.env.example` 创建 `.env`，但不会写入或覆盖团队密钥。
-- 检查项目代码，并打开浏览器引导完成 `npx codex login`。
+- 检查项目代码，并打开浏览器引导完成 `codex login`。
 
 Apple 命令行工具第一次安装时，macOS 会弹出系统窗口。安装完成后，需要再次运行 `./install_environment.sh`。输入电脑密码时终端不显示字符属于正常现象。
 

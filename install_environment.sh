@@ -7,15 +7,18 @@ cd "$SCRIPT_DIR"
 
 SKIP_LOGIN=0
 SKIP_GCLOUD=0
+SKIP_NOVVY_PLUGIN=0
 for argument in "$@"; do
   case "$argument" in
     --skip-login) SKIP_LOGIN=1 ;;
     --without-gcloud) SKIP_GCLOUD=1 ;;
+    --without-novvy-plugin) SKIP_NOVVY_PLUGIN=1 ;;
     -h|--help)
-      echo "用法：./install_environment.sh [--skip-login] [--without-gcloud]"
-      echo "  默认             安装完整环境，并引导登录 Novvy（Codex）"
-      echo "  --skip-login     安装环境，但暂不登录 Novvy"
-      echo "  --without-gcloud 不安装 Google Cloud CLI（将不能使用 ImaRouter 本地图片上传）"
+      echo "用法：./install_environment.sh [--skip-login] [--without-gcloud] [--without-novvy-plugin]"
+      echo "  默认                   安装完整环境、Novvy 插件，并引导登录 Codex"
+      echo "  --skip-login           安装环境，但暂不登录 Codex"
+      echo "  --without-gcloud       不安装 Google Cloud CLI（将不能使用 ImaRouter 本地图片上传）"
+      echo "  --without-novvy-plugin 不下载和安装 Novvy 广告创意插件"
       exit 0
       ;;
     *)
@@ -33,7 +36,7 @@ if [ "$(uname -s)" != "Darwin" ]; then
 fi
 
 say "Contextual Studio 环境安装程序"
-echo "它将安装 Homebrew、Node.js 24、Python 3、FFmpeg、项目依赖，以及可选的 Google Cloud CLI。"
+echo "它将安装 Homebrew、Node.js 24、Python 3、FFmpeg、Codex CLI、项目依赖、Novvy 插件，以及可选的 Google Cloud CLI。"
 echo "过程中 macOS 可能要求输入电脑登录密码；输入密码时终端不会显示字符，这是正常现象。"
 
 if ! xcode-select -p >/dev/null 2>&1; then
@@ -103,6 +106,14 @@ fi
 say "正在安装 Contextual Studio 项目依赖…"
 npm install
 
+if ! command -v codex >/dev/null 2>&1; then
+  say "正在安装 Codex CLI…"
+  npm install -g @openai/codex
+else
+  echo "检测到 Codex CLI 已安装，跳过安装。"
+fi
+command -v codex >/dev/null 2>&1 || fail "Codex CLI 安装完成后仍无法找到 codex 命令。请关闭终端、重新打开后再运行脚本。"
+
 if [ ! -f .env ]; then
   cp .env.example .env
   echo "已创建 .env 配置文件。Novvy/ImaRouter 密钥仍需由团队提供，不会自动写入。"
@@ -110,14 +121,83 @@ else
   echo "检测到已有 .env，已保留，不会覆盖。"
 fi
 
+if [ "$SKIP_NOVVY_PLUGIN" -eq 0 ]; then
+  NOVVY_SKILLS_DIR="${NOVVY_SKILLS_INSTALL_DIR:-$HOME/.local/share/novvy-skills}"
+  NOVVY_PLUGIN_DIR="$NOVVY_SKILLS_DIR/novvy-ad-creative"
+  if [ -d "$NOVVY_SKILLS_DIR/.git" ]; then
+    say "正在更新 Novvy 广告创意插件…"
+    git -C "$NOVVY_SKILLS_DIR" pull --ff-only
+  elif [ -e "$NOVVY_SKILLS_DIR" ]; then
+    fail "$NOVVY_SKILLS_DIR 已存在但不是 Novvy skills Git 仓库。请移动该目录后重新运行。"
+  else
+    say "正在下载 Novvy 广告创意插件…"
+    mkdir -p "$(dirname "$NOVVY_SKILLS_DIR")"
+    git clone --depth 1 https://github.com/NovvyAI/skills.git "$NOVVY_SKILLS_DIR"
+  fi
+
+  [ -x "$NOVVY_PLUGIN_DIR/install.sh" ] || chmod +x "$NOVVY_PLUGIN_DIR/install.sh"
+  NOVVY_LOCAL_KEY_FILE="$NOVVY_PLUGIN_DIR/novvy-plugin-local.json"
+  NOVVY_KEY_CONFIGURED="$($PYTHON_ENV_DIR/bin/python - "$NOVVY_LOCAL_KEY_FILE" <<'PYCODE'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+    value = json.loads(path.read_text(encoding="utf-8")).get("adminUserApiKey", "")
+except (OSError, json.JSONDecodeError, AttributeError):
+    value = ""
+configured = isinstance(value, str) and bool(value.strip()) and not any(marker in value.lower() for marker in ("placeholder", "generated-by", "<admin_user.apikey>"))
+print("yes" if configured else "no")
+PYCODE
+)"
+  if [ "$NOVVY_KEY_CONFIGURED" = "no" ] && [ -t 0 ]; then
+    say "配置 Novvy MCP 权限"
+    echo "请输入团队分配给这台电脑的 Novvy admin_user.apikey。输入内容不会显示；直接回车可暂时跳过。"
+    IFS= read -r -s NOVVY_INSTALL_API_KEY
+    printf '\n'
+    if [ -n "$NOVVY_INSTALL_API_KEY" ]; then
+      export NOVVY_INSTALL_API_KEY
+      "$PYTHON_ENV_DIR/bin/python" - "$NOVVY_LOCAL_KEY_FILE" <<'PYCODE'
+import json
+import os
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+value = os.environ.get("NOVVY_INSTALL_API_KEY", "").strip()
+if value.lower().startswith("bearer "):
+    value = value[7:].strip()
+if not value:
+    raise SystemExit("未读取到 Novvy admin_user.apikey")
+path.write_text(json.dumps({"adminUserApiKey": value}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+os.chmod(path, 0o600)
+PYCODE
+      unset NOVVY_INSTALL_API_KEY
+      echo "Novvy API key 已保存到本机私有配置（未显示密钥）。"
+    else
+      echo "已跳过 Novvy API key 配置；插件仍会安装，之后可运行 \$novvy-env-check 完成配置。"
+    fi
+  elif [ "$NOVVY_KEY_CONFIGURED" = "yes" ]; then
+    echo "检测到已有 Novvy 本机私有 API key，安装时会自动同步（不会显示密钥）。"
+  else
+    echo "当前不是交互式终端，无法安全输入 Novvy API key；插件仍会安装，之后请运行 \$novvy-env-check。"
+  fi
+
+  say "正在安装 Novvy 广告创意插件…"
+  "$NOVVY_PLUGIN_DIR/install.sh"
+else
+  echo "已跳过 Novvy 广告创意插件安装。"
+fi
+
 say "正在执行项目检查…"
 npm run check
 
 if [ "$SKIP_LOGIN" -eq 0 ]; then
-  say "接下来登录 Novvy。浏览器打开后，请使用有权限的账号完成登录。"
-  npx codex login
+  say "接下来登录 Codex。浏览器打开后，请使用有权限的账号完成登录。"
+  codex login
 else
-  echo "已跳过登录。以后请在项目目录运行：npx codex login"
+  echo "已跳过登录。以后请在项目目录运行：codex login"
 fi
 
 say "环境安装完成"
@@ -126,4 +206,5 @@ echo "打开页面：http://127.0.0.1:4180"
 if [ "$SKIP_GCLOUD" -eq 0 ]; then
   echo "首次使用 ImaRouter 前，还需运行：gcloud auth login"
 fi
-echo "如需生成 Novvy 图片或视频，请让团队管理员把有效凭据填入项目 .env。"
+echo "Novvy 插件位置：${NOVVY_PLUGIN_DIR:-未安装}"
+echo "如果安装时跳过了 Novvy API key，请新开 Codex 对话运行：使用 \$novvy-env-check，检查 Novvy 插件本地环境。"

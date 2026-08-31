@@ -4,6 +4,12 @@
 
 ## 未发布
 
+### 新电脑自动安装 Novvy 插件
+
+- `install_environment.sh` 默认安装 Codex CLI，从 `NovvyAI/skills` 浅克隆或更新 `novvy-ad-creative`，再执行插件自己的幂等安装脚本；不依赖开发者电脑上的绝对路径。
+- 新电脑尚未配置 Novvy 权限时，交互式安装会用隐藏输入读取本机 `admin_user.apikey`，写入被 Git 忽略且权限为 `600` 的 `novvy-plugin-local.json`，由插件安装器同步到运行缓存 `.mcp.json`；非交互安装或直接回车时安全跳过并引导运行 `$novvy-env-check`。
+- 新增 `--without-novvy-plugin` 选项；已有插件仓库、Python 环境、依赖和本机 Key 均会复用或跳过，不覆盖现有私有配置。
+
 ### 本地创意采集服务
 
 - 新增可独立启动的本地 telemetry 接收端，兼容 Skill 版本解析、run、stage、asset、feedback 和完成状态接口；公司远端未部署时，可把 Contextual Studio outbox 发送到 `127.0.0.1:4191`。
