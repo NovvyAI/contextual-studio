@@ -5,6 +5,7 @@ let chatRenderSignature = "";
 let suppressChatScrollTracking = false;
 let canvasRenderSignature = "";
 const canvasDetailsOpenState = new Map();
+const chatCardFeedbackDrafts = new Map();
 const pendingChatFiles = [];
 let pendingChatPreviewUrls = [];
 const selectedCharacterIds = new Set();
@@ -625,6 +626,9 @@ async function sendChatCardFeedback(card, feedback, textarea) {
 }
 
 function renderChatCard(card, disabled) {
+  // A storyboard-image task locks only its own card. Other storyboard frames
+  // remain editable and may start independent regeneration tasks in parallel.
+  disabled = disabled && !(card.kind === "storyboard_image" && card.status !== "generating");
   const node = element("article", `chat-candidate-card chat-kind-${card.kind} status-${card.status}`);
   const header = element("div", "chat-card-header");
   const candidateNumber = characterCandidateNumbers[card.id] || card.candidateNumber;
@@ -694,6 +698,11 @@ function renderChatCard(card, disabled) {
   }
   const editor = element("div", "chat-card-editor");
   const feedback = element("textarea", "chat-card-feedback"); feedback.rows = 2; feedback.placeholder = "填写修改意见；可直接引用图片 04、图片 06…"; feedback.disabled = disabled;
+  feedback.value = chatCardFeedbackDrafts.get(card.id) || "";
+  feedback.addEventListener("input", () => {
+    if (feedback.value) chatCardFeedbackDrafts.set(card.id, feedback.value);
+    else chatCardFeedbackDrafts.delete(card.id);
+  });
   const actions = element("div", "chat-card-actions");
   const regenerate = element("button", "chat-card-regenerate", "按意见重新生成"); regenerate.type = "button"; regenerate.disabled = disabled;
   if (["character_image", "storyboard_image", "final_card", "prop_image", "reference_image"].includes(card.kind)) addAnnotationButton(actions, card.previewUrl, card.title, feedback, disabled);
@@ -713,7 +722,7 @@ function renderChatCard(card, disabled) {
         if (!instruction) { feedback.setCustomValidity("请先填写对这张分镜图的修改意见"); feedback.reportValidity(); feedback.setCustomValidity(""); submitted = false; }
         else {
           await api(`/api/creative/sessions/${sessionId}/cards/${encodeURIComponent(card.id)}/regenerate-storyboard-image`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ feedback: instruction }) });
-          submitted = true; await refreshSession();
+          chatCardFeedbackDrafts.delete(card.id); submitted = true; await refreshSession();
         }
       } else if (card.kind === "final_card" && card.previewUrl) {
         const instruction = feedback.value.trim();

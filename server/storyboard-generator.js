@@ -8,6 +8,19 @@ function cards(sessionId) {
   return db.prepare("SELECT cards_json FROM creative_messages WHERE session_id=? AND cards_json IS NOT NULL ORDER BY id DESC").all(sessionId)
     .flatMap((row) => { try { return JSON.parse(row.cards_json || "[]"); } catch { return []; } });
 }
+function latestCards(sessionId) {
+  const latest = new Map();
+  for (const card of cards(sessionId)) if (card?.id && !latest.has(card.id)) latest.set(card.id, card);
+  return latest;
+}
+function activeStoryboardImageJobs(sessionId) {
+  return [...latestCards(sessionId).values()].filter((card) => card.kind === "storyboard_image" && card.status === "generating");
+}
+function finishStoryboardImageJob(sessionId, errorMessage = null) {
+  const hasOtherJobs = activeStoryboardImageJobs(sessionId).length > 0;
+  db.prepare("UPDATE creative_sessions SET stage=?,error_message=?,updated_at=? WHERE id=?")
+    .run(hasOtherJobs ? "working" : "storyboard_review", errorMessage, now(), sessionId);
+}
 function append(sessionId, content, messageCards) {
   db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,created_at) VALUES (?,'assistant',?,?,?)")
     .run(sessionId, content, JSON.stringify(messageCards), now());
@@ -106,9 +119,12 @@ export function startStoryboardImageGeneration(sessionId, storyboardId) {
 export function startStoryboardImageRegeneration(sessionId, cardId, feedback) {
   const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
   if (!session) throw new Error("创意工作台不存在");
-  if (session.stage === "working") throw new Error("当前仍有任务正在处理");
-  const card = cards(sessionId).find((item) => item.id === cardId && item.kind === "storyboard_image");
+  const activeJobs = activeStoryboardImageJobs(sessionId);
+  if (session.stage === "working" && !activeJobs.length) throw new Error("当前仍有其他任务正在处理");
+  const card = latestCards(sessionId).get(cardId);
   if (!card) throw new Error("找不到这张分镜图");
+  if (card.kind !== "storyboard_image") throw new Error("这不是分镜图片卡片");
+  if (card.status === "generating") throw new Error("这张分镜图已经在生成中");
   const instruction = String(feedback || "").trim();
   if (!instruction) throw new Error("请填写分镜图修改意见");
   const timestamp = now();
@@ -238,10 +254,10 @@ async function regenerateOne(sessionId, card, feedback, fallbackReferences) {
       : `Create one vertical 9:16 cinematic storyboard key frame for this shot: ${card.summary}. User instruction: ${feedback}.${assetGuide} Preserve the supplied character identities, costumes and accessories. No collage, captions, labels, shot numbers, borders, subtitles, logos, or watermark.`;
     const generated = await generateImage(prompt, uploaded);
     append(sessionId, `${card.title} 已按意见生成新版，图片已在原卡片中更新。`, [{ ...card, previewUrl: generated.previewUrl, status: "candidate", version: Number(card.version || 1) + 1, details: [...card.details, { label: "本版修改", content: feedback }, ...(referencedAssets.length ? [{ label: "引用资产", content: referencedAssets.map((asset) => asset.reference).join("、") }] : []), { label: "生成任务", content: generated.taskId }] }]);
-    db.prepare("UPDATE creative_sessions SET stage='storyboard_review',error_message=NULL,updated_at=? WHERE id=?").run(now(), sessionId);
+    finishStoryboardImageJob(sessionId, null);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     append(sessionId, `这张分镜图修改失败：${message}。上一版图片仍然保留。`, [{ ...card, status: "failed" }]);
-    db.prepare("UPDATE creative_sessions SET stage='storyboard_review',error_message=?,updated_at=? WHERE id=?").run(message, now(), sessionId);
+    finishStoryboardImageJob(sessionId, message);
   }
 }
