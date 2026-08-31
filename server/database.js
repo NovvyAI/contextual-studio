@@ -314,6 +314,54 @@ function conceptRevisionHistory(messages) {
   return history;
 }
 
+function finalCardRevisionFeedback(content) {
+  const text = String(content || "");
+  const target = text.match(/修改聊天候选卡\s*(final-card-[^\s（]+)/i)?.[1];
+  if (!target) return null;
+  const feedback = text.match(/(?:我的)?修改意见[：:]\s*([\s\S]*?)(?:(?:\n\n|。)请(?:返回|直接)|$)/)?.[1]?.trim() || "按本轮要求修改落版方案";
+  return { target, feedback };
+}
+
+function finalCardRevisionHistory(messages) {
+  const history = {};
+  const pendingFeedback = new Map();
+  for (const message of messages) {
+    if (message.role === "user") {
+      const revision = finalCardRevisionFeedback(message.content);
+      if (revision) pendingFeedback.set(revision.target, { feedback: revision.feedback, createdAt: message.created_at });
+      continue;
+    }
+    let cards = [];
+    try { cards = JSON.parse(message.cards_json || "[]"); } catch { /* Ignore malformed historical cards. */ }
+    for (const card of cards.filter((item) => item.kind === "final_card" && item.id)) {
+      history[card.id] ||= [];
+      const pending = pendingFeedback.get(card.id);
+      if (history[card.id].length && !pending) continue;
+      history[card.id].push({
+        version: history[card.id].length + 1,
+        feedback: pending?.feedback || "初始方案",
+        title: card.title || "落版方案",
+        summary: card.summary || "",
+        details: card.details || [],
+        status: "completed",
+        createdAt: message.created_at,
+      });
+      pendingFeedback.delete(card.id);
+    }
+  }
+  for (const [cardId, pending] of pendingFeedback) {
+    history[cardId] ||= [];
+    history[cardId].push({
+      version: history[cardId].length + 1,
+      feedback: pending.feedback,
+      title: "落版方案修改版生成中",
+      summary: "Novvy 正在根据这条修改意见生成新版本，完成后会在这个节点原位更新。",
+      details: [], status: "generating", createdAt: pending.createdAt,
+    });
+  }
+  return history;
+}
+
 export function serializeCreativeSession(row) {
   if (!row) return null;
   const drama = db.prepare("SELECT * FROM drama_analyses WHERE id = ?").get(row.drama_id);
@@ -334,6 +382,7 @@ export function serializeCreativeSession(row) {
     drama: serializeAnalysis(drama),
     game: serializeGameAnalysis(game),
     conceptRevisions: conceptRevisionHistory(messages),
+    finalCardRevisions: finalCardRevisionHistory(messages),
     messages: messages.map((message) => ({
       id: message.id, role: message.role, content: message.content,
       cards: message.cards_json ? JSON.parse(message.cards_json) : [],

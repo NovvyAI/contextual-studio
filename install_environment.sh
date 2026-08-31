@@ -83,6 +83,23 @@ if [ "$NODE_MAJOR" -lt 24 ]; then
   fail "当前 Node.js 为 $(node --version)，但项目要求 24 或更高版本。请关闭终端后重新运行脚本。"
 fi
 
+PYTHON_ENV_DIR="$SCRIPT_DIR/.venv"
+if [ ! -x "$PYTHON_ENV_DIR/bin/python" ]; then
+  say "正在创建项目 Python 环境…"
+  python3 -m venv "$PYTHON_ENV_DIR"
+else
+  echo "检测到已有项目 Python 环境，跳过创建。"
+fi
+
+if "$PYTHON_ENV_DIR/bin/python" -c "import PIL" >/dev/null 2>&1; then
+  echo "检测到 Pillow 已安装，跳过安装。"
+else
+  say "正在安装图片校验依赖 Pillow…"
+  "$PYTHON_ENV_DIR/bin/python" -m pip install Pillow
+fi
+
+"$PYTHON_ENV_DIR/bin/python" -c "from PIL import Image; print('Pillow 已就绪：' + Image.__version__)"
+
 say "正在安装 Contextual Studio 项目依赖…"
 npm install
 

@@ -797,10 +797,21 @@ function inferCreativeStage(session, workspace) {
 
 function currentStagePresentation(session, workspace) {
   const stage = inferCreativeStage(session, workspace);
+  const latestFinalCardSet = [...(session.messages || [])]
+    .reverse()
+    .map((message) => (message.cards || []).filter((card) => card.kind === "final_card"))
+    .find((cards) => cards.length) || [];
+  const hasGeneratedFinalCard = latestFinalCardSet.some((card) => Boolean(card.previewUrl));
   return ({
     concept_review: { stage, title: "创意方案候选", heading: "正在讨论的创意方向", kind: "concept", statusKey: "" },
     concept_selected: { stage, title: "已选方案深化", heading: "已选创意与落版准备", kind: "concept", statusKey: "finalCardStatus" },
-    final_card_review: { stage, title: "确认落版图", heading: "落版图已生成", kind: "final_card", statusKey: "finalCardStatus" },
+    final_card_review: {
+      stage,
+      title: hasGeneratedFinalCard ? "确认落版图" : "确认落版方案",
+      heading: hasGeneratedFinalCard ? "落版图已生成" : "落版图方案待确认",
+      kind: "final_card",
+      statusKey: "finalCardStatus",
+    },
     reference_review: { stage, title: "人物与参考图", heading: "人物、道具与参考图", kind: "reference_image", statusKey: "referenceStatus" },
     storyboard_review: { stage, title: "剧情与分镜", heading: "视频剧情与分镜候选", kind: "storyboard", statusKey: "videoPromptStatus" },
     prompt_review: { stage, title: "视频提示词审核", heading: "正在讨论的视频提示词", kind: "video_prompt", statusKey: "videoPromptStatus" },
@@ -906,7 +917,7 @@ function renderCanvas(session) {
   status.className = `status ${session.stage === "working" ? "analyzing" : session.stage === "error" ? "failed" : "completed"}`;
   status.textContent = session.stage === "working" ? "Novvy 处理中" : session.stage === "error" ? "需要处理" : "可交互";
 
-  const renderSignature = JSON.stringify([session.stage, session.workspace, session.messages, session.conceptRevisions, session.assets, session.screenshots]);
+  const renderSignature = JSON.stringify([session.stage, session.workspace, session.messages, session.conceptRevisions, session.finalCardRevisions, session.assets, session.screenshots]);
   if (renderSignature === canvasRenderSignature) return;
   canvasRenderSignature = renderSignature;
   document.querySelectorAll("#creative-canvas details[data-canvas-details-key]").forEach((details) => canvasDetailsOpenState.set(details.dataset.canvasDetailsKey, details.open));
@@ -986,6 +997,26 @@ function renderCanvas(session) {
       if (card.previewUrl) {
         const image = element("img", "current-focus-preview"); image.src = card.previewUrl; image.alt = card.title; image.loading = "lazy";
         item.append(image);
+      }
+      const revisions = card.kind === "final_card" ? session.finalCardRevisions?.[card.id] || [] : [];
+      if (revisions.length > 1) {
+        const history = canvasDetails(element("details", "concept-revision-history"), `final-card-history:${card.id}`, false);
+        history.append(element("summary", "", `修改历史 · ${revisions.length} 个版本`));
+        const chain = element("ol", "concept-revision-chain");
+        revisions.forEach((entry) => {
+          const revisionItem = element("li", `concept-revision-entry ${entry.status === "generating" ? "generating" : ""}`);
+          const revisionHeading = element("div", "concept-revision-heading");
+          const time = entry.createdAt ? new Date(entry.createdAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
+          const version = element("b", "", `V${entry.version}`);
+          if (entry.status === "generating") version.append(element("span", "concept-revision-generating", "生成中"));
+          revisionHeading.append(version, element("time", "", time));
+          revisionItem.append(revisionHeading, element("strong", "", entry.title));
+          if (entry.version > 1) revisionItem.append(element("p", "concept-revision-feedback", `你的意见：${entry.feedback}`));
+          revisionItem.append(element("p", "concept-revision-result", entry.summary));
+          chain.append(revisionItem);
+        });
+        history.append(chain);
+        item.append(history);
       }
       list.append(item);
     });

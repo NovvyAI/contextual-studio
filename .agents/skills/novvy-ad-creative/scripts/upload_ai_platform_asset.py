@@ -978,13 +978,35 @@ def source_info_is_image(source_info: dict, kind_value: str = "") -> bool:
 def image_dimensions(data: bytes, source: str) -> tuple[int, int]:
     try:
         from PIL import Image, UnidentifiedImageError
-    except ModuleNotFoundError as exc:
+    except ModuleNotFoundError:
+        # Contextual Studio must remain able to upload ordinary PNG/JPEG
+        # references before the optional project Python environment is ready.
+        # Validate dimensions directly from the standard file headers instead
+        # of blocking the complete image-generation workflow on Pillow.
+        if data.startswith(b"\x89PNG\r\n\x1a\n") and len(data) >= 24:
+            return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+        if data.startswith(b"\xff\xd8"):
+            offset = 2
+            while offset + 9 < len(data):
+                if data[offset] != 0xFF:
+                    offset += 1
+                    continue
+                marker = data[offset + 1]
+                offset += 2
+                if marker in {0xD8, 0xD9}:
+                    continue
+                if offset + 2 > len(data):
+                    break
+                length = int.from_bytes(data[offset:offset + 2], "big")
+                if marker in {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF} and offset + 7 <= len(data):
+                    return int.from_bytes(data[offset + 5:offset + 7], "big"), int.from_bytes(data[offset + 3:offset + 5], "big")
+                offset += max(length, 2)
         raise UploadError(
-            "Pillow is required to validate image dimensions before upload. "
-            "Run $novvy-env-check to configure a Python runtime with Pillow, then retry.",
+            "Pillow is unavailable and this image format cannot be validated without it. "
+            "Use PNG/JPEG or run the environment installer, then retry.",
             failed_step="local_environment",
-            safe_next_step="install_pillow_or_run_novvy_env_check_then_retry_upload",
-        ) from exc
+            safe_next_step="convert_image_to_png_or_jpeg_or_install_pillow_then_retry_upload",
+        )
 
     try:
         with Image.open(BytesIO(data)) as image:

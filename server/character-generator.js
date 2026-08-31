@@ -47,7 +47,9 @@ export async function publicInputUrl(previewUrl) {
 
 async function uploadLocalImage(inputPath, slot) {
   const script = path.resolve(".agents/skills/novvy-ad-creative/scripts/upload_ai_platform_asset.py");
-  const { stdout } = await execFileAsync("python3", [script, "--mode", "asset", "--kind", "image", "--mcp-json", mcpConfigPath(), "--slot", `${slot}=${inputPath}`], { maxBuffer: 4 * 1024 * 1024 });
+  const projectPython = path.resolve(".venv/bin/python");
+  const python = process.env.CONTEXTUAL_PYTHON || (fs.existsSync(projectPython) ? projectPython : "python3");
+  const { stdout } = await execFileAsync(python, [script, "--mode", "asset", "--kind", "image", "--mcp-json", mcpConfigPath(), "--slot", `${slot}=${inputPath}`], { maxBuffer: 4 * 1024 * 1024 });
   const result = JSON.parse(stdout);
   const url = result.videoPayloadHint?.imageUrls?.[0] || result.referenceUrls?.[0];
   if (!url) throw new Error("图片上传后没有返回公开地址");
