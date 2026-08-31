@@ -251,6 +251,7 @@ const server = http.createServer(async (req, res) => {
       runCreativeTurn(id, userMessage, false, attachments, {
         ...(conceptRevisionMatch ? { conceptRevisionId: conceptRevisionMatch[1].toUpperCase() } : {}),
         ...(finalCardRevisionMatch ? { finalCardRevisionId: finalCardRevisionMatch[1] } : {}),
+        ...(/我选择并确认采用候选卡\s+concept-[A-D]/i.test(content) ? { prepareFinalCardCandidates: true } : {}),
       });
       return json(res, 202, { id, status: "working", attachmentCount: attachments.length });
     }
@@ -538,13 +539,41 @@ function recoverInterruptedCreativeTurns() {
     }
     let workspace = {};
     try { workspace = JSON.parse(session.workspace_json || "{}"); } catch { workspace = {}; }
-    if (workspace.productionPlan?.videoPromptStatus !== "storyboard_pending") continue;
-    const hasStoryboard = db.prepare("SELECT 1 FROM creative_messages WHERE session_id=? AND cards_json LIKE '%\"kind\":\"storyboard\"%' LIMIT 1").get(session.id);
-    if (hasStoryboard) continue;
+    if (workspace.productionPlan?.videoPromptStatus === "storyboard_pending") {
+      const hasStoryboard = db.prepare("SELECT 1 FROM creative_messages WHERE session_id=? AND cards_json LIKE '%\"kind\":\"storyboard\"%' LIMIT 1").get(session.id);
+      if (!hasStoryboard) {
+        const timestamp = now();
+        db.prepare("UPDATE creative_sessions SET stage='reference_review',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, session.id);
+        db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
+          .run(session.id, "检测到服务器重启中断了分镜生成，现已自动恢复，不需要重新确认人物参考图。", timestamp);
+        setImmediate(() => runCreativeTurn(session.id, "恢复已确认人物参考图之后被服务器重启中断的流程。请立即生成 3 个完整的视频剧情与分镜候选 storyboard-A/B/C；保留全部已确认成果，不要再次要求确认人物图，也不要提交图片或视频生成。", false));
+        continue;
+      }
+    }
+
+    const selectedConceptIds = Array.isArray(workspace.selectedConceptIds) ? workspace.selectedConceptIds : [];
+    const hasFinalCardCandidate = db.prepare("SELECT 1 FROM creative_messages WHERE session_id=? AND cards_json LIKE '%\"kind\":\"final_card\"%' LIMIT 1").get(session.id);
+    if (selectedConceptIds.length && !hasFinalCardCandidate) {
+      const timestamp = now();
+      db.prepare("UPDATE creative_sessions SET stage='concept_selected',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, session.id);
+      db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
+        .run(session.id, "检测到服务器重启中断了落版方案准备，正在同一 Novvy 会话中自动恢复；这一步只生成文字候选，不会提交图片生成任务。", timestamp);
+      setImmediate(() => runCreativeTurn(
+        session.id,
+        "恢复已确认创意之后被服务器重启中断的流程。请立即生成 2-4 个可审核的 final_card 落版方案文字候选卡；保留全部已确认成果，不要再次讨论创意方向，也不要提交图片或视频生成。",
+        false,
+        [],
+        { prepareFinalCardCandidates: true },
+      ));
+      continue;
+    }
+
+    const fallbackStage = hasFinalCardCandidate ? "concept_selected" : (selectedConceptIds.length ? "concept_selected" : "concept_review");
     const timestamp = now();
+    db.prepare("UPDATE creative_sessions SET stage=?,error_message=?,updated_at=? WHERE id=?")
+      .run(fallbackStage, "上一轮 Novvy 任务因服务重启而中断，请重新执行当前操作。", timestamp, session.id);
     db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
-      .run(session.id, "检测到服务器重启中断了分镜生成，现已自动恢复，不需要重新确认人物参考图。", timestamp);
-    setImmediate(() => runCreativeTurn(session.id, "恢复已确认人物参考图之后被服务器重启中断的流程。请立即生成 3 个完整的视频剧情与分镜候选 storyboard-A/B/C；保留全部已确认成果，不要再次要求确认人物图，也不要提交图片或视频生成。", false));
+      .run(session.id, "上一轮任务因服务重启而中断，工作台已恢复到可操作状态。请重新发送刚才的要求，或再次点击当前步骤的确认按钮。", timestamp);
   }
 }
 

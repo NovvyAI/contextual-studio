@@ -726,7 +726,7 @@ function renderChatCard(card, disabled) {
         return;
       }
     }
-    if (!isFinalCardDraft) return sendMessage(`我选择并确认采用候选卡 ${card.id}：${card.title}。请保留其他历史内容，并告诉我下一步。`);
+    if (!isFinalCardDraft) return sendMessage(`我选择并确认采用候选卡 ${card.id}：${card.title}。请保留其他历史内容。现在立即根据已确认创意生成 2-4 个可审核的落版图方案候选卡：kind 必须为 final_card，previewUrl 保持为空，status 为 candidate；每张卡写清视觉构图、英文标题/副标题/CTA、字体层级、色彩、产品真实性边界和 GPT-image-2 英文生成提示词。此步骤只准备候选方案，不执行图片生成，也不要只告诉我下一步。`);
     adopt.disabled = true;
     adopt.textContent = "正在创建任务…";
     try {
