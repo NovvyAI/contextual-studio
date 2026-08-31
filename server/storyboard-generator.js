@@ -31,8 +31,47 @@ function imageUrl(data) {
   }
   return "";
 }
-function shotDetails(card) {
-  return (card.details || []).filter((item) => /^(?:镜(?:头)?|Shot)\s*\d/i.test(String(item.label || "").trim())).slice(0, 3);
+function shotLabel(label) {
+  const value = String(label || "").trim();
+  return /^(?:(?:镜(?:头)?|shot)\s*(?:\d{1,2}|[一二三])|第\s*(?:\d{1,2}|[一二三])\s*(?:镜|镜头))/i.test(value);
+}
+
+function shotContent(value) {
+  if (typeof value === "string") return value.trim();
+  if (Array.isArray(value)) return value.map(shotContent).filter(Boolean).join("\n");
+  if (value && typeof value === "object") return Object.entries(value)
+    .map(([key, item]) => `${key}：${shotContent(item)}`).filter((item) => !item.endsWith("：")).join("\n");
+  return value == null ? "" : String(value);
+}
+
+function structuredShots(card) {
+  const candidates = [card?.shots, card?.storyboard?.shots, card?.content?.shots, card?.details?.shots];
+  const source = candidates.find(Array.isArray);
+  if (!source) return [];
+  return source.map((shot, index) => ({
+    label: shot?.label || shot?.title || shot?.shotId || `镜头 ${String(index + 1).padStart(2, "0")}`,
+    content: shotContent(shot?.content || shot?.description || shot?.reviewZh || shot?.prompt || shot),
+  })).filter((shot) => shot.content);
+}
+
+function embeddedShots(details) {
+  const text = (details || []).map((item) => shotContent(item?.content)).filter(Boolean).join("\n");
+  const marker = /(?:^|\n)\s*((?:(?:镜(?:头)?|shot)\s*(?:\d{1,2}|[一二三])|第\s*(?:\d{1,2}|[一二三])\s*(?:镜|镜头))[^\n：:]*)[：:]?\s*/gim;
+  const matches = [...text.matchAll(marker)];
+  return matches.map((match, index) => ({
+    label: match[1].trim(),
+    content: text.slice((match.index || 0) + match[0].length, matches[index + 1]?.index ?? text.length).trim(),
+  })).filter((shot) => shot.content);
+}
+
+export function shotDetails(card) {
+  const details = Array.isArray(card?.details) ? card.details : [];
+  const labeled = details.filter((item) => shotLabel(item?.label))
+    .map((item) => ({ ...item, content: shotContent(item.content) })).filter((item) => item.content);
+  if (labeled.length) return labeled.slice(0, 3);
+  const structured = structuredShots(card);
+  if (structured.length) return structured.slice(0, 3);
+  return embeddedShots(details).slice(0, 3);
 }
 function referenceUrls(session) {
   const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
