@@ -166,6 +166,14 @@ NOVVY_SKILL_VERSION=contextual-studio-v1
 
 状态检查：`GET /api/telemetry/status`。修复配置后可调用 `POST /api/telemetry/retry` 重试失败事件；旧工作台可调用 `POST /api/telemetry/backfill/<工作台ID>`，从已保存的阶段、卡片、资产和用户反馈生成幂等回补事件。采集不包含 API key、Cookie、base64、完整对话、模型思考或本机绝对文件路径。
 
+公司远端采集服务尚未部署时，可以在第二个终端启动项目自带的本地接收端：
+
+```bash
+./start_local_telemetry.sh
+```
+
+本地接收端默认监听 `http://127.0.0.1:4191`，数据保存到 `data/local-telemetry.sqlite`。启动 Contextual Studio 时配置 `NOVVY_TELEMETRY_URL=http://127.0.0.1:4191`、`NOVVY_TELEMETRY_TOKEN=contextual-local-dev`；用带 `X-API-Key` 的 `GET /v1/local/status` 查看本地接收数量。它只用于本机开发，不要暴露到公网。
+
 ### 全新电脑一键安装（推荐）
 
 如果电脑没有安装 Node.js、Python、FFmpeg 或其他开发工具，在项目目录中运行：

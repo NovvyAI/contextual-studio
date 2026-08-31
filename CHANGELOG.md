@@ -4,6 +4,12 @@
 
 ## 未发布
 
+### 本地创意采集服务
+
+- 新增可独立启动的本地 telemetry 接收端，兼容 Skill 版本解析、run、stage、asset、feedback 和完成状态接口；公司远端未部署时，可把 Contextual Studio outbox 发送到 `127.0.0.1:4191`。
+- 本地接收数据独立保存到 `data/local-telemetry.sqlite`，支持 `X-API-Key` 校验、阶段/资产/反馈幂等去重、健康检查和接收数量状态接口；新增 `start_local_telemetry.sh` 与 `npm run telemetry:local`。
+- 本地服务只监听回环地址，不应暴露到公网；README 和环境变量示例补充本地启动及监控方式。
+
 ### ImaRouter 真人隐私自动降级重试
 
 - 逐镜视频首次提交仍使用对应分镜图和已采用人物参考图；若 ImaRouter 明确返回 `InputImageSensitiveContentDetected.PrivacyInformation` 或 `may contain real person`，会根据 `content[n]` 定位实际输入图片、移除该图，并仅自动重试一次。
