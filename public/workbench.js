@@ -110,6 +110,32 @@ function element(tag, className, text) {
   return node;
 }
 
+function processingTime(session) {
+  const startedAt = Date.parse(session.updatedAt || session.createdAt || "");
+  return Number.isFinite(startedAt) ? Math.max(0, Date.now() - startedAt) : 0;
+}
+function elapsedLabel(milliseconds) {
+  const seconds = Math.floor(milliseconds / 1000);
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+function initialProgressCopy(milliseconds) {
+  if (milliseconds < 20_000) return "正在读取已保存的短剧与游戏分析";
+  if (milliseconds < 60_000) return "正在建立剧情结尾与游戏玩法的连接";
+  if (milliseconds < 150_000) return "正在生成并比较第一组创意方向";
+  if (milliseconds < 300_000) return "正在检查方案完整性与玩法真实性";
+  return "仍在等待模型完成；页面轮询正常，可以保留此页面继续等待";
+}
+function updateProcessingStatus(session) {
+  const status = document.querySelector("#workbench-status");
+  if (session.stage !== "working") return;
+  const elapsed = processingTime(session);
+  status.textContent = `Novvy 处理中 · ${elapsedLabel(elapsed)}`;
+  const progress = document.querySelector("[data-initial-creative-progress]");
+  if (!progress) return;
+  progress.querySelector("strong").textContent = initialProgressCopy(elapsed);
+  progress.querySelector("small").textContent = `已等待 ${elapsedLabel(elapsed)} · 通常约 1–4 分钟，复杂素材可能更久`;
+}
+
 function annotationInstruction(items) {
   if (!items.length) return "";
   const lines = items.map((item, index) => {
@@ -974,6 +1000,7 @@ function renderCanvas(session) {
   const status = document.querySelector("#workbench-status");
   status.className = `status ${session.stage === "working" ? "analyzing" : session.stage === "error" ? "failed" : "completed"}`;
   status.textContent = session.stage === "working" ? "Novvy 处理中" : session.stage === "error" ? "需要处理" : "可交互";
+  updateProcessingStatus(session);
 
   const renderSignature = JSON.stringify([session.stage, session.workspace, session.messages, session.conceptRevisions, session.finalCardRevisions, session.assets, session.screenshots]);
   if (renderSignature === canvasRenderSignature) return;
@@ -989,7 +1016,10 @@ function renderCanvas(session) {
   const workspace = session.workspace;
   if (!workspace) {
     const loading = element("div", "canvas-loading");
-    loading.append(element("div", "loader"), element("strong", "", "正在生成剧游连接与创意方向"), element("p", "", "Novvy 会基于已保存的短剧和游戏分析构建第一版画布。"));
+    const progress = element("div", "initial-creative-progress");
+    progress.dataset.initialCreativeProgress = "true";
+    progress.append(element("div", "initial-progress-track"), element("strong", "", initialProgressCopy(processingTime(session))), element("small", "", `已等待 ${elapsedLabel(processingTime(session))} · 通常约 1–4 分钟，复杂素材可能更久`));
+    loading.append(element("div", "loader"), element("h2", "", "正在生成剧游连接与创意方向"), progress, element("p", "", "页面会持续自动更新，你不需要重复点击或刷新。"));
     canvas.append(loading);
     return;
   }
