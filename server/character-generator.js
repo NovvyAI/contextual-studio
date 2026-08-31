@@ -32,6 +32,16 @@ function mcpConfigPath() {
 export async function publicInputUrl(previewUrl) {
   if (/^https?:\/\//.test(previewUrl)) return previewUrl;
   if (path.isAbsolute(previewUrl) && fs.existsSync(previewUrl)) return uploadLocalImage(previewUrl, "uploaded_reference");
+  const chatAttachmentMatch = previewUrl.match(/^\/api\/creative\/chat-attachments\/(\d+)\/([^/]+)$/);
+  if (chatAttachmentMatch) {
+    const sessionId = Number(chatAttachmentMatch[1]);
+    const storedName = decodeURIComponent(chatAttachmentMatch[2]);
+    const attachment = db.prepare("SELECT attachments_json FROM creative_messages WHERE session_id=? AND attachments_json IS NOT NULL ORDER BY id DESC").all(sessionId)
+      .flatMap((row) => { try { return JSON.parse(row.attachments_json || "[]"); } catch { return []; } })
+      .find((item) => item.storedName === storedName && item.storedPath);
+    if (!attachment || !fs.existsSync(attachment.storedPath)) throw new Error("本地上传资产文件不存在");
+    return uploadLocalImage(attachment.storedPath, "uploaded_reference");
+  }
   const match = previewUrl.match(/^\/api\/screenshots\/(\d+)$/);
   if (!match) throw new Error("人物候选缺少可上传的真实图片");
   const screenshot = db.prepare("SELECT image_blob,mime_type FROM drama_screenshots WHERE id=?").get(Number(match[1]));

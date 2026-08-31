@@ -1,6 +1,7 @@
 import { creativeAssets, db, now, resolveAssetReferences } from "./database.js";
 import { publicInputUrl } from "./character-generator.js";
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
+import { recordCreativeAsset, recordCreativeFeedback } from "./creative-telemetry.js";
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -15,6 +16,43 @@ function append(sessionId, content, card) {
 function appendAsset(sessionId, content, card) {
   db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,visibility,created_at) VALUES (?,'assistant',?,?,'asset',?)")
     .run(sessionId, content, JSON.stringify([card]), now());
+}
+
+export function registerChatAttachmentsAsAssets(sessionId, attachments, description = "上传为资产") {
+  const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
+  if (!session) throw new Error("创意工作台不存在");
+  if (session.stage === "working") throw new Error("当前仍有任务正在处理");
+  const images = (attachments || []).filter((item) => String(item.type || "").startsWith("image/") && item.storedPath && item.url);
+  if (!images.length) throw new Error("“上传为资产”目前只支持图片，请至少上传一张图片");
+  const timestamp = now();
+  db.prepare("INSERT INTO creative_messages (session_id,role,content,attachments_json,created_at) VALUES (?,'user',?,?,?)")
+    .run(sessionId, String(description || "上传为资产"), JSON.stringify(attachments), timestamp);
+  const cards = images.map((item, index) => ({
+    id: `uploaded-asset-${item.storedName.replace(/[^a-zA-Z0-9._-]/g, "-")}`,
+    kind: "reference_image",
+    title: item.name || `上传图片 ${index + 1}`,
+    summary: "用户从聊天框上传的原始图片资产；未经过重绘、裁切或模型生成。",
+    previewUrl: item.url,
+    version: 1,
+    status: "candidate",
+    details: [
+      { label: "资产来源", content: "聊天框本地上传" },
+      { label: "原始文件名", content: item.name || "未知" },
+      { label: "文件类型", content: item.type || "image" },
+      { label: "文件大小", content: `${item.size || 0} bytes` },
+      { label: "存储方式", content: "本地附件；后续提交给云端生成时才按需上传" },
+    ],
+  }));
+  db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,visibility,created_at) VALUES (?,'assistant',?,?,'asset',?)")
+    .run(sessionId, `已将 ${cards.length} 张原图登记到资产区域。`, JSON.stringify(cards), timestamp);
+  const registered = creativeAssets(sessionId).filter((asset) => cards.some((card) => card.previewUrl === asset.url));
+  const references = registered.map((asset) => asset.reference);
+  db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
+    .run(sessionId, `${references.join("、") || `${cards.length} 张图片`}已加入资产区域。原图没有经过修改，也没有调用图片生成模型。`, timestamp);
+  db.prepare("UPDATE creative_sessions SET stage=?,error_message=NULL,updated_at=? WHERE id=?").run(session.stage, timestamp, sessionId);
+  recordCreativeFeedback(sessionId, String(description || "上传为资产"), { decision: "approved", stageOutputId: cards.map((card) => card.id).join(","), key: `session:${sessionId}:uploaded-assets:${timestamp}` });
+  registered.forEach((asset) => recordCreativeAsset(sessionId, "reference_panel", asset.url, { stageOutputId: asset.sourceCardId, metadata: { title: asset.title, source: "chat_upload", reference: asset.reference }, key: `session:${sessionId}:uploaded-asset:${asset.sourceCardId}` }));
+  return registered;
 }
 function walk(value) {
   if (Array.isArray(value)) return value.flatMap(walk);

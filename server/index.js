@@ -18,7 +18,7 @@ import { approveAndFinalizeVideoShots, approveFinalVideo } from "./video-shot-re
 import { generatedVideoPath } from "./video-finalizer.js";
 import { productionProfile } from "./production-profile.js";
 import { landingPackagePath, packageLandingPage } from "./landing-page-packager.js";
-import { startAssetCreation, startAssetRegeneration, startAttachmentImageEdit } from "./asset-generator.js";
+import { registerChatAttachmentsAsAssets, startAssetCreation, startAssetRegeneration, startAttachmentImageEdit } from "./asset-generator.js";
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
 import { backfillCreativeTelemetry, flushTelemetryOutbox, recordCreativeFeedback, recordCreativeRunStart, recordCreativeStage, startTelemetryWorker, telemetryStatus } from "./creative-telemetry.js";
 
@@ -251,6 +251,11 @@ const server = http.createServer(async (req, res) => {
         attachments.push({ name: file.name, type: file.type, size: file.size, storedName, storedPath, url: `/api/creative/chat-attachments/${id}/${encodeURIComponent(storedName)}` });
       }
       const userMessage = content || "请查看并分析我上传的附件。";
+      const uploadAsAsset = attachments.length > 0 && /(?:上传|保存|存|加入|添加).{0,8}(?:为|成|到|进|作为|当做)?.{0,5}(?:一个)?资产(?:区域|区)?|作为资产/i.test(content);
+      if (uploadAsAsset) {
+        const registered = registerChatAttachmentsAsAssets(id, attachments, userMessage);
+        return json(res, 201, { id, status: session.stage, action: "attachments_registered_as_assets", assets: registered.map((asset) => ({ reference: asset.reference, title: asset.title, url: asset.url })) });
+      }
       const attachmentImageEdit = attachments.some((item) => item.type.startsWith("image/"))
         && /修改|调整|编辑|重绘|重新生成|改成|换成|替换|去掉|去除|移除|删除|增加|添加|变成|变为|希望|不要/i.test(content);
       if (attachmentImageEdit) {

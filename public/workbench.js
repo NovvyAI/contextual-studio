@@ -997,20 +997,41 @@ function renderAssetLibrary(assets, screenshots, disabled) {
     body.append(actions, revision); card.append(media, body); grid.append(card);
   });
   const createCard = element("article", "asset-library-card asset-create-card");
-  const createMedia = element("div", "asset-library-media asset-create-media");
-  createMedia.append(element("span", "asset-create-plus", "+"), element("strong", "", "添加图片"), element("small", "", "根据文字描述生成"));
+  const createMedia = element("button", "asset-library-media asset-create-media"); createMedia.type = "button"; createMedia.disabled = disabled;
+  createMedia.append(element("span", "asset-create-plus", "+"), element("strong", "", "上传为资产"), element("small", "", "选择本地原图，不调用生成模型"));
   const createBody = element("div", "asset-library-body");
+  const input = document.createElement("input"); input.type = "file"; input.accept = "image/jpeg,image/png,image/webp"; input.multiple = true; input.hidden = true; input.disabled = disabled;
+  const selection = element("p", "asset-upload-selection", "尚未选择图片");
+  const choose = element("button", "asset-use-button asset-upload-choose", "选择本地图片"); choose.type = "button"; choose.disabled = disabled;
+  const upload = element("button", "asset-regenerate asset-create-generate", "上传为资产"); upload.type = "button"; upload.disabled = true;
+  const openPicker = () => { if (!disabled) input.click(); };
+  createMedia.addEventListener("click", openPicker); choose.addEventListener("click", openPicker);
+  input.addEventListener("change", () => {
+    const files = [...input.files].slice(0, 6);
+    selection.textContent = files.length ? files.map((file) => file.name).join("、") : "尚未选择图片";
+    upload.disabled = disabled || !files.length;
+  });
+  upload.addEventListener("click", async () => {
+    const files = [...input.files].slice(0, 6); if (!files.length) return input.click();
+    try {
+      choose.disabled = true; upload.disabled = true; upload.textContent = "正在上传…";
+      const body = new FormData(); body.append("content", "上传为资产"); files.forEach((file) => body.append("attachments", file));
+      await api(`/api/creative/sessions/${sessionId}/messages`, { method: "POST", body });
+      await refreshSession();
+    } catch (error) { choose.disabled = disabled; upload.disabled = false; upload.textContent = "上传为资产"; alert(error.message); }
+  });
+  const divider = element("div", "asset-create-divider"); divider.append(element("span", "", "或者生成一张新图片"));
   const description = element("textarea", "asset-feedback asset-create-description"); description.rows = 4; description.placeholder = "描述想生成的图片；也可以引用图片 04、截图 08…"; description.disabled = disabled;
-  const generate = element("button", "asset-regenerate asset-create-generate", "生成图片"); generate.type = "button"; generate.disabled = disabled;
+  const generate = element("button", "asset-regenerate asset-create-generate", "根据描述生成图片"); generate.type = "button"; generate.disabled = disabled;
   generate.addEventListener("click", async () => {
     const instruction = description.value.trim(); if (!instruction) return description.focus();
     try {
-      generate.disabled = true; generate.textContent = "正在提交…";
+      generate.disabled = true; generate.textContent = "正在提交生成任务…";
       await api(`/api/creative/sessions/${sessionId}/assets/generate`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ description: instruction }) });
       await refreshSession();
-    } catch (error) { generate.disabled = false; generate.textContent = "生成图片"; alert(error.message); }
+    } catch (error) { generate.disabled = false; generate.textContent = "根据描述生成图片"; alert(error.message); }
   });
-  createBody.append(description, generate); createCard.append(createMedia, createBody); grid.append(createCard);
+  createBody.append(input, selection, choose, upload, divider, description, generate); createCard.append(createMedia, createBody); grid.append(createCard);
   section.append(grid);
   const screenshotHeading = element("div", "asset-screenshot-heading");
   screenshotHeading.append(element("h3", "asset-zone-title", "视频截图区"), element("span", "asset-count", `${screenshots.length} 张`));

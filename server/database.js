@@ -220,7 +220,7 @@ export function creativeAssets(sessionId, includeDeleted = false) {
     for (const card of cards) {
       const url = String(card.previewUrl || "");
       if (!visualKinds.has(card.kind) || !url || seen.has(url)) continue;
-      if (!/^https?:\/\//.test(url) && !/^\/api\/screenshots\/\d+$/.test(url)) continue;
+      if (!/^https?:\/\//.test(url) && !/^\/api\/screenshots\/\d+$/.test(url) && !/^\/api\/creative\/chat-attachments\/\d+\/[^/]+$/.test(url)) continue;
       seen.add(url);
       assetNumber += 1;
       const asset = {
