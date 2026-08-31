@@ -4,6 +4,11 @@
 
 ## 未发布
 
+### ImaRouter 真人隐私自动降级重试
+
+- 逐镜视频首次提交仍使用对应分镜图和已采用人物参考图；若 ImaRouter 明确返回 `InputImageSensitiveContentDetected.PrivacyInformation` 或 `may contain real person`，会根据 `content[n]` 定位实际输入图片、移除该图，并仅自动重试一次。
+- 自动重试会在对话中说明移除了哪张分镜图或人物参考图，并在成功后的逐镜卡片记录降级策略；其他错误和第二次失败不会无限重试。
+
 ### 逐镜视频启动修复
 
 - 修复已确认分镜图以“图片07：https://...”形式保存时，Novvy 和 ImaRouter 只接受 URL 开头字符串而误判为 0 张分镜图的问题；两条视频路径现在都会从带编号说明的字段中提取真实 URL。
