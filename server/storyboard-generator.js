@@ -46,7 +46,7 @@ function imageUrl(data) {
 }
 function shotLabel(label) {
   const value = String(label || "").trim();
-  return /^(?:(?:镜(?:头)?|shot)\s*(?:\d{1,2}|[一二三])|第\s*(?:\d{1,2}|[一二三])\s*(?:镜|镜头))/i.test(value);
+  return /^(?:(?:镜(?:头)?|shot)\s*(?:\d{1,2}|[一二三])|第\s*(?:\d{1,2}|[一二三])\s*(?:镜|镜头)|(?:storyboard[-_ ]*)?[A-Z]+[-_ ]*0?\d{1,2}\s*(?:[｜|]|$))/i.test(value);
 }
 
 function shotContent(value) {
