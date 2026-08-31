@@ -1,6 +1,7 @@
 import { db, now } from "./database.js";
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
 import { publicInputUrl } from "./character-generator.js";
+import { recordCreativeAsset, recordCreativeFeedback, recordCreativeStage } from "./creative-telemetry.js";
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -146,6 +147,8 @@ export function approveFinalCard(sessionId, cardId) {
   }
   db.prepare("UPDATE creative_sessions SET stage = 'reference_review', workspace_json = ?, error_message = NULL, updated_at = ? WHERE id = ?")
     .run(JSON.stringify(workspace), timestamp, sessionId);
+  recordCreativeFeedback(sessionId, `确认使用已生成的落版图 ${cardId}`, { decision: "approved", assetId: cardId, key: `session:${sessionId}:final-card:${cardId}:approved` });
+  recordCreativeStage(sessionId, "final_card", { cardId, title: card.title, previewUrl: card.previewUrl }, { version: Number(card.version || 1), status: "confirmed", key: `session:${sessionId}:final-card:${cardId}:confirmed` });
 }
 
 async function runFinalCardGeneration(sessionId, card, prompt) {
@@ -184,6 +187,8 @@ async function runFinalCardGeneration(sessionId, card, prompt) {
     };
     appendCardMessage(sessionId, "落版图已经生成好了。请直接查看真实预览；你可以确认采用，也可以在卡片里写修改意见后生成新版本。", completedCard);
     db.prepare("UPDATE creative_sessions SET stage = 'final_card_review', updated_at = ? WHERE id = ?").run(now(), sessionId);
+    recordCreativeStage(sessionId, "final_card", { cardId: card.id, title: card.title, status: "generated" }, { version: Number(card.version || 1), status: "awaiting_confirmation", key: `session:${sessionId}:final-card:${card.id}:v${Number(card.version || 1)}:generated` });
+    recordCreativeAsset(sessionId, "final_card", previewUrl, { version: Number(card.version || 1), stageOutputId: card.id });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     appendCardMessage(sessionId, `这次落版图没有生成成功：${message}。候选方案和提示词都已保留，你可以直接重试。`, { ...card, status: "failed" });

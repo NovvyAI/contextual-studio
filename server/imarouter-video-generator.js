@@ -46,6 +46,11 @@ function explicitVideoUrl(data) {
   return candidates.find((value) => typeof value === "string" && /^https?:\/\//.test(value)) || "";
 }
 
+function referenceUrl(value) {
+  if (typeof value !== "string") return "";
+  return value.match(/https?:\/\/[^\s，；]+|\/api\/screenshots\/\d+/)?.[0] || "";
+}
+
 async function createAssetReference(baseUrl, headers, imageUrl) {
   const group = await request(`${baseUrl}/v1/assets/group/create`, {
     method: "POST", headers, body: JSON.stringify({ name: "contextual-studio", group_type: "AIGC", project_name: "default", model: "seedance-upload" }),
@@ -69,9 +74,9 @@ async function createAssetReference(baseUrl, headers, imageUrl) {
 function selectReferences(workspace) {
   const confirmedStoryboard = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "storyboard" && item.status === "confirmed");
   const referenceGroup = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "reference_panel" && item.status === "confirmed");
-  const storyboardUrls = (confirmedStoryboard?.details || []).map((item) => item.content).filter((value) => typeof value === "string" && /^https?:\/\//.test(value));
+  const storyboardUrls = (confirmedStoryboard?.details || []).map((item) => referenceUrl(item.content)).filter(Boolean);
   const characterUrls = [referenceGroup?.previewUrl, ...(referenceGroup?.details || []).map((item) => item.content)]
-    .filter((value) => typeof value === "string" && (/^https?:\/\//.test(value) || /^\/api\/screenshots\/\d+$/.test(value)));
+    .map(referenceUrl).filter(Boolean);
   if (!storyboardUrls.length) throw new Error("ImaRouter 没有可用的已确认分镜图");
   if (!characterUrls.length) throw new Error("ImaRouter 没有可用的已确认人物参考图");
   return {

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Novvy 创意记录"
+  short_description: "检查和维护创意生产过程采集"
+  default_prompt: "使用 $novvy-creative-record，检查当前 Contextual Studio 创意任务的阶段、资产、反馈和 telemetry outbox 状态。"

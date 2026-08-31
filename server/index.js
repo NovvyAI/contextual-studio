@@ -19,6 +19,7 @@ import { productionProfile } from "./production-profile.js";
 import { landingPackagePath, packageLandingPage } from "./landing-page-packager.js";
 import { startAssetCreation, startAssetRegeneration, startAttachmentImageEdit } from "./asset-generator.js";
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
+import { backfillCreativeTelemetry, flushTelemetryOutbox, recordCreativeFeedback, recordCreativeRunStart, recordCreativeStage, startTelemetryWorker, telemetryStatus } from "./creative-telemetry.js";
 
 const port = Number(process.env.PORT || 4180);
 const publicDir = path.resolve("public");
@@ -109,6 +110,14 @@ function sendVideoFile(req, res, filePath) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   try {
+    if (req.method === "GET" && url.pathname === "/api/telemetry/status") return json(res, 200, telemetryStatus());
+    if (req.method === "POST" && url.pathname === "/api/telemetry/retry") {
+      db.prepare("UPDATE creative_telemetry_outbox SET status='pending',next_attempt_at=NULL WHERE status='failed'").run();
+      setImmediate(flushTelemetryOutbox);
+      return json(res, 202, telemetryStatus());
+    }
+    const telemetryBackfillMatch = url.pathname.match(/^\/api\/telemetry\/backfill\/(\d+)$/);
+    if (req.method === "POST" && telemetryBackfillMatch) return json(res, 202, backfillCreativeTelemetry(Number(telemetryBackfillMatch[1])));
     if (req.method === "POST" && url.pathname === "/api/integrations/gcloud/login") {
       return json(res, 202, startGcloudLogin());
     }
@@ -194,6 +203,21 @@ const server = http.createServer(async (req, res) => {
       const id = Number(inserted.lastInsertRowid);
       db.prepare("INSERT INTO creative_messages (session_id, role, content, created_at) VALUES (?, 'assistant', ?, ?)")
         .run(id, "已连接短剧与游戏分析，正在生成第一组片尾广告创意方向。", timestamp);
+      recordCreativeRunStart(id);
+      const dramaResult = drama.analysis_json ? JSON.parse(drama.analysis_json) : {};
+      const gameResult = game.analysis_json ? JSON.parse(game.analysis_json) : {};
+      recordCreativeStage(id, "video_analysis", {
+        title: drama.title,
+        thesis: dramaResult.oneSentenceThesis || dramaResult.oneLineSummary || "",
+        endingState: dramaResult.narrativeContinuity?.lastFrameState || "",
+        visualStyle: dramaResult.visualStyle || {},
+      }, { key: `session:${id}:stage:video_analysis:source:${drama.id}` });
+      recordCreativeStage(id, "product_analysis", {
+        title: game.title || "",
+        storeUrl: game.store_url,
+        thesis: gameResult.productThesis || gameResult.products?.[0]?.descriptionSummary || "",
+        coreLoop: gameResult.coreLoop || gameResult.gameplay || {},
+      }, { key: `session:${id}:stage:product_analysis:source:${game.id}` });
       runCreativeTurn(id, "生成首次片尾创意方向", true);
       return json(res, 201, serializeCreativeSession(db.prepare("SELECT * FROM creative_sessions WHERE id = ?").get(id)));
     }
@@ -247,6 +271,12 @@ const server = http.createServer(async (req, res) => {
       }
       const timestamp = now();
       db.prepare("INSERT INTO creative_messages (session_id, role, content, attachments_json, created_at) VALUES (?, 'user', ?, ?, ?)").run(id, userMessage, attachments.length ? JSON.stringify(attachments) : null, timestamp);
+      const feedbackDecision = /确认|采用|选择/.test(userMessage) ? "approved" : /拒绝|不要这个|放弃/.test(userMessage) ? "rejected" : /修改|调整|重新生成|改成|去掉|增加/.test(userMessage) ? "rework" : "unclassified";
+      if (feedbackDecision !== "unclassified") recordCreativeFeedback(id, userMessage, {
+        decision: feedbackDecision,
+        assetId: finalCardRevisionMatch?.[1] || conceptRevisionMatch?.[1] || "",
+        key: `session:${id}:message:${timestamp}:feedback`,
+      });
       db.prepare("UPDATE creative_sessions SET stage = 'working', updated_at = ? WHERE id = ?").run(timestamp, id);
       runCreativeTurn(id, userMessage, false, attachments, {
         ...(conceptRevisionMatch ? { conceptRevisionId: conceptRevisionMatch[1].toUpperCase() } : {}),
@@ -580,4 +610,5 @@ function recoverInterruptedCreativeTurns() {
 server.listen(port, "127.0.0.1", () => {
   console.log(`Contextual Studio: http://127.0.0.1:${port}`);
   recoverInterruptedCreativeTurns();
+  startTelemetryWorker();
 });

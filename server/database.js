@@ -121,6 +121,32 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_creative_landing_packages_session
     ON creative_landing_packages(session_id, id);
+
+  CREATE TABLE IF NOT EXISTS creative_telemetry_runs (
+    session_id INTEGER PRIMARY KEY REFERENCES creative_sessions(id) ON DELETE CASCADE,
+    local_run_id TEXT NOT NULL UNIQUE,
+    remote_run_id TEXT,
+    status TEXT NOT NULL DEFAULT 'open',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS creative_telemetry_outbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES creative_sessions(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    sent_at TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_creative_telemetry_outbox_pending
+    ON creative_telemetry_outbox(status, next_attempt_at, id);
 `);
 
 const creativeMessageColumns = new Set(db.prepare("PRAGMA table_info(creative_messages)").all().map((column) => column.name));

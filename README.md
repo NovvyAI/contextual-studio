@@ -151,6 +151,21 @@ cp .env.example .env
 
 ## 启动项目
 
+### 可选：创意过程采集
+
+项目会把工作台创建、分析摘要、创意阶段、落版图、参考图组、成片资产和用户反馈先写入本地 SQLite outbox。远端采集未配置或暂时不可用时不会阻塞创作，也不会丢弃待发送事件。
+
+需要连接团队采集 API 时，在 `.env` 配置：
+
+```bash
+NOVVY_TELEMETRY_URL=https://telemetry.company.example
+NOVVY_TELEMETRY_TOKEN=由团队管理员提供
+NOVVY_TELEMETRY_USER_ID=employee-123
+NOVVY_SKILL_VERSION=contextual-studio-v1
+```
+
+状态检查：`GET /api/telemetry/status`。修复配置后可调用 `POST /api/telemetry/retry` 重试失败事件；旧工作台可调用 `POST /api/telemetry/backfill/<工作台ID>`，从已保存的阶段、卡片、资产和用户反馈生成幂等回补事件。采集不包含 API key、Cookie、base64、完整对话、模型思考或本机绝对文件路径。
+
 ### 全新电脑一键安装（推荐）
 
 如果电脑没有安装 Node.js、Python、FFmpeg 或其他开发工具，在项目目录中运行：

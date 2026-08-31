@@ -4,6 +4,19 @@
 
 ## 未发布
 
+### 逐镜视频启动修复
+
+- 修复已确认分镜图以“图片07：https://...”形式保存时，Novvy 和 ImaRouter 只接受 URL 开头字符串而误判为 0 张分镜图的问题；两条视频路径现在都会从带编号说明的字段中提取真实 URL。
+- “确认并生成逐镜视频”请求失败时新增明确弹窗，不再把后端错误藏在卡片修改输入框的校验提示里。
+
+### Novvy 创意过程采集
+
+- 选择性融合 `novvy-creative-record` 的 run、stage、asset、feedback 与完成状态契约，新增项目本地 `.agents/skills/novvy-creative-record`；不覆盖 Contextual Studio 已定制的创意、分镜、逐镜视频和双供应商流程。
+- 新增 SQLite `creative_telemetry_runs` 与可靠 `creative_telemetry_outbox`：事件先本地落库，使用幂等键去重，远端失败后指数退避，采集不可用不阻塞业务。
+- 工作台创建时记录短剧与游戏分析摘要；创意助手阶段结果、落版图生成与确认、人物参考组确认、最终视频及用户审核反馈由后端确定性记录，不依赖 Codex 主动调用采集工具。
+- 新增可选环境变量、`GET /api/telemetry/status` 和 `POST /api/telemetry/retry`；不配置远端时事件仅保留本地，不上传 API key、Cookie、base64、完整聊天、模型推理或本机绝对路径。
+- 新增 `POST /api/telemetry/backfill/<工作台ID>`，可从旧工作台已保存的消息、候选卡、公开资产和确认状态生成稳定幂等回补事件，多次执行不会重复入队。
+
 ### 人物参考图上传环境修复
 
 - 恢复 PNG/JPEG 在缺少 Pillow 时通过标准文件头读取尺寸的兼容路径，避免人物参考图尚未上传就阻断生成。

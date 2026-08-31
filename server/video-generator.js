@@ -28,6 +28,11 @@ function allCards(sessionId) {
   return db.prepare("SELECT cards_json FROM creative_messages WHERE session_id=? AND cards_json IS NOT NULL ORDER BY id DESC").all(sessionId)
     .flatMap((row) => { try { return JSON.parse(row.cards_json || "[]"); } catch { return []; } });
 }
+
+function referenceUrl(value) {
+  if (typeof value !== "string") return "";
+  return value.match(/https?:\/\/[^\s，；]+|\/api\/screenshots\/\d+/)?.[0] || "";
+}
 function append(sessionId, content, card) {
   db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,created_at) VALUES (?,'assistant',?,?,?)")
     .run(sessionId, content, JSON.stringify([card]), now());
@@ -42,10 +47,10 @@ export function startVideoGeneration(sessionId, cardId) {
   const plan = parseStoryboardVideoPlan(card);
   const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
   const referenceGroup = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "reference_panel" && item.status === "confirmed");
-  const referenceUrls = (referenceGroup?.details || []).map((item) => item.content).filter((value) => typeof value === "string" && (/^https?:\/\//.test(value) || /^\/api\/screenshots\/\d+$/.test(value)));
+  const referenceUrls = (referenceGroup?.details || []).map((item) => referenceUrl(item.content)).filter(Boolean);
   if (!referenceUrls.length) throw new Error("已确认人物参考图组为空");
   const confirmedStoryboard = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "storyboard" && item.status === "confirmed");
-  const storyboardUrls = (confirmedStoryboard?.details || []).map((item) => item.content).filter((value) => typeof value === "string" && (/^https?:\/\//.test(value) || /^\/api\/screenshots\/\d+$/.test(value)));
+  const storyboardUrls = (confirmedStoryboard?.details || []).map((item) => referenceUrl(item.content)).filter(Boolean);
   if (storyboardUrls.length < plan.shots.length) throw new Error(`已确认分镜图不足：需要 ${plan.shots.length} 张，当前只有 ${storyboardUrls.length} 张`);
   const generateAudio = !/OutputAudioSensitiveContentDetected|output audio.*copyright/i.test(session.error_message || "");
   const timestamp = now();

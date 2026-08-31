@@ -3,6 +3,7 @@ import { Codex } from "@openai/codex-sdk";
 import { creativeAssets, creativeScreenshotAssets, db, now } from "./database.js";
 import { prepareCreativeAttachments } from "./chat-media.js";
 import { productionProfile } from "./production-profile.js";
+import { recordCreativeStage } from "./creative-telemetry.js";
 
 const model = process.env.CODEX_ANALYSIS_MODEL || "";
 const stringArray = { type: "array", items: { type: "string" } };
@@ -220,6 +221,17 @@ export async function runCreativeTurn(sessionId, userMessage, initial = false, a
     db.prepare("INSERT INTO creative_messages (session_id, role, content, cards_json, created_at) VALUES (?, 'assistant', ?, ?, ?)").run(sessionId, output.assistantMessage, JSON.stringify(output.assistantCards || []), timestamp);
     db.prepare("UPDATE creative_sessions SET stage = ?, workspace_json = ?, codex_thread_id = ?, updated_at = ? WHERE id = ?")
       .run(output.stage, JSON.stringify(output.workspace), thread.id, timestamp, sessionId);
+    const cardKinds = new Set((output.assistantCards || []).map((card) => card.kind));
+    const telemetryStage = cardKinds.has("video_prompt") ? "video_generation"
+      : cardKinds.has("storyboard") || cardKinds.has("storyboard_image") ? "creative_plan"
+        : cardKinds.has("final_card") ? "final_card"
+          : cardKinds.has("concept") ? (output.workspace?.selectedConceptIds?.length ? "creative_plan" : "recommendation")
+            : "";
+    if (telemetryStage) recordCreativeStage(sessionId, telemetryStage, {
+      studioStage: output.stage,
+      nextAction: output.nextAction,
+      cards: (output.assistantCards || []).map((card) => ({ id: card.id, kind: card.kind, title: card.title, summary: card.summary, status: card.status })),
+    }, { status: output.stage?.includes("review") || output.stage === "concept_selected" ? "awaiting_confirmation" : "completed", key: `session:${sessionId}:message:${timestamp}:stage:${telemetryStage}` });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     db.prepare("INSERT INTO creative_messages (session_id, role, content, created_at) VALUES (?, 'assistant', ?, ?)").run(sessionId, `本轮处理失败：${message}`, now());

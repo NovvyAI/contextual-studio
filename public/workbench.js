@@ -700,6 +700,7 @@ function renderChatCard(card, disabled) {
       } catch (error) {
         adopt.disabled = false; adopt.textContent = adoptLabel;
         feedback.setCustomValidity(error.message); feedback.reportValidity(); feedback.setCustomValidity("");
+        alert(`视频任务没有启动：${error.message}`);
         return;
       }
     }
