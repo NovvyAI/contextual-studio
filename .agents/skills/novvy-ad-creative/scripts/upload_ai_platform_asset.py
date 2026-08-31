@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Upload Novvy AI Platform assets through HTTP endpoints, without MCP upload."""
 
+from __future__ import annotations
+
 import argparse
 import hashlib
 import json

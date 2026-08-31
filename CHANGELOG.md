@@ -4,6 +4,17 @@
 
 ## 未发布
 
+### 创意助手 Codex 会话工作区写权限
+
+- 创意工作台主 Codex 会话由 `read-only` 改为 `workspace-write`，允许在用户明确要求时写入项目目录和项目 SQLite 数据库，避免操作因 `attempt to write a readonly database` 中断。
+- 权限仍限定在项目工作区，保持 `approvalPolicy: never` 与网络关闭；短剧分析、游戏分析和视频辅助线程继续只读，不扩大无关流程的权限。
+
+### 分镜图跨电脑 Python 与失败重试修复
+
+- 修复新电脑可能直接调用系统 Python 3.9，导致上传脚本在 `int | None` 类型注解处、远程请求前崩溃的问题；本地图片上传现在强制通过项目 Skill resolver 选择 Python 3.10+，优先使用 `CONTEXTUAL_PYTHON` 或项目 `.venv`。
+- 上传脚本启用延迟类型注解，避免旧解释器仅在导入 `UploadError` 时产生难以理解的 `unsupported operand type(s) for |`；找不到合格 Python 时改为明确提示重新运行环境安装脚本。
+- 分镜图组存在缺图或失败卡时，统一确认继续禁用并显示“重试失败的分镜图”按钮；重试直接走后端，只处理失败镜头并保留成功图片，不再要求用户在只读 Novvy 对话中输入“重试上传”。
+
 ### 新电脑自动安装 Novvy 插件
 
 - `install_environment.sh` 默认安装 Codex CLI，从 `NovvyAI/skills` 浅克隆或更新 `novvy-ad-creative`，再执行插件自己的幂等安装脚本；不依赖开发者电脑上的绝对路径。

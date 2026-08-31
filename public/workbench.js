@@ -1141,6 +1141,7 @@ function renderStoryboardGroupActions(session, storyboardCards) {
   const approve = element("button", "character-group-approve", "统一确认这组分镜图");
   approve.type = "button";
   approve.classList.add("workflow-confirm-action"); approve.dataset.workflowStages = "storyboard_review"; approve.dataset.workflowLabel = "统一确认这组分镜图"; approve.dataset.workflowPriority = "100";
+  const failedCards = storyboardCards.filter((card) => !card.previewUrl && card.status !== "generating");
   approve.disabled = session.stage === "working" || !storyboardCards.length || storyboardCards.some((card) => !card.previewUrl || card.status === "generating");
   approve.addEventListener("click", async () => {
     try {
@@ -1150,6 +1151,17 @@ function renderStoryboardGroupActions(session, storyboardCards) {
     } catch (error) { approve.disabled = false; approve.textContent = "统一确认这组分镜图"; alert(error.message); }
   });
   panel.append(approve);
+  if (failedCards.length) {
+    const retry = element("button", "character-group-retry", `重试失败的分镜图（${failedCards.length} 张）`); retry.type = "button"; retry.disabled = session.stage === "working";
+    retry.addEventListener("click", async () => {
+      try {
+        retry.disabled = true; retry.textContent = "正在重试…";
+        await api(`/api/creative/sessions/${sessionId}/storyboards/retry`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cardIds: failedCards.map((card) => card.id) }) });
+        await refreshSession();
+      } catch (error) { retry.disabled = false; retry.textContent = `重试失败的分镜图（${failedCards.length} 张）`; alert(error.message); }
+    });
+    panel.append(retry);
+  }
   return panel;
 }
 

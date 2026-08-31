@@ -133,7 +133,7 @@ export async function runCreativeTurn(sessionId, userMessage, initial = false, a
   try {
     const codex = new Codex();
     const preparedAttachments = await prepareCreativeAttachments(attachments);
-    const options = { ...(model ? { model } : {}), workingDirectory: path.resolve("."), ...(preparedAttachments.directories.length ? { additionalDirectories: preparedAttachments.directories } : {}), skipGitRepoCheck: true, sandboxMode: "read-only", approvalPolicy: "never", networkAccessEnabled: false };
+    const options = { ...(model ? { model } : {}), workingDirectory: path.resolve("."), ...(preparedAttachments.directories.length ? { additionalDirectories: preparedAttachments.directories } : {}), skipGitRepoCheck: true, sandboxMode: "workspace-write", approvalPolicy: "never", networkAccessEnabled: false };
     const thread = session.codex_thread_id ? codex.resumeThread(session.codex_thread_id, options) : codex.startThread(options);
     const existingWorkspace = session.workspace_json || "尚未建立";
     const input = initial

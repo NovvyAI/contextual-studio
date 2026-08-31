@@ -12,7 +12,7 @@ import { approveFinalCard, startFinalCardGeneration, startFinalCardRegeneration 
 import { approveCharacterReferences, startCharacterRegeneration, startCustomCharacterGeneration } from "./character-generator.js";
 import { startVideoGeneration } from "./video-generator.js";
 import { resumeImaRouterVideoGeneration, startImaRouterVideoGeneration } from "./imarouter-video-generator.js";
-import { approveStoryboardImages, startStoryboardImageGeneration, startStoryboardImageRegeneration, startStoryboardImageRegenerationByNumber } from "./storyboard-generator.js";
+import { approveStoryboardImages, retryFailedStoryboardImages, startStoryboardImageGeneration, startStoryboardImageRegeneration, startStoryboardImageRegenerationByNumber } from "./storyboard-generator.js";
 import { approveAndFinalizeVideoShots, approveFinalVideo } from "./video-shot-review.js";
 import { generatedVideoPath } from "./video-finalizer.js";
 import { productionProfile } from "./production-profile.js";
@@ -394,6 +394,14 @@ const server = http.createServer(async (req, res) => {
       const id = Number(storyboardApproveMatch[1]);
       const body = JSON.parse((await requestBody(req)).toString("utf8") || "{}");
       approveStoryboardImages(id, body.cardIds);
+      return json(res, 202, { id, status: "working" });
+    }
+
+    const storyboardRetryMatch = url.pathname.match(/^\/api\/creative\/sessions\/(\d+)\/storyboards\/retry$/);
+    if (req.method === "POST" && storyboardRetryMatch) {
+      const id = Number(storyboardRetryMatch[1]);
+      const body = JSON.parse((await requestBody(req)).toString("utf8") || "{}");
+      retryFailedStoryboardImages(id, body.cardIds);
       return json(res, 202, { id, status: "working" });
     }
 

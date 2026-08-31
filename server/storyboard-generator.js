@@ -121,6 +121,29 @@ export function approveStoryboardImages(sessionId, cardIds) {
   import("./creative-agent.js").then(({ runCreativeTurn }) => runCreativeTurn(sessionId, `已确认 ${storyboardId} 及其逐镜分镜图片。现在生成正式 video_prompt 审核卡；保留全部历史内容，不提交视频生成。`, false));
 }
 
+export function retryFailedStoryboardImages(sessionId, cardIds) {
+  const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
+  if (!session) throw new Error("创意工作台不存在");
+  if (session.stage === "working") throw new Error("当前仍有任务正在处理");
+  const latest = new Map();
+  cards(sessionId).forEach((card) => { if (!latest.has(card.id)) latest.set(card.id, card); });
+  const failedCards = [...new Set((cardIds || []).map(String))].map((id) => latest.get(id))
+    .filter((card) => card?.kind === "storyboard_image" && !card.previewUrl);
+  if (!failedCards.length) throw new Error("当前没有需要重试的分镜图");
+  const storyboardId = failedCards[0].details?.find((item) => item.label === "所属方案")?.content;
+  const storyboard = latest.get(storyboardId);
+  if (!storyboard || storyboard.kind !== "storyboard") throw new Error("找不到失败分镜所属的文字分镜方案");
+  if (failedCards.some((card) => card.details?.find((item) => item.label === "所属方案")?.content !== storyboardId)) throw new Error("失败分镜不属于同一套方案");
+  const refs = referenceUrls(session);
+  if (!refs.length) throw new Error("已确认人物参考图组为空");
+  const timestamp = now();
+  const placeholders = failedCards.map((card) => ({ ...card, previewUrl: "", status: "generating", details: (card.details || []).filter((item) => item.label !== "失败原因") }));
+  db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, `重试 ${storyboardId} 中失败的 ${failedCards.length} 张分镜图`, timestamp);
+  append(sessionId, `正在只重试 ${failedCards.length} 张失败分镜图；已经生成成功的图片保持不变。`, placeholders);
+  db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, sessionId);
+  generateGroup(sessionId, storyboard, placeholders, refs);
+}
+
 async function generateImage(prompt, imageUrls) {
   const client = new NovvyMcpClient(); await client.initialize();
   const created = unpackToolResult(await client.callTool("novvy_create_image_generation", { model: "gpt-image-2", prompt, imageUrls, inputFidelity: "high", n: 1, outputFormat: "png", quality: "high", includeRaw: false }));

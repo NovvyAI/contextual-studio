@@ -49,8 +49,17 @@ export async function publicInputUrl(previewUrl) {
 async function uploadLocalImage(inputPath, slot) {
   const script = path.resolve(".agents/skills/novvy-ad-creative/scripts/upload_ai_platform_asset.py");
   const projectPython = path.resolve(".venv/bin/python");
-  const python = process.env.CONTEXTUAL_PYTHON || (fs.existsSync(projectPython) ? projectPython : "python3");
-  const { stdout } = await execFileAsync(python, [script, "--mode", "asset", "--kind", "image", "--mcp-json", mcpConfigPath(), "--slot", `${slot}=${inputPath}`], { maxBuffer: 4 * 1024 * 1024 });
+  const resolver = path.resolve(".agents/skills/novvy-ad-creative/scripts/novvy_python.sh");
+  const preferredPython = process.env.CONTEXTUAL_PYTHON || (fs.existsSync(projectPython) ? projectPython : "");
+  let python;
+  try {
+    const resolved = await execFileAsync(resolver, [], { env: { ...process.env, ...(preferredPython ? { NOVVY_PYTHON: preferredPython } : {}) }, maxBuffer: 1024 * 1024 });
+    python = resolved.stdout.trim();
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`图片上传需要 Python 3.10 或更高版本。请重新运行 ./install_environment.sh 后重试。${detail ? ` (${detail})` : ""}`);
+  }
+  const { stdout } = await execFileAsync(python, [script, "--mode", "asset", "--kind", "image", "--mcp-json", mcpConfigPath(), "--slot", `${slot}=${inputPath}`], { env: { ...process.env, NOVVY_PYTHON: python }, maxBuffer: 4 * 1024 * 1024 });
   const result = JSON.parse(stdout);
   const url = result.videoPayloadHint?.imageUrls?.[0] || result.referenceUrls?.[0];
   if (!url) throw new Error("图片上传后没有返回公开地址");
