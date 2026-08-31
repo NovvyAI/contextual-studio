@@ -8,6 +8,7 @@
 
 - 逐镜视频首次提交仍使用对应分镜图和已采用人物参考图；若 ImaRouter 明确返回 `InputImageSensitiveContentDetected.PrivacyInformation` 或 `may contain real person`，会根据 `content[n]` 定位实际输入图片、移除该图，并仅自动重试一次。
 - 自动重试会在对话中说明移除了哪张分镜图或人物参考图，并在成功后的逐镜卡片记录降级策略；其他错误和第二次失败不会无限重试。
+- 若某一镜明确触发输出音频版权限制，仅把该镜通过 `metadata.audio=false` 降级为无音频并自动重试一次；已完成镜头和其他镜头不重做，成功卡片会标明该镜为无音频。
 
 ### 逐镜视频启动修复
 

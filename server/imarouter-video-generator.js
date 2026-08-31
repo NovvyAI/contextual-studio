@@ -60,6 +60,10 @@ function privacyReferenceIndex(message, referenceCount) {
   return imageIndex >= 0 && imageIndex < referenceCount ? imageIndex : -1;
 }
 
+function isOutputAudioCopyrightFailure(message) {
+  return /OutputAudioSensitiveContentDetected|output audio.*copyright|output audio may be related to copyright restrictions/i.test(message || "");
+}
+
 async function createAssetReference(baseUrl, headers, imageUrl) {
   const group = await request(`${baseUrl}/v1/assets/group/create`, {
     method: "POST", headers, body: JSON.stringify({ name: "contextual-studio", group_type: "AIGC", project_name: "default", model: "seedance-upload" }),
@@ -179,17 +183,25 @@ async function generate(sessionId, card, plan, reference) {
       const referenceLabels = [`分镜图 ${shot.order}`, ...characterReferences.map((_, index) => `人物参考图 ${index + 1}`)];
       let activeImageReferences = [...allImageReferences];
       let removedPrivacyReference = "";
+      let generateAudio = true;
+      let audioDowngraded = false;
+      const submitShot = async (prompt) => request(`${baseUrl}/v1/videos`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ model: VIDEO_MODEL, prompt, duration: shot.durationSeconds, aspect_ratio: "9:16", metadata: { resolution: "720p", audio: generateAudio }, images: activeImageReferences }),
+      });
       if (!taskId) {
         db.prepare("INSERT INTO creative_video_shots (session_id,prompt_card_id,shot_id,shot_order,version,provider,duration_seconds,prompt,status,created_at,updated_at) VALUES (?,?,?,?,?,'imarouter',?,?,'generating',?,?)")
           .run(sessionId, card.id, shot.shotId, shot.order, version, shot.durationSeconds, shot.promptEn, createdAt, createdAt);
         const referenceInstruction = `The first reference image is the approved storyboard frame for this exact shot and controls composition, camera angle, scene layout, action, pose, and object placement. The following ${characterReferences.length} images control character identity, facial features, age, hairstyle, costume, and accessories. Keep the same identities throughout. `;
-        const created = await request(`${baseUrl}/v1/videos`, { method: "POST", headers, body: JSON.stringify({ model: VIDEO_MODEL, prompt: `${referenceInstruction}${shot.promptEn}`, duration: shot.durationSeconds, aspect_ratio: "9:16", metadata: { resolution: "720p" }, images: activeImageReferences }) });
+        const created = await submitShot(`${referenceInstruction}${shot.promptEn}`);
         taskId = created?.id || created?.task_id;
         if (!taskId) throw new Error(`${shot.shotId}：ImaRouter 未返回视频任务 ID`);
         db.prepare("UPDATE creative_video_shots SET task_id=?,updated_at=? WHERE session_id=? AND prompt_card_id=? AND shot_id=? AND version=?").run(taskId, now(), sessionId, card.id, shot.shotId, version);
       }
       let previewUrl = "";
-      for (let attempt = 0; attempt < 2 && !previewUrl; attempt += 1) {
+      let privacyRetried = false;
+      for (let attempt = 0; attempt < 3 && !previewUrl; attempt += 1) {
         const deadline = Date.now() + 15 * 60_000;
         let failureMessage = "";
         while (Date.now() < deadline) {
@@ -201,25 +213,36 @@ async function generate(sessionId, card, plan, reference) {
         }
         if (previewUrl) break;
         if (!failureMessage) throw new Error(`${shot.shotId} 查询超时或未返回视频地址`);
-        const removeIndex = attempt === 0 ? privacyReferenceIndex(failureMessage, activeImageReferences.length) : -1;
-        if (removeIndex < 0 || activeImageReferences.length <= 1) throw new Error(`${shot.shotId}：${failureMessage}`);
-        removedPrivacyReference = referenceLabels[removeIndex] || `参考图 ${removeIndex + 1}`;
-        activeImageReferences.splice(removeIndex, 1);
-        referenceLabels.splice(removeIndex, 1);
-        const firstIsStoryboard = activeImageReferences[0] === storyboardReference;
-        const retryInstruction = firstIsStoryboard
-          ? `The first reference image is the approved storyboard frame for this exact shot. Use the remaining references only for character identity. `
-          : `The storyboard reference was excluded by the provider privacy check. Use the remaining fictional character references only for identity consistency and follow the written shot description for composition. `;
-        db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
-          .run(sessionId, `${shot.shotId} 的 ${removedPrivacyReference} 触发真人隐私检测，Novvy 已自动移除该图并重试一次。`, now());
-        const retried = await request(`${baseUrl}/v1/videos`, { method: "POST", headers, body: JSON.stringify({ model: VIDEO_MODEL, prompt: `${retryInstruction}${shot.promptEn}`, duration: shot.durationSeconds, aspect_ratio: "9:16", metadata: { resolution: "720p" }, images: activeImageReferences }) });
+        let retryInstruction = "";
+        const removeIndex = !privacyRetried ? privacyReferenceIndex(failureMessage, activeImageReferences.length) : -1;
+        if (removeIndex >= 0 && activeImageReferences.length > 1) {
+          privacyRetried = true;
+          removedPrivacyReference = referenceLabels[removeIndex] || `参考图 ${removeIndex + 1}`;
+          activeImageReferences.splice(removeIndex, 1);
+          referenceLabels.splice(removeIndex, 1);
+          const firstIsStoryboard = activeImageReferences[0] === storyboardReference;
+          retryInstruction = firstIsStoryboard
+            ? `The first reference image is the approved storyboard frame for this exact shot. Use the remaining references only for character identity. `
+            : `The storyboard reference was excluded by the provider privacy check. Use the remaining fictional character references only for identity consistency and follow the written shot description for composition. `;
+          db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
+            .run(sessionId, `${shot.shotId} 的 ${removedPrivacyReference} 触发真人隐私检测，Novvy 已自动移除该图并重试一次。`, now());
+        } else if (!audioDowngraded && isOutputAudioCopyrightFailure(failureMessage)) {
+          audioDowngraded = true;
+          generateAudio = false;
+          retryInstruction = `Generate a silent video with no music, dialogue, voice, or sound effects. `;
+          db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
+            .run(sessionId, `${shot.shotId} 的生成音频触发版权限制，Novvy 仅将这一镜降级为无音频并自动重试；其他镜头不受影响。`, now());
+        } else {
+          throw new Error(`${shot.shotId}：${failureMessage}`);
+        }
+        const retried = await submitShot(`${retryInstruction}${shot.promptEn}`);
         taskId = retried?.id || retried?.task_id;
         if (!taskId) throw new Error(`${shot.shotId}：隐私降级重试未返回视频任务 ID`);
         db.prepare("UPDATE creative_video_shots SET task_id=?,updated_at=? WHERE session_id=? AND prompt_card_id=? AND shot_id=? AND version=?").run(taskId, now(), sessionId, card.id, shot.shotId, version);
       }
       if (!previewUrl) throw new Error(`${shot.shotId} 查询超时或未返回视频地址`);
       db.prepare("UPDATE creative_video_shots SET status='completed',result_url=?,updated_at=? WHERE session_id=? AND prompt_card_id=? AND shot_id=? AND version=?").run(previewUrl, now(), sessionId, card.id, shot.shotId, version);
-      append(sessionId, `${shot.shotId} V${version} 已生成，可以单独播放复审。`, shotCard(card, shot, { previewUrl, status: "completed", version, details: [...shotCard(card, shot).details, { label: "版本", content: `V${version}` }, { label: "视频供应商", content: `ImaRouter / ${VIDEO_MODEL_LABEL}` }, { label: "参考策略", content: removedPrivacyReference ? `已移除 ${removedPrivacyReference} 后自动重试成功` : `对应分镜图 ${shot.order} + ${characterReferences.length} 张人物参考图` }, { label: "视频任务", content: taskId }] }));
+      append(sessionId, `${shot.shotId} V${version} 已生成，可以单独播放复审。`, shotCard(card, shot, { previewUrl, status: "completed", version, details: [...shotCard(card, shot).details, { label: "版本", content: `V${version}` }, { label: "视频供应商", content: `ImaRouter / ${VIDEO_MODEL_LABEL}` }, { label: "参考策略", content: removedPrivacyReference ? `已移除 ${removedPrivacyReference} 后自动重试成功` : `对应分镜图 ${shot.order} + ${characterReferences.length} 张人物参考图` }, { label: "音频", content: audioDowngraded ? "该镜头因版权审核自动降级为无音频" : "生成同步音频" }, { label: "视频任务", content: taskId }] }));
     }
     append(sessionId, "全部内容镜头已经生成。请逐镜播放复审；确认后再按顺序拼接，并追加已确认的原始落版图。", { ...card, previewUrl: "", status: "completed", details: [...(card.details || []).filter((item) => item.label !== "失败原因"), { label: "逐镜状态", content: `${plan.shots.length} 个镜头已完成，等待统一确认拼接` }] });
     db.prepare("UPDATE creative_sessions SET stage='video_review',error_message=NULL,updated_at=? WHERE id=?").run(now(), sessionId);
