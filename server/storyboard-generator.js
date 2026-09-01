@@ -1,5 +1,6 @@
 import { db, now, resolveAssetReferences } from "./database.js";
 import { publicInputUrl } from "./character-generator.js";
+import { preparePngEditSource, uploadPngEditInput, validatePngEditInputs } from "./image-mask.js";
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -116,7 +117,7 @@ export function startStoryboardImageGeneration(sessionId, storyboardId) {
   generateGroup(sessionId, storyboard, placeholders, refs);
 }
 
-export function startStoryboardImageRegeneration(sessionId, cardId, feedback) {
+export function startStoryboardImageRegeneration(sessionId, cardId, feedback, editInput = null) {
   const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
   if (!session) throw new Error("创意工作台不存在");
   const activeJobs = activeStoryboardImageJobs(sessionId);
@@ -127,11 +128,12 @@ export function startStoryboardImageRegeneration(sessionId, cardId, feedback) {
   if (card.status === "generating") throw new Error("这张分镜图已经在生成中");
   const instruction = String(feedback || "").trim();
   if (!instruction) throw new Error("请填写分镜图修改意见");
+  const edit = validatePngEditInputs(editInput);
   const timestamp = now();
   db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, `修改分镜图 ${cardId}：${instruction}`, timestamp);
   append(sessionId, "收到，我会以当前分镜图为基础只修改这一个镜头。", [{ ...card, previewUrl: "", status: "generating" }]);
   db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, sessionId);
-  regenerateOne(sessionId, card, instruction, referenceUrls(session));
+  regenerateOne(sessionId, card, instruction, referenceUrls(session), edit);
 }
 
 export function startStoryboardImageRegenerationByNumber(sessionId, shotNumber, feedback) {
@@ -199,9 +201,9 @@ export function retryFailedStoryboardImages(sessionId, cardIds) {
   generateGroup(sessionId, storyboard, placeholders, refs);
 }
 
-async function generateImage(prompt, imageUrls) {
+async function generateImage(prompt, imageUrls, maskUrl = "") {
   const client = new NovvyMcpClient(); await client.initialize();
-  const created = unpackToolResult(await client.callTool("novvy_create_image_generation", { model: "gpt-image-2", prompt, imageUrls, inputFidelity: "high", n: 1, outputFormat: "png", quality: "high", includeRaw: false }));
+  const created = unpackToolResult(await client.callTool("novvy_create_image_generation", { model: "gpt-image-2", prompt, imageUrls, ...(maskUrl ? { maskUrl } : {}), inputFidelity: "high", n: 1, outputFormat: "png", quality: "high", includeRaw: false }));
   const taskId = valueFor(created, ["taskId", "task_id", "id"]); const providerSessionId = valueFor(created, ["sessionId", "session_id"]);
   if (!taskId && !providerSessionId) throw new Error("Novvy 未返回分镜图任务 ID");
   let result = created; const deadline = Date.now() + 20 * 60_000;
@@ -241,19 +243,22 @@ async function generateGroup(sessionId, storyboard, placeholders, referenceSourc
   }
 }
 
-async function regenerateOne(sessionId, card, feedback, fallbackReferences) {
+async function regenerateOne(sessionId, card, feedback, fallbackReferences, edit = { mask: null, source: null }) {
   try {
-    const sources = card.previewUrl ? [card.previewUrl] : fallbackReferences;
+    const maskUrl = await uploadPngEditInput(edit.mask, publicInputUrl, "mask");
+    const sourceUrl = card.previewUrl ? await preparePngEditSource(card.previewUrl, edit.mask, publicInputUrl) : "";
+    const sources = card.previewUrl ? [sourceUrl] : fallbackReferences;
     const referencedAssets = resolveAssetReferences(sessionId, feedback);
     sources.push(...referencedAssets.map((asset) => asset.url));
     const uploaded = [];
     for (const source of [...new Set(sources)]) uploaded.push(await publicInputUrl(source));
     const assetGuide = referencedAssets.length ? ` Numbered assets explicitly referenced by the user are supplied after the current storyboard image: ${referencedAssets.map((asset) => `${asset.reference} (${asset.title})`).join(", ")}. Apply only the person, pose, scene, composition, object, or style role assigned by the user to each asset.` : "";
+    const maskGuide = maskUrl ? " A PNG alpha mask is supplied for the first image. Modify only its transparent region and preserve the unmasked composition, characters, lighting, continuity, and rendering style." : "";
     const prompt = card.previewUrl
-      ? `Edit the first supplied storyboard key frame according to the user's instruction: ${feedback}.${assetGuide} Preserve every element not mentioned by the user. Do not blend identities unless explicitly requested. Return one clean vertical 9:16 cinematic frame. No collage, captions, labels, shot numbers, borders, subtitles, logos, or watermark.`
+      ? `Edit the first supplied storyboard key frame according to the user's instruction: ${feedback}.${maskGuide}${assetGuide} Preserve every element not mentioned by the user. Do not blend identities unless explicitly requested. Return one clean vertical 9:16 cinematic frame. No collage, captions, labels, shot numbers, borders, subtitles, logos, or watermark.`
       : `Create one vertical 9:16 cinematic storyboard key frame for this shot: ${card.summary}. User instruction: ${feedback}.${assetGuide} Preserve the supplied character identities, costumes and accessories. No collage, captions, labels, shot numbers, borders, subtitles, logos, or watermark.`;
-    const generated = await generateImage(prompt, uploaded);
-    append(sessionId, `${card.title} 已按意见生成新版，图片已在原卡片中更新。`, [{ ...card, previewUrl: generated.previewUrl, status: "candidate", version: Number(card.version || 1) + 1, details: [...card.details, { label: "本版修改", content: feedback }, ...(referencedAssets.length ? [{ label: "引用资产", content: referencedAssets.map((asset) => asset.reference).join("、") }] : []), { label: "生成任务", content: generated.taskId }] }]);
+    const generated = await generateImage(prompt, uploaded, maskUrl);
+    append(sessionId, `${card.title} 已按意见生成新版，图片已在原卡片中更新。`, [{ ...card, previewUrl: generated.previewUrl, status: "candidate", version: Number(card.version || 1) + 1, details: [...card.details, { label: "本版修改", content: feedback }, ...(edit.mask ? [{ label: "局部编辑蒙版", content: `${edit.mask.width}×${edit.mask.height} PNG alpha` }] : []), ...(referencedAssets.length ? [{ label: "引用资产", content: referencedAssets.map((asset) => asset.reference).join("、") }] : []), { label: "生成任务", content: generated.taskId }] }]);
     finishStoryboardImageJob(sessionId, null);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
