@@ -12,8 +12,8 @@ function allCards(sessionId) {
     });
 }
 
-function cardPrompt(card) {
-  const detail = (card.details || []).find((item) => /(GPT-image-2.*(提示词|prompt)|英文.*提示词|English.*prompt)/i.test(item.label));
+export function finalCardPrompt(card) {
+  const detail = (card.details || []).find((item) => /(GPT-image-2.*(提示词|prompt)|英文.*提示词|English.*prompt|后续图片生成提示词|图片生成提示词)/i.test(String(item.label || "")));
   return String(detail?.content || "").trim();
 }
 
@@ -30,7 +30,7 @@ export function startFinalCardGeneration(sessionId, cardId) {
   if (workspace.productionPlan?.finalCardStatus !== "ready_to_generate") throw new Error("真实落版图需在末镜分镜图确认后生成");
   const card = allCards(sessionId).find((item) => item.id === cardId && item.kind === "final_card");
   if (!card) throw new Error("找不到这张落版图候选卡");
-  const prompt = cardPrompt(card);
+  const prompt = finalCardPrompt(card);
   if (!prompt) throw new Error("这张候选卡缺少 GPT-image-2 英文提示词");
 
   const timestamp = now();
