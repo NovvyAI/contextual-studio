@@ -614,6 +614,51 @@ async function regenerateConcept(concept, feedback, textarea) {
   return true;
 }
 
+function nextCustomConceptId(concepts = []) {
+  const used = new Set(concepts.map((concept) => String(concept.id || "").toUpperCase()));
+  for (let code = "E".charCodeAt(0); code <= "Z".charCodeAt(0); code += 1) {
+    const id = String.fromCharCode(code);
+    if (!used.has(id)) return id;
+  }
+  return "Z";
+}
+
+function renderCustomConceptCard(session, workspace) {
+  const id = nextCustomConceptId(workspace.concepts || []);
+  const card = element("article", "concept-card custom-concept-card");
+  card.append(element("div", "concept-id", "+"), element("strong", "", "自定义创意方案"), element("p", "", "四个候选都不满意？写下你的核心想法，让 Novvy 结合当前短剧与游戏补成一套可审核方案。"));
+  const label = element("label", "", `你的方案想法 · 将生成方案 ${id}`);
+  const input = element("textarea", "concept-feedback custom-concept-input");
+  input.rows = 5;
+  input.placeholder = "例如：不要从剧尾直接切游戏。我希望女主在葬礼后整理遗物时，把三件不同遗物放入盒子，对应游戏中的三种物品整理玩法；情绪保持克制，不要搞笑。";
+  input.disabled = session.stage === "working";
+  const generate = element("button", "concept-regenerate custom-concept-generate", `生成自定义方案 ${id}`);
+  generate.type = "button";
+  generate.disabled = session.stage === "working";
+  generate.addEventListener("click", async () => {
+    const idea = input.value.trim();
+    if (!idea) {
+      input.setCustomValidity("请先写下你的创意想法");
+      input.reportValidity();
+      input.setCustomValidity("");
+      return;
+    }
+    try {
+      generate.disabled = true;
+      generate.textContent = "正在生成…";
+      await sendMessage(`请根据下面的用户想法新增自定义创意方案 ${id}。只新增编号 ${id} 的完整候选，保留 A-D 和其他已有方案、已确认成果及制作状态不变；不要选择或确认该方案，不要生成落版图，继续停留在创意方案审核阶段。\n\n用户自定义想法：\n${idea}`);
+    } catch (error) {
+      generate.disabled = false;
+      generate.textContent = `生成自定义方案 ${id}`;
+      input.setCustomValidity(error.message);
+      input.reportValidity();
+      input.setCustomValidity("");
+    }
+  });
+  card.append(label, input, generate);
+  return card;
+}
+
 function conceptChatCards(workspace) {
   return (workspace?.concepts || []).map((concept) => ({
     id: `concept-${concept.id}`,
@@ -1292,6 +1337,7 @@ function renderCanvas(session) {
     card.append(summary, body);
     concepts.append(card);
   });
+  if (!hasSelectedConcept) concepts.append(renderCustomConceptCard(session, workspace));
   const conceptArchive = canvasDetails(element("details", "current-concept-archive"), "concept-archive", presentation.stage === "concept_review");
   conceptArchive.append(element("summary", "", presentation.stage === "concept_review" ? "创意方案候选" : `创意方案回看${workspace.selectedConceptIds?.length ? ` · 已选择 ${workspace.selectedConceptIds.join("、")}` : ""}`), concepts);
   liveCard.append(conceptArchive); live.append(liveCard); flow.append(live);

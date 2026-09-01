@@ -122,6 +122,7 @@ ${screenshotIndex}
 2. 游戏受众必须影响创意角度、节奏、玩法镜头、文案语气、声音情绪和 CTA。
 2a. 创意内容时长必须可变，不能默认、暗示或固定为 12 秒。初次 concept 的 rhythm 应根据该方案完成“剧情承接→真实玩法操作→可见反馈→升级钩子”实际需要，写出建议内容时长范围及节奏依据；此时不锁死最终总时长。正式内容时长由用户确认的文字分镜逐镜 durationSeconds 相加并扣除镜间交叉淡化得到，每镜遵守生产 Profile 的 ${productionProfile.min_shot_duration_seconds}-${productionProfile.max_shot_duration_seconds} 秒范围、最多 ${productionProfile.max_shots_per_final} 镜；最后另加 ${productionProfile.final_assembly.final_card_duration_seconds} 秒落版，不占内容时长。
 3. 初次必须输出 4 个稳定编号 A/B/C/D 的候选，让用户选择；选择前不得生成落版图、上传参考图或提交视频。四个方案不能全部使用同一种创意依据：至少一个是“剧情点”，至少一个是“剧尾”。每个 concept 必须填写 creativeBasisType（只能是“剧情点”或“剧尾”）和 creativeBasisEvidence（指出具体情节、人物行动或结尾证据）。剧尾方案还必须逐项填写 tailFrameState、lastDialogue、residualEmotion、unfinishedHook；剧情点方案这四项填空字符串。不得把普通剧情点冒充剧尾，也不得只写笼统的“承接剧情”。
+3a. 用户通过自定义创意卡要求新增方案 E/F/G 等时，只根据用户想法新增该编号的一张完整 concept；A-D 和其他已有方案保持原样。自定义想法仍须结合短剧与真实游戏证据补齐 concept 全部结构字段，但不得擅自改变用户的核心意图。该操作停留在 concept_review，不得写入 selectedConceptIds、confirmedCards 或提前生成落版方案。
 4. 用户选择后才能把 selectedConceptIds 写入；后续只准备审核材料，任何消耗型生成必须明确等待用户确认。
 4a. 当用户明确选择并确认 concept 后，本轮必须立即返回 2-4 张 kind=final_card、previewUrl=""、status=candidate 的落版图方案卡，并进入落版方案审核；不能只描述“下一步会准备”。每张候选必须包含视觉构图、准确英文标题/副标题/CTA、字体层级、色彩、产品真实性边界和可直接提交给 GPT-image-2 的完整英文提示词。此时只生成文字方案卡，不调用图片生成。
 5. 产品 icon 不进入生成输入。视频参考槽位为 male_front、male_side、female_front、female_side、final_card。
@@ -134,7 +135,7 @@ ${screenshotIndex}
 12. 把自己当作正在与用户一起工作的真人创意搭档。assistantMessage 必须先直接回应用户刚说的话：是问题就先回答问题，是反馈就先表示理解并复述关键修改点，再给出下一步。语气自然、口语化、有主语，不要把内部状态当成回复。
 13. assistantMessage 禁止出现“正在整理画布”“更新画布”“处理请求”“阶段流转”“当前 thread”“JSON”“系统状态”等内部实现表达。用户只是询问能否反馈或修改时，应直接回答“当然可以”，邀请对方给出具体意见，并说明会保留旧版本方便比较；不要假装已经收到尚未提供的修改细节。
 14. 用户从某张候选卡提交“只重新生成方案 X”时，只改写 concepts 中对应编号的完整方案并保持编号稳定；其他候选、selectedConceptIds、confirmedCards、制作状态和未被点名的内容必须原样保留。该操作只是修改候选，除非用户明确说“选择”或“确认”，否则不得新增确认卡或推进制作阶段。assistantMessage 应直接说明修改后的方案和主要变化。
-15. assistantCards 用于右侧聊天中的可交互候选卡。生成创意候选、落版图候选、人物图候选、道具图候选、参考图、视频提示词或其他需要用户查看/修改的候选时，必须为本轮相关候选生成卡片；普通问答可返回空数组。创意方案卡 id 使用 concept-A、concept-B 等稳定格式。
+15. assistantCards 用于右侧聊天中的可交互候选卡。生成创意候选、落版图候选、人物图候选、道具图候选、参考图、视频提示词或其他需要用户查看/修改的候选时，必须为本轮相关候选生成卡片；普通问答可返回空数组。创意方案卡 id 使用 concept-A、concept-B、concept-E 等稳定格式。
 16. assistantCards 的 kind 必须准确：创意方案 concept、落版图 final_card、人物图 character_image、道具图 prop_image、其他参考图 reference_image、视听方向 audiovisual_direction、剧情与分镜 storyboard、视频提示词 video_prompt。不存在通用或兜底卡片类型；无法明确归类的普通回答必须返回空 assistantCards。previewUrl 只有存在真实可访问预览时才填写，否则返回空字符串。details 保留用户判断和修改所需的关键字段。
 17. 用户要求修改某一聊天卡片时，只修改该 card id 对应的候选及必要的当前工作区字段，返回同 id 的新版卡片；不得连带重写其他卡片或把修改视为确认。
 18. 对人物图、道具图、参考图或落版图的视觉修改，只有存在真实生成或处理后的图片 URL 时才能说“已经修改/已经裁切/已经去除”并替换 previewUrl。若当前创意 thread 没有实际处理图片，必须保留原 previewUrl，明确说这是待执行的修改要求，不得返回空 previewUrl 或假装图片已经完成。
@@ -182,7 +183,7 @@ export async function runCreativeTurn(sessionId, userMessage, initial = false, a
       output.nextAction = "选择导演参考或不使用导演参考，并确认视听方向";
     }
     const conceptWasConfirmed = Boolean(turnPolicy.prepareFinalCardCandidates)
-      || /我选择并确认采用候选卡\s+concept-[A-D]/i.test(userMessage);
+      || /我选择并确认采用候选卡\s+concept-[A-Z]/i.test(userMessage);
     if (conceptWasConfirmed && output.workspace?.selectedConceptIds?.length && !(output.assistantCards || []).some((card) => card.kind === "final_card")) {
       const confirmedWorkspace = output.workspace;
       const repairPrompt = `刚才已经确认创意方案，但你漏掉了必须在同一轮交付的落版图方案候选。现在立即补齐 2-4 张 assistantCards：kind 必须为 final_card，previewUrl 必须为空字符串，status 必须为 candidate。每张卡写清视觉构图、准确英文标题/副标题/CTA、字体层级、色彩、产品真实性边界，以及可直接提交给 GPT-image-2 的完整英文提示词。只准备文字候选，不调用图片生成，不要只解释下一步。完整保留当前 workspace、selectedConceptIds 和 confirmedCards。stage 使用 concept_selected，nextAction 明确为审核并选择一个落版图方案。`;
@@ -229,6 +230,36 @@ export async function runCreativeTurn(sessionId, userMessage, initial = false, a
           { label: "玩法卖点", content: revisedConcept.gameplaySellingPoint }, { label: "对白关系", content: revisedConcept.dialogueRelationship },
           { label: "目标受众", content: revisedConcept.audience }, { label: "市场传达", content: revisedConcept.marketMessage },
           { label: "情绪接续", content: revisedConcept.emotionalBridge }, { label: "转化路径", content: revisedConcept.conversionPath },
+        ],
+      }];
+    }
+    if (turnPolicy.customConceptId) {
+      const originalWorkspace = session.workspace_json ? JSON.parse(session.workspace_json) : null;
+      const customConcept = output.workspace?.concepts?.find((concept) => concept.id === turnPolicy.customConceptId);
+      if (!originalWorkspace || !customConcept) throw new Error(`Novvy 没有返回自定义方案 ${turnPolicy.customConceptId}`);
+      output.workspace = {
+        ...originalWorkspace,
+        concepts: [...(originalWorkspace.concepts || []).filter((concept) => concept.id !== turnPolicy.customConceptId), customConcept],
+        selectedConceptIds: originalWorkspace.selectedConceptIds || [],
+        confirmedCards: originalWorkspace.confirmedCards || [],
+      };
+      output.stage = "concept_review";
+      output.nextAction = `审核自定义方案 ${turnPolicy.customConceptId}，可以继续修改或选择采用`;
+      const customCardId = `concept-${turnPolicy.customConceptId}`;
+      output.assistantCards = (output.assistantCards || []).filter((card) => card.kind === "concept" && card.id === customCardId);
+      if (!output.assistantCards.length) output.assistantCards = [{
+        id: customCardId, kind: "concept", title: `${turnPolicy.customConceptId}｜${customConcept.title}`,
+        summary: customConcept.tailAdAngle, previewUrl: "", status: "candidate",
+        details: [
+          { label: "创意依据", content: customConcept.creativeBasisType }, { label: "依据证据", content: customConcept.creativeBasisEvidence },
+          ...(customConcept.creativeBasisType === "剧尾" ? [
+            { label: "尾帧状态", content: customConcept.tailFrameState }, { label: "最后对白", content: customConcept.lastDialogue },
+            { label: "残留情绪", content: customConcept.residualEmotion }, { label: "未完成钩子", content: customConcept.unfinishedHook },
+          ] : []),
+          { label: "用户自定义想法", content: userMessage }, { label: "片尾进入方式", content: customConcept.entryMethod },
+          { label: "玩法卖点", content: customConcept.gameplaySellingPoint }, { label: "目标受众", content: customConcept.audience },
+          { label: "情绪接续", content: customConcept.emotionalBridge }, { label: "转化路径", content: customConcept.conversionPath },
+          { label: "节奏", content: customConcept.rhythm },
         ],
       }];
     }

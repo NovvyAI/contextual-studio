@@ -278,7 +278,8 @@ const server = http.createServer(async (req, res) => {
         startAttachmentImageEdit(id, attachments, userMessage);
         return json(res, 202, { id, status: "working", action: "attachment_image_edit", attachmentCount: attachments.length });
       }
-      const conceptRevisionMatch = content.match(/(?:修改聊天候选卡\s*concept-|只(?:修改|重新生成)方案\s*)([A-D])\b/i);
+      const conceptRevisionMatch = content.match(/(?:修改聊天候选卡\s*concept-|只(?:修改|重新生成)方案\s*)([A-Z])\b/i);
+      const customConceptMatch = content.match(/新增自定义创意方案\s+([E-Z])\b/i);
       const finalCardRevisionMatch = content.match(/修改聊天候选卡\s*(final-card-[^\s（]+)/i);
       const storyboardTarget = content.match(/分镜(?:图|镜头)?\s*0*(\d+)/i);
       const storyboardEditIntent = /修改|调整|重绘|重新生成|改成|换成|替换|去掉|去除|移除|删除|增加|添加|希望|需要|不要|不一样|不同/i.test(content);
@@ -302,8 +303,9 @@ const server = http.createServer(async (req, res) => {
       db.prepare("UPDATE creative_sessions SET stage = 'working', updated_at = ? WHERE id = ?").run(timestamp, id);
       runCreativeTurn(id, userMessage, false, attachments, {
         ...(conceptRevisionMatch ? { conceptRevisionId: conceptRevisionMatch[1].toUpperCase() } : {}),
+        ...(customConceptMatch ? { customConceptId: customConceptMatch[1].toUpperCase() } : {}),
         ...(finalCardRevisionMatch ? { finalCardRevisionId: finalCardRevisionMatch[1] } : {}),
-        ...(/我选择并确认采用候选卡\s+concept-[A-D]/i.test(content) ? { prepareFinalCardCandidates: true } : {}),
+        ...(/我选择并确认采用候选卡\s+concept-[A-Z]/i.test(content) ? { prepareFinalCardCandidates: true } : {}),
       });
       return json(res, 202, { id, status: "working", attachmentCount: attachments.length });
     }

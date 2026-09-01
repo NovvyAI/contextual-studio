@@ -316,7 +316,7 @@ export function resolveAssetReferences(sessionId, text) {
 
 function conceptRevisionFeedback(content) {
   const text = String(content || "");
-  const target = text.match(/(?:concept-|方案\s*)([A-D])\b/i)?.[1]?.toUpperCase();
+  const target = text.match(/(?:concept-|方案\s*)([A-Z])\b/i)?.[1]?.toUpperCase();
   if (!target || !/(?:修改聊天候选卡|重新生成方案|修改方案)/.test(text)) return null;
   const feedback = text.match(/(?:我的)?修改意见[：:]\s*([\s\S]*?)(?:(?:\n\n|。)请(?:返回|直接)|$)/)?.[1]?.trim() || "按本轮要求修改方案";
   return { target, feedback };
@@ -333,7 +333,7 @@ function conceptRevisionHistory(messages) {
     }
     let cards = [];
     try { cards = JSON.parse(message.cards_json || "[]"); } catch { /* Ignore malformed historical cards. */ }
-    for (const card of cards.filter((item) => item.kind === "concept" && /^concept-[A-D]$/i.test(item.id || ""))) {
+    for (const card of cards.filter((item) => item.kind === "concept" && /^concept-[A-Z]$/i.test(item.id || ""))) {
       const conceptId = card.id.slice(-1).toUpperCase();
       history[conceptId] ||= [];
       const pending = pendingFeedback.get(conceptId);
