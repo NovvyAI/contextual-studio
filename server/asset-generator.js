@@ -76,7 +76,7 @@ function imageUrl(data) {
 function promptFor(asset, feedback, references) {
   const extra = references.length ? ` Additional numbered references follow the primary image in this order: ${references.map((item) => `${item.reference} (${item.title})`).join(", ")}. Apply only the role explicitly assigned to each reference by the user.` : "";
   const common = `User feedback: ${feedback}.${extra} Return one polished image only. No collage, split screen, comparison layout, labels, shot numbers, explanatory captions, watermark, or unintended text.`;
-  if (asset.kind === "character_image") return `Edit the first image, which is the exact selected character asset version. ${common} Preserve the primary person's identity, face, age, hairstyle, costume and accessories unless the user explicitly requests a change or assigns an attribute from another numbered reference. Do not casually blend identities.`;
+  if (asset.kind === "character_image" || asset.kind === "character_reference") return `Edit the first image, which is the exact selected character asset version. ${common} Preserve the primary person's identity, face, age, hairstyle, costume and accessories unless the user explicitly requests a change or assigns an attribute from another numbered reference. Do not casually blend identities.`;
   if (asset.kind === "storyboard_image") return `Edit the first image, which is the exact selected storyboard key frame. ${common} Preserve all unmentioned characters, composition, lighting, scene and continuity. Produce one vertical 9:16 cinematic key frame.`;
   if (asset.kind === "final_card") return `Edit the first image, which is the exact approved advertising final-card design. ${common} Preserve all unmentioned layout, product identity, English copy and CTA. Keep every visible English word accurate and mobile-readable.`;
   return `Edit the first image, which is the exact selected creative asset version. ${common} Preserve every element not mentioned by the user.`;
@@ -212,25 +212,35 @@ export function startCharacterReferenceRegeneration(sessionId, characterReferenc
   const instruction = String(feedback || "").trim();
   if (!instruction) throw new Error("请填写对这张人物参考图的修改意见");
   const timestamp = now();
-  const sourceCard = {
-    id: `character-reference-edit-${asset.characterId}-${asset.view}-${Date.now()}`,
-    kind: "character_image",
-    title: `${asset.title}｜修改候选`,
-    summary: instruction,
-    previewUrl: "",
-    version: 1,
-    status: "generating",
-    details: [
-      { label: "原始人物参考", content: asset.reference },
-      { label: "修改意见", content: instruction },
-      { label: "生成方式", content: "以原视频人物截图为第一张高保真参考图" },
-    ],
-  };
+  const targetCardId = `reference-${asset.characterId}-${asset.candidateId}`;
+  const matchingCard = cards(sessionId).find((card) => card.id === targetCardId && card.kind === "character_image");
+  const sourceCard = matchingCard
+    ? { ...matchingCard, previewUrl: "", status: "generating" }
+    : {
+      id: targetCardId,
+      kind: "character_image",
+      title: `${asset.title}｜修改候选`,
+      summary: instruction,
+      previewUrl: "",
+      version: 1,
+      status: "generating",
+      details: [
+        { label: "人物编号", content: asset.characterId },
+        { label: "画面角度", content: asset.view },
+        { label: "候选编号", content: asset.candidateId },
+      ],
+    };
+  sourceCard.details = [
+    ...(sourceCard.details || []),
+    { label: "原始人物参考", content: asset.reference },
+    { label: "本版修改", content: instruction },
+    { label: "生成方式", content: "以原视频人物截图为第一张高保真参考图" },
+  ];
   db.prepare("INSERT INTO creative_messages (session_id,role,content,visibility,created_at) VALUES (?,'user',?,'asset',?)")
     .run(sessionId, `修改${asset.reference}（${asset.title}）：${instruction}`, timestamp);
-  appendAsset(sessionId, `正在以${asset.reference}为主图重新生成。原始人物参考图会继续保留。`, sourceCard);
+  append(sessionId, `正在以${asset.reference}为主图重新生成，并同步更新右侧对应的人物候选卡。原始人物参考图会继续保留。`, sourceCard);
   db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, sessionId);
-  regenerate(sessionId, asset, sourceCard, instruction, { assetOnly: true, returnStage: session.stage });
+  regenerate(sessionId, asset, sourceCard, instruction, { returnStage: session.stage });
 }
 
 async function regenerate(sessionId, asset, sourceCard, feedback, options = {}) {
