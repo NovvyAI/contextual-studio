@@ -1,6 +1,7 @@
 import { db, now, resolveAssetReferences } from "./database.js";
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
 import { publicInputUrl } from "./character-generator.js";
+import { preparePngEditSource, uploadPngEditInput, validatePngEditInputs } from "./image-mask.js";
 import { recordCreativeAsset, recordCreativeFeedback, recordCreativeStage } from "./creative-telemetry.js";
 import { dramaReferenceImageCandidates } from "./drama-analysis-v3.js";
 
@@ -42,12 +43,13 @@ export function startFinalCardGeneration(sessionId, cardId) {
   runFinalCardGeneration(sessionId, generatingCard, prompt);
 }
 
-export function startFinalCardRegeneration(sessionId, cardId, feedback) {
+export function startFinalCardRegeneration(sessionId, cardId, feedback, editInput = null) {
   const session = db.prepare("SELECT * FROM creative_sessions WHERE id = ?").get(sessionId);
   if (!session) throw new Error("创意工作台不存在");
   if (session.stage === "working") throw new Error("当前仍有任务正在处理");
   const instruction = String(feedback || "").trim();
   if (!instruction) throw new Error("请先填写落版图修改意见");
+  const edit = validatePngEditInputs(editInput);
   const card = allCards(sessionId).find((item) => item.id === cardId && item.kind === "final_card" && item.previewUrl);
   if (!card) throw new Error("找不到这张已生成的落版图预览");
 
@@ -61,12 +63,13 @@ export function startFinalCardRegeneration(sessionId, cardId, feedback) {
     .run(sessionId, `修改落版图 ${cardId}：${instruction}`, timestamp);
   appendCardMessage(sessionId, "收到，我会以当前落版图为主图生成修改版。旧版本继续保留，流程仍停留在落版图审核。", generatingCard);
   db.prepare("UPDATE creative_sessions SET stage = 'working', error_message = NULL, updated_at = ? WHERE id = ?").run(timestamp, sessionId);
-  runFinalCardRegeneration(sessionId, card, generatingCard, instruction);
+  runFinalCardRegeneration(sessionId, card, generatingCard, instruction, edit);
 }
 
-async function runFinalCardRegeneration(sessionId, sourceCard, generatingCard, feedback) {
+async function runFinalCardRegeneration(sessionId, sourceCard, generatingCard, feedback, edit) {
   try {
-    const sourceUrl = await publicInputUrl(sourceCard.previewUrl);
+    const sourceUrl = await preparePngEditSource(sourceCard.previewUrl, edit.mask, publicInputUrl);
+    const maskUrl = await uploadPngEditInput(edit.mask, publicInputUrl, "mask");
     const referencedAssets = resolveAssetReferences(sessionId, feedback);
     const referencedUrls = [];
     for (const asset of referencedAssets) referencedUrls.push(await publicInputUrl(asset.url));
@@ -74,11 +77,12 @@ async function runFinalCardRegeneration(sessionId, sourceCard, generatingCard, f
     const referenceGuide = referencedAssets.length
       ? ` Additional numbered reference images are supplied after the current final-card image in this order: ${referencedAssets.map((asset) => `${asset.reference} (${asset.title})`).join(", ")}. Apply only the visual element or role explicitly assigned to each reference by the user; do not treat a reference as a replacement for the entire final card.`
       : "";
-    const prompt = `Edit the first supplied image, which is the exact current advertising final-card design. User feedback: ${feedback}.${referenceGuide} Preserve every element not explicitly changed, including product identity, composition, visual hierarchy, English copy and CTA. Keep every visible English word accurate and mobile-readable. Return one polished vertical final-card image only. Do not create a collage, comparison layout, labels, annotations, watermark, or unintended text.`;
+    const maskGuide = maskUrl ? " A PNG alpha mask is supplied for the first image. Treat its transparent area as the only intended edit region and preserve the rest of the first image." : "";
+    const prompt = `Edit the first supplied image, which is the exact current advertising final-card design. User feedback: ${feedback}.${maskGuide}${referenceGuide} Preserve every element not explicitly changed, including product identity, composition, visual hierarchy, English copy and CTA. Keep every visible English word accurate and mobile-readable. Return one polished vertical final-card image only. Do not create a collage, comparison layout, labels, annotations, watermark, or unintended text.`;
     const client = new NovvyMcpClient();
     await client.initialize();
     const created = unpackToolResult(await client.callTool("novvy_create_image_generation", {
-      model: "gpt-image-2", prompt, imageUrls, inputFidelity: "high", n: 1, outputFormat: "png", quality: "high", includeRaw: false,
+      model: "gpt-image-2", prompt, imageUrls, ...(maskUrl ? { maskUrl } : {}), inputFidelity: "high", n: 1, outputFormat: "png", quality: "high", includeRaw: false,
     }));
     const taskId = findValue(created, ["taskId", "task_id", "id"]);
     const providerSessionId = findValue(created, ["sessionId", "session_id"]);
@@ -100,6 +104,7 @@ async function runFinalCardRegeneration(sessionId, sourceCard, generatingCard, f
     appendCardMessage(sessionId, `落版图 V${generatingCard.version} 已生成。请继续审核；确认使用前不会进入人物与参考图。`, {
       ...generatingCard, previewUrl, status: "candidate", details: [
         ...generatingCard.details,
+        ...(edit.mask ? [{ label: "局部编辑蒙版", content: `${edit.mask.width}×${edit.mask.height} PNG alpha` }] : []),
         ...(referencedAssets.length ? [{ label: "引用资产", content: referencedAssets.map((asset) => asset.reference).join("、") }] : []),
         { label: "生成任务", content: taskId || providerSessionId },
       ],

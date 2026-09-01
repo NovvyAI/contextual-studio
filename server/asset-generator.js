@@ -1,5 +1,6 @@
 import { creativeAssets, db, now, resolveAssetReferences } from "./database.js";
 import { publicInputUrl } from "./character-generator.js";
+import { preparePngEditSource, uploadPngEditInput, validatePngEditInputs } from "./image-mask.js";
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
 import { recordCreativeAsset, recordCreativeFeedback } from "./creative-telemetry.js";
 
@@ -73,9 +74,10 @@ function imageUrl(data) {
   }
   return "";
 }
-function promptFor(asset, feedback, references) {
+function promptFor(asset, feedback, references, masked = false) {
   const extra = references.length ? ` Additional numbered references follow the primary image in this order: ${references.map((item) => `${item.reference} (${item.title})`).join(", ")}. Apply only the role explicitly assigned to each reference by the user.` : "";
-  const common = `User feedback: ${feedback}.${extra} Return one polished image only. No collage, split screen, comparison layout, labels, shot numbers, explanatory captions, watermark, or unintended text.`;
+  const maskGuide = masked ? " A PNG alpha mask is supplied for the first image. Modify only its transparent region and preserve the unmasked composition, rendering style, lighting, and details." : "";
+  const common = `User feedback: ${feedback}.${maskGuide}${extra} Return one polished image only. No collage, split screen, comparison layout, labels, shot numbers, explanatory captions, watermark, or unintended text.`;
   if (asset.kind === "character_image") return `Edit the first image, which is the exact selected character asset version. ${common} Preserve the primary person's identity, face, age, hairstyle, costume and accessories unless the user explicitly requests a change or assigns an attribute from another numbered reference. Do not casually blend identities.`;
   if (asset.kind === "storyboard_image") return `Edit the first image, which is the exact selected storyboard key frame. ${common} Preserve all unmentioned characters, composition, lighting, scene and continuity. Produce one vertical 9:16 cinematic key frame.`;
   if (asset.kind === "final_card") return `Edit the first image, which is the exact approved advertising final-card design. ${common} Preserve all unmentioned layout, product identity, English copy and CTA. Keep every visible English word accurate and mobile-readable.`;
@@ -184,7 +186,7 @@ async function createAsset(sessionId, card, instruction, returnStage) {
   }
 }
 
-export function startAssetRegeneration(sessionId, assetNumber, feedback) {
+export function startAssetRegeneration(sessionId, assetNumber, feedback, editInput = null) {
   const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
   if (!session) throw new Error("创意工作台不存在");
   if (session.stage === "working") throw new Error("当前仍有任务正在处理");
@@ -192,6 +194,7 @@ export function startAssetRegeneration(sessionId, assetNumber, feedback) {
   if (!asset) throw new Error(`找不到图片 ${String(assetNumber).padStart(2, "0")}`);
   const instruction = String(feedback || "").trim();
   if (!instruction) throw new Error("请填写对这张图片的修改意见");
+  const edit = validatePngEditInputs(editInput);
   const sourceCard = cards(sessionId).find((card) => card.id === asset.sourceCardId && card.previewUrl === asset.url)
     || cards(sessionId).find((card) => card.id === asset.sourceCardId);
   if (!sourceCard) throw new Error("找不到这张资产对应的生成卡片");
@@ -200,17 +203,19 @@ export function startAssetRegeneration(sessionId, assetNumber, feedback) {
     .run(sessionId, `修改${asset.reference}（${asset.title}）：${instruction}`, timestamp);
   append(sessionId, `收到，我会以${asset.reference}这个具体版本为主图重新生成；完成后旧图继续保留，新图进入资产区域。`, { ...sourceCard, previewUrl: "", status: "generating" });
   db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, sessionId);
-  regenerate(sessionId, asset, sourceCard, instruction);
+  regenerate(sessionId, asset, sourceCard, instruction, edit);
 }
 
-async function regenerate(sessionId, asset, sourceCard, feedback) {
+async function regenerate(sessionId, asset, sourceCard, feedback, edit) {
   try {
     const referenced = resolveAssetReferences(sessionId, feedback).filter((item) => item.url !== asset.url);
-    const inputs = [await publicInputUrl(asset.url)];
+    const sourceUrl = await preparePngEditSource(asset.url, edit.mask, publicInputUrl);
+    const maskUrl = await uploadPngEditInput(edit.mask, publicInputUrl, "mask");
+    const inputs = [sourceUrl];
     for (const item of referenced) inputs.push(await publicInputUrl(item.url));
     const client = new NovvyMcpClient(); await client.initialize();
     const created = unpackToolResult(await client.callTool("novvy_create_image_generation", {
-      model: "gpt-image-2", prompt: promptFor(asset, feedback, referenced), imageUrls: [...new Set(inputs)], inputFidelity: "high", n: 1, outputFormat: "png", quality: "high", includeRaw: false,
+      model: "gpt-image-2", prompt: promptFor(asset, feedback, referenced, Boolean(maskUrl)), imageUrls: [...new Set(inputs)], ...(maskUrl ? { maskUrl } : {}), inputFidelity: "high", n: 1, outputFormat: "png", quality: "high", includeRaw: false,
     }));
     const taskId = valueFor(created, ["taskId", "task_id", "id"]); const providerSessionId = valueFor(created, ["sessionId", "session_id"]);
     if (!taskId && !providerSessionId) throw new Error("Novvy 未返回图片任务 ID");
@@ -223,7 +228,7 @@ async function regenerate(sessionId, asset, sourceCard, feedback) {
     }
     const previewUrl = imageUrl(result); if (!previewUrl) throw new Error("图片生成查询超时");
     const version = Math.max(Number(asset.version || 1), Number(sourceCard.version || 1)) + 1;
-    const completed = { ...sourceCard, previewUrl, version, status: "candidate", summary: `${sourceCard.summary || asset.description}（基于${asset.reference}修改）`, details: [...(sourceCard.details || []), { label: `V${version} 修改`, content: feedback }, { label: "主参考资产", content: asset.reference }, ...(referenced.length ? [{ label: "额外引用", content: referenced.map((item) => item.reference).join("、") }] : []), { label: "生成任务", content: taskId || providerSessionId }] };
+    const completed = { ...sourceCard, previewUrl, version, status: "candidate", summary: `${sourceCard.summary || asset.description}（基于${asset.reference}修改）`, details: [...(sourceCard.details || []), { label: `V${version} 修改`, content: feedback }, { label: "主参考资产", content: asset.reference }, ...(edit.mask ? [{ label: "局部编辑蒙版", content: `${edit.mask.width}×${edit.mask.height} PNG alpha` }] : []), ...(referenced.length ? [{ label: "额外引用", content: referenced.map((item) => item.reference).join("、") }] : []), { label: "生成任务", content: taskId || providerSessionId }] };
     append(sessionId, `${asset.reference}的修改版已经生成。旧图保留，新版本已加入资产区域。`, completed);
     const stage = asset.kind === "final_card" ? "final_card_review" : asset.kind === "storyboard_image" ? "storyboard_review" : "reference_review";
     db.prepare("UPDATE creative_sessions SET stage=?,error_message=NULL,updated_at=? WHERE id=?").run(stage, now(), sessionId);

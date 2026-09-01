@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { db, now, resolveAssetReferences } from "./database.js";
+import { preparePngEditSource, uploadPngEditInput, validatePngEditInputs } from "./image-mask.js";
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
 import { recordCreativeAsset, recordCreativeFeedback, recordCreativeStage } from "./creative-telemetry.js";
 
@@ -96,7 +97,7 @@ function imageUrl(data) {
   return "";
 }
 
-export function startCharacterRegeneration(sessionId, cardId, feedback) {
+export function startCharacterRegeneration(sessionId, cardId, feedback, editInput = null) {
   const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
   if (!session) throw new Error("创意工作台不存在");
   if (session.stage === "working") throw new Error("当前仍有任务正在处理");
@@ -104,11 +105,12 @@ export function startCharacterRegeneration(sessionId, cardId, feedback) {
   if (!card) throw new Error("找不到这张人物候选的真实图片");
   const instruction = String(feedback || "").trim();
   if (!instruction) throw new Error("请填写人物图修改意见");
+  const edit = validatePngEditInputs(editInput);
   const timestamp = now();
   db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, `修改人物候选 ${cardId}：${instruction}`, timestamp);
   append(sessionId, "收到，我正在基于这张人物候选生成修改版；完成后新图会替换在同一张卡片里。", { ...card, previewUrl: "", status: "generating" });
   db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, sessionId);
-  regenerate(sessionId, card, instruction);
+  regenerate(sessionId, card, instruction, edit);
 }
 
 function identityBaseCard(sessionId, description) {
@@ -165,17 +167,19 @@ export function approveCharacterReferences(sessionId, cardIds) {
   import("./creative-agent.js").then(({ runCreativeTurn }) => runCreativeTurn(sessionId, autoMessage, false));
 }
 
-async function regenerate(sessionId, card, feedback) {
+async function regenerate(sessionId, card, feedback, edit) {
   try {
-    const sourceUrl = await publicInputUrl(card.previewUrl);
+    const sourceUrl = await preparePngEditSource(card.previewUrl, edit.mask, publicInputUrl);
+    const maskUrl = await uploadPngEditInput(edit.mask, publicInputUrl, "mask");
     const referencedAssets = resolveAssetReferences(sessionId, feedback);
     const referencedUrls = [];
     for (const asset of referencedAssets) referencedUrls.push(await publicInputUrl(asset.url));
     const imageUrls = [...new Set([sourceUrl, ...referencedUrls])];
     const client = new NovvyMcpClient(); await client.initialize();
     const assetGuide = referencedAssets.length ? ` Additional reference images named by the user are supplied after the current card image in this order: ${referencedAssets.map((asset) => `${asset.reference} (${asset.title})`).join(", ")}. Use only the attributes the user explicitly assigns to each numbered asset.` : "";
-    const prompt = `Edit the first supplied image, which is the current character card, according to this user request: ${feedback}.${assetGuide}\nPreserve the current card person's identity unless the user explicitly assigns identity from a numbered asset. Do not casually blend faces or identities. Produce one clean character-reference image only. Do not add captions, subtitles, labels, logos, watermarks, or extra people.`;
-    const created = unpackToolResult(await client.callTool("novvy_create_image_generation", { model: "gpt-image-2", prompt, imageUrls, inputFidelity: "high", n: 1, outputFormat: "png", quality: "high", includeRaw: false }));
+    const maskGuide = maskUrl ? " A PNG alpha mask is supplied for the first image. Modify only its transparent region and preserve every unmasked pixel-level visual element as closely as possible." : "";
+    const prompt = `Edit the first supplied image, which is the current character card, according to this user request: ${feedback}.${maskGuide}${assetGuide}\nPreserve the current card person's identity unless the user explicitly assigns identity from a numbered asset. Do not casually blend faces or identities. Produce one clean character-reference image only. Do not add captions, subtitles, labels, logos, watermarks, or extra people.`;
+    const created = unpackToolResult(await client.callTool("novvy_create_image_generation", { model: "gpt-image-2", prompt, imageUrls, ...(maskUrl ? { maskUrl } : {}), inputFidelity: "high", n: 1, outputFormat: "png", quality: "high", includeRaw: false }));
     const taskId = valueFor(created, ["taskId", "task_id", "id"]); const providerSessionId = valueFor(created, ["sessionId", "session_id"]);
     if (!taskId && !providerSessionId) throw new Error("Novvy 未返回人物图任务 ID");
     let result = created; const deadline = Date.now() + 20 * 60 * 1000;
@@ -187,7 +191,7 @@ async function regenerate(sessionId, card, feedback) {
     }
     const previewUrl = imageUrl(result); if (!previewUrl) throw new Error("人物图生成查询超时");
     const version = Number(card.version || 1) + 1;
-    append(sessionId, `人物候选 ${card.id} 的 V${version} 已经生成，新图已替换在原卡片中。`, { ...card, previewUrl, version, status: "candidate", details: [...(card.details || []), { label: `V${version} 修改`, content: feedback }, ...(referencedAssets.length ? [{ label: "引用资产", content: referencedAssets.map((asset) => asset.reference).join("、") }] : []), { label: "生成任务", content: taskId || providerSessionId }] });
+    append(sessionId, `人物候选 ${card.id} 的 V${version} 已经生成，新图已替换在原卡片中。`, { ...card, previewUrl, version, status: "candidate", details: [...(card.details || []), { label: `V${version} 修改`, content: feedback }, ...(edit.mask ? [{ label: "局部编辑蒙版", content: `${edit.mask.width}×${edit.mask.height} PNG alpha` }] : []), ...(referencedAssets.length ? [{ label: "引用资产", content: referencedAssets.map((asset) => asset.reference).join("、") }] : []), { label: "生成任务", content: taskId || providerSessionId }] });
     db.prepare("UPDATE creative_sessions SET stage='reference_review',error_message=NULL,updated_at=? WHERE id=?").run(now(), sessionId);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
