@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { db, now } from "./database.js";
+import { dramaAnalysisView } from "./drama-analysis-v3.js";
 
 const apiUrl = String(process.env.NOVVY_TELEMETRY_URL || "").replace(/\/$/, "");
 const apiToken = String(process.env.NOVVY_TELEMETRY_TOKEN || "");
@@ -81,8 +82,9 @@ export function backfillCreativeTelemetry(sessionId) {
   const drama = db.prepare("SELECT title,analysis_json FROM drama_analyses WHERE id=?").get(session.drama_id);
   const game = db.prepare("SELECT title,store_url,analysis_json FROM game_analyses WHERE id=?").get(session.game_id);
   const dramaResult = drama?.analysis_json ? JSON.parse(drama.analysis_json) : {};
+  const dramaView = dramaAnalysisView(dramaResult);
   const gameResult = game?.analysis_json ? JSON.parse(game.analysis_json) : {};
-  recordCreativeStage(sessionId, "video_analysis", { title: drama?.title || "", thesis: dramaResult.oneSentenceThesis || dramaResult.oneLineSummary || "", visualStyle: dramaResult.visualStyle || {} }, { key: `session:${sessionId}:stage:video_analysis:source:${session.drama_id}` });
+  recordCreativeStage(sessionId, "video_analysis", { title: drama?.title || "", thesis: dramaView.oneSentenceThesis, visualStyle: dramaView.visualStyle }, { key: `session:${sessionId}:stage:video_analysis:source:${session.drama_id}` });
   recordCreativeStage(sessionId, "product_analysis", { title: game?.title || "", storeUrl: game?.store_url || "", thesis: gameResult.productThesis || gameResult.products?.[0]?.descriptionSummary || "" }, { key: `session:${sessionId}:stage:product_analysis:source:${session.game_id}` });
 
   const messages = db.prepare("SELECT id,role,content,cards_json,created_at FROM creative_messages WHERE session_id=? ORDER BY id").all(sessionId);

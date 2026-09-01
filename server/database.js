@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import path from "node:path";
+import { dramaReferenceImageCandidates } from "./drama-analysis-v3.js";
 
 const dataDir = path.resolve("data");
 fs.mkdirSync(path.join(dataDir, "uploads"), { recursive: true });
@@ -257,9 +258,10 @@ export function creativeScreenshotAssets(sessionId) {
   if (!session) return [];
   const drama = db.prepare("SELECT analysis_json FROM drama_analyses WHERE id=?").get(session.drama_id);
   const analysis = drama?.analysis_json ? JSON.parse(drama.analysis_json) : {};
+  const sourceCandidates = dramaReferenceImageCandidates(analysis);
   const roleByScreenshotId = new Map();
   const roleLabels = { maleFront: "男主正面", maleSide: "男主侧面", femaleFront: "女主正面", femaleSide: "女主侧面" };
-  for (const [key, candidate] of Object.entries(analysis.referenceImageCandidates || {})) {
+  for (const [key, candidate] of Object.entries(sourceCandidates)) {
     if (candidate?.screenshotId) roleByScreenshotId.set(Number(candidate.screenshotId), roleLabels[key] || candidate.character || "人物参考");
   }
   return db.prepare("SELECT id,timestamp_seconds,width,height FROM drama_screenshots WHERE analysis_id=? ORDER BY timestamp_seconds,id").all(session.drama_id)

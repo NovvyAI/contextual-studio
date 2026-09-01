@@ -4,6 +4,7 @@ import { creativeAssets, creativeScreenshotAssets, db, now } from "./database.js
 import { prepareCreativeAttachments } from "./chat-media.js";
 import { productionProfile } from "./production-profile.js";
 import { recordCreativeStage } from "./creative-telemetry.js";
+import { dramaAnalysisView } from "./drama-analysis-v3.js";
 
 const model = process.env.CODEX_ANALYSIS_MODEL || "";
 const stringArray = { type: "array", items: { type: "string" } };
@@ -80,23 +81,7 @@ function parseAnalysis(value) {
 }
 export function initialDramaContext(value) {
   const analysis = parseAnalysis(value);
-  const latestEpisode = Array.isArray(analysis.episodeAnalyses) ? analysis.episodeAnalyses.at(-1) || {} : {};
-  return {
-    contract: analysis.contract,
-    oneSentenceThesis: analysis.oneSentenceThesis,
-    synopsis: analysis.synopsis,
-    chronology: analysis.chronology,
-    characters: analysis.characters,
-    emotionalCurve: analysis.emotionalCurve,
-    keyDialogue: analysis.keyDialogue,
-    motifs: analysis.motifs,
-    hookAndCliffhanger: analysis.hookAndCliffhanger,
-    creativeHandoff: analysis.creativeHandoff,
-    visualStyle: analysis.visualStyle,
-    referenceImageCandidates: analysis.referenceImageCandidates,
-    confidence: analysis.confidence,
-    narrativeContinuity: latestEpisode.narrativeContinuity || latestEpisode.seriesContinuity,
-  };
+  return dramaAnalysisView(analysis);
 }
 export function initialGameContext(value) {
   const analysis = parseAnalysis(value);
@@ -153,7 +138,7 @@ ${screenshotIndex}
 20. 选择 storyboard 文字候选后，工作台会先生成逐镜分镜图片；不要提前生成 video_prompt。只有逐镜分镜图片统一确认后，才按 $storyboard-production-contract 自动生成 id 为 video-prompt-v1、kind 为 video_prompt、stage 为 prompt_review 的视频提示词卡。details 同时包含“中文审核稿”“英文提交提示词”和“分镜任务 JSON”。JSON 使用 {schemaVersion:"contextual.storyboard-video.v1",shots:[{shotId:"shot-01",order:1,durationSeconds:4到15的整数,reviewZh:"完整中文审核稿",promptEn:"等义英文提交提示词"}]}，最多 3 镜、order 连续。reviewZh/promptEn 必须逐项等义并包含已批准画面的构图、机位、动作、表演、光色、声音、连续性和参考绑定；每镜只描述内容镜头，不重绘最终落版图。列出 Novvy MCP 与 ImaRouter、9:16、720p 与人物/同序号分镜图绑定。所有生成素材文字和声音使用英文。此时不调用视频生成。
 22. 初次生成创意候选时，每个 concept 必须先依据本地叙事与台词参考固定：1 个主欲望、最多 1 个辅助欲望、1 个 M01-M19 叙事模型、1 个 P01-P19 入场承诺、最多 1 个 A01-A08 加速器、对白说话者与对象、唯一核心玩法动词、阶段成功、因果升级和单一 CTR。把这些分别写入 concept 的结构化字段；不要只在文案里笼统提及。
 23. 整个创意工作台只使用当前这一条 Codex thread。创意策略、叙事与台词、制作、参考审核和分镜契约是同一 session 内的结构化阶段；不得建议或声称为这些阶段创建新的 Codex task 或 subagent。
-24. 短剧结果遵循 novvy.video-analysis.v2，游戏结果遵循 novvy.product-analysis.v1。首次剧游匹配时，先在当前同一 Codex session 内按 references/video-analysis-subagent.md 补充“已选游戏”语境：沿用原始视频事实、尾帧、最后对白、残留情绪、人物关系和连续性资产，只新增与当前 productTruth 的片尾连接、市场传达与转化判断；不得改写原视频事实，也不得创建新的 Codex task。
+24. 短剧结果只支持 novvy.video-analysis.v3，游戏结果遵循 novvy.product-analysis.v1。短剧详细分析的唯一事实源是 episodeAnalyses[].detailedAnalysis，不要寻找或要求根级重复副本。首次剧游匹配时，先在当前同一 Codex session 内按 references/video-analysis-subagent.md 补充“已选游戏”语境：沿用原始视频事实、尾帧、最后对白、残留情绪、人物关系和连续性资产，只新增与当前 productTruth 的片尾连接、市场传达与转化判断；不得改写原视频事实，也不得创建新的 Codex task。
 25. 永远不得根据已有资产编号、已有 URL 或自己的文字推断声称“生成了新图片”。新图片编号只能由后端在付费图片任务返回一个此前不存在的真实结果 URL、写入 creative_messages 后自动分配。普通 Codex 对话不能创建、指定或预测“图片 XX”，也不能把已有 URL 包装成新的 candidate card。用户在聊天中明确要求基于图片/截图生成人物图时，后端专用图片生成路由会处理；本创意对话不应返回任何声称已生成的图片卡。
 21. 用户可直接用“图片 04”“参考图片4”引用图片资产，也可用“截图 03”“视频截图3”引用短剧原视频关键帧。必须先解析到相应索引中的真实资产、标题和 URL，再理解人物、姿势、构图、场景或风格之间的组合关系；回复和候选卡 details 中保留所用编号，禁止猜测不存在的编号。`;
 }

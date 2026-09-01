@@ -41,6 +41,58 @@ function analysisSection(title, items, renderItem) {
   return section;
 }
 
+function dramaAnalysisView(result = {}) {
+  result = result && typeof result === "object" ? result : {};
+  const unsupported = Boolean(result.contract && result.contract !== "novvy.video-analysis.v3");
+  if (result.contract !== "novvy.video-analysis.v3") return {
+    unsupported,
+    oneSentenceThesis: "",
+    synopsis: "",
+    chronology: [], characters: [], emotionalCurve: [], keyDialogue: [], motifs: [],
+    hookAndCliffhanger: {}, creativeHandoff: { transitionOpportunities: [] },
+    referenceImageCandidates: {},
+    confidence: { overall: "low", observed: [], strongInferences: [], limitations: [] },
+  };
+  const episode = Array.isArray(result.episodeAnalyses) ? result.episodeAnalyses.at(-1) || {} : {};
+  const detailed = episode.detailedAnalysis || {};
+  const notes = detailed.confidenceNotes || {};
+  const slotNames = { male_front: "maleFront", male_side: "maleSide", female_front: "femaleFront", female_side: "femaleSide" };
+  let candidates = {};
+  if (Array.isArray(episode.referenceImageCandidates?.slots)) {
+    candidates = {};
+    for (const [external, local] of Object.entries(slotNames)) {
+      const item = episode.referenceImageCandidates.slots.find((candidate) => candidate.slot === external);
+      candidates[local] = item ? {
+        ...item,
+        available: Boolean(item.screenshotId),
+        screenshotId: Number(item.screenshotId || 0),
+        view: external.endsWith("_side") ? "side" : "front",
+        viewDescription: item.view || "unknown",
+        confidence: item.confidence === "unknown" ? "low" : item.confidence,
+      } : { available: false, screenshotId: 0, view: external.endsWith("_side") ? "side" : "front", confidence: "low", risks: [], selectionReason: "短剧分析未找到可靠候选" };
+    }
+  }
+  return {
+    unsupported: false,
+    oneSentenceThesis: detailed.oneSentenceThesis || episode.oneLineSummary || "",
+    synopsis: detailed.synopsis || "",
+    chronology: detailed.chronology || [],
+    characters: detailed.characters || [],
+    emotionalCurve: detailed.emotionalCurve || [],
+    keyDialogue: detailed.keyDialogue || [],
+    motifs: detailed.motifs || [],
+    hookAndCliffhanger: detailed.hookAndCliffhanger || {},
+    creativeHandoff: detailed.creativeHandoff || { transitionOpportunities: [] },
+    referenceImageCandidates: candidates,
+    confidence: {
+      overall: episode.confidence || "low",
+      observed: notes.observed || [],
+      strongInferences: notes.strongInferences || [],
+      limitations: notes.limitations || episode.risksAndUncertainties || [],
+    },
+  };
+}
+
 document.querySelectorAll(".tab[data-tab]").forEach((tab) => tab.addEventListener("click", () => {
   document.querySelectorAll(".tab[data-tab]").forEach((item) => item.classList.toggle("active", item === tab));
   document.querySelectorAll(".tab-panel").forEach((panel) => panel.classList.toggle("active", panel.id === `${tab.dataset.tab}-panel`));
@@ -49,6 +101,7 @@ document.querySelectorAll(".tab[data-tab]").forEach((tab) => tab.addEventListene
 }));
 
 function renderAnalysis(root, result, screenshots) {
+  result = dramaAnalysisView(result);
   if (!result?.oneSentenceThesis) return;
   const hook = result.hookAndCliffhanger;
   const hookGrid = element("div", "insight-grid");
@@ -93,7 +146,7 @@ function renderAnalysis(root, result, screenshots) {
     const quote = element("blockquote", "dialogue"); quote.append(element("p", "", `“${item.line}”`), element("footer", "", `${item.timeRange} · ${item.dramaticMeaning}`)); return quote;
   }));
   root.append(analysisSection("视听母题", result.motifs, (item) => {
-    const card = element("article", "motif-card"); card.append(element("strong", "", item.element), element("p", "", item.appearance), element("small", "", `${item.narrativeMeaning} · ${item.reusePotential}`)); return card;
+    const card = element("article", "motif-card"); card.append(element("strong", "", item.name || item.element), element("p", "", item.appearance), element("small", "", `${item.dramaticMeaning || item.narrativeMeaning} · ${item.reusableBridge || item.reusePotential}`)); return card;
   }));
   root.append(analysisSection("片尾创意衔接机会", result.creativeHandoff.transitionOpportunities, (item) => {
     const card = element("article", "opportunity-card"); card.append(element("strong", "", item.name), element("p", "", item.sourceMoment), element("ul", ""));
@@ -142,7 +195,8 @@ function archiveListItem(item, selected, type) {
   heading.append(element("strong", "", type === "drama" ? item.title : item.result?.products?.[0]?.productName || item.result?.storeFacts?.productName || item.title || "待识别游戏"));
   const status = element("span", `status ${item.status}`, ({ uploaded: "等待", analyzing: "分析中", completed: "完成", failed: "失败" })[item.status] || item.status);
   heading.append(status);
-  const summary = type === "drama" ? item.result?.oneSentenceThesis || item.result?.seriesAnalysis?.oneLineSeriesSummary : item.result?.products?.[0]?.descriptionSummary || item.result?.productThesis;
+  const dramaView = type === "drama" ? dramaAnalysisView(item.result) : null;
+  const summary = type === "drama" ? (dramaView.unsupported ? "旧版分析需要重新分析" : dramaView.oneSentenceThesis) : item.result?.products?.[0]?.descriptionSummary || item.result?.productThesis;
   button.append(heading, element("p", "", summary || item.errorMessage || "等待分析结果"), element("small", "", new Date(item.createdAt).toLocaleString("zh-CN")));
   return button;
 }
@@ -156,8 +210,9 @@ function renderDramaDetail(item) {
   const status = node.querySelector(".status"); status.className = `status ${item.status}`;
   status.textContent = ({ uploaded: "等待分析", analyzing: "分析中", completed: "已完成", failed: "失败" })[item.status] || item.status;
   node.querySelector("video").src = item.videoUrl;
-  node.querySelector(".thesis").textContent = item.result?.oneSentenceThesis || item.errorMessage || (item.status === "analyzing" ? "模型正在理解剧情、人物与情绪变化…" : "等待开始分析");
-  node.querySelector(".synopsis").textContent = item.result?.synopsis || "完成后将在这里显示短剧剧情分析。";
+  const analysis = dramaAnalysisView(item.result);
+  node.querySelector(".thesis").textContent = analysis.unsupported ? "旧版短剧分析不再支持，请重新分析" : analysis.oneSentenceThesis || item.errorMessage || (item.status === "analyzing" ? "模型正在理解剧情、人物与情绪变化…" : "等待开始分析");
+  node.querySelector(".synopsis").textContent = analysis.unsupported ? "当前只支持 novvy.video-analysis.v3。" : analysis.synopsis || "完成后将在这里显示短剧剧情分析。";
   renderAnalysis(node.querySelector(".analysis-content"), item.result, item.screenshots);
   dramaDetail.append(node);
 }
