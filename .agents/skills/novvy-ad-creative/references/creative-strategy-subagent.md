@@ -26,6 +26,12 @@
     {
       "id": "A",
       "productName": "",
+      "creativeBasisType": "剧情点或剧尾",
+      "creativeBasisEvidence": "",
+      "tailFrameState": "",
+      "lastDialogue": "",
+      "residualEmotion": "",
+      "unfinishedHook": "",
       "evidenceScope": "whole_series",
       "seriesEvidence": [
         {"type": "theme_or_conflict", "evidence": ""},
@@ -53,7 +59,7 @@
         "cta": ""
       },
       "dramaToGameplayBridge": "",
-      "rhythm": "",
+      "rhythm": "可变内容时长范围、节奏分配及其叙事依据；不得默认或固定为12秒",
       "audiovisualQuality": {
         "qualityRecordIds": ["DQ-014", "DQ-017", "DQ-111"],
         "directorReference": null,
@@ -67,4 +73,4 @@
 }
 ```
 
-`options` 只能有 3-4 项；整剧证据不足时不输出方案。每个方案的 `seriesEvidence` 至少包含 3 类相互独立证据，且必须覆盖全剧主题/核心冲突与人物/关系弧；禁止只用单集收尾、单个道具或题材关键词证明“相关”。每个方案固定一个主欲望、最多一个辅助欲望、一个叙事模型、一个入场承诺、最多一个加速器、一个核心玩法动词、一个 CTR 和一个 `audiovisualQuality`。`qualityRecordIds` 必须来自查询且实际影响方案；`directorReference` 不需要时为 `null`，需要时写 `recordId/name/translatedParameters`，不得只写导演名。先列硬门风险，任一硬门失败时把该方案排除而不是靠分数补偿。主 agent 只负责把该 JSON 渲染成用户可见推荐表并等待选择。
+首次 `options` 必须有 A/B/C/D 四项，至少一个 `creativeBasisType=剧情点`、一个 `creativeBasisType=剧尾`。剧尾方案完整填写四个剧尾证据字段；剧情点方案将四项留空。每个方案的 `seriesEvidence` 至少包含 3 类相互独立证据，且必须覆盖全剧主题/核心冲突与人物/关系弧；剧尾依据同样必须通过这些全剧证据校验人物和世界规则，禁止只用单个道具或脱离上下文的台词证明“相关”。每个方案固定一个主欲望、最多一个辅助欲望、一个叙事模型、一个入场承诺、最多一个加速器、一个核心玩法动词、一个 CTR 和一个 `audiovisualQuality`。`qualityRecordIds` 必须来自查询且实际影响方案；`directorReference` 不需要时为 `null`，需要时写 `recordId/name/translatedParameters`，不得只写导演名。先列硬门风险，任一硬门失败时把该方案排除而不是靠分数补偿。主 agent 只负责把该 JSON 渲染成用户可见推荐表并等待选择。

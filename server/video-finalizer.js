@@ -85,7 +85,7 @@ export async function finalizeVideoWithApprovedCard(sessionId, remoteVideoUrl) {
   try {
     await Promise.all([download(remoteVideoUrl, inputVideo), writeSource(finalCard, inputCard)]);
     const audio = await hasAudio(inputVideo);
-    const contentDuration = productionProfile.max_shot_duration_seconds - productionProfile.final_assembly.final_card_duration_seconds;
+    const contentDuration = await mediaDuration(inputVideo);
     const cardDuration = productionProfile.final_assembly.final_card_duration_seconds;
     const videoFilters = `[0:v]trim=duration=${contentDuration},setpts=PTS-STARTPTS,scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=30[v0];[1:v]trim=duration=${cardDuration},setpts=PTS-STARTPTS,scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=30[v1];[v0][v1]concat=n=2:v=1:a=0[v]`;
     const filter = audio

@@ -91,3 +91,6 @@ main { width:min(1240px,92vw); margin:auto; padding:70px 0 100px; }
 .director-reference-option input { margin-top: 4px; }
 .director-reference-option span { display: grid; gap: 4px; }
 .director-reference-option small { line-height: 1.5; color: var(--muted, #adb3a7); }
+.concept-heading { display:flex; align-items:center; gap:7px; min-width:0; }
+.concept-heading strong { flex:1; min-width:0; }
+.concept-basis-badge { display:inline-flex; align-items:center; flex:0 0 auto; border:1px solid #718346; border-radius:999px; background:#242c1b; color:#d8f46c; padding:2px 7px; font-size:8px; line-height:1.25; white-space:nowrap; }

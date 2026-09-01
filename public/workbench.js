@@ -448,6 +448,8 @@ function legacyConfirmedCards(workspace) {
       status: "confirmed",
       confirmedAt: "历史确认",
       details: [
+        { label: "创意依据", content: concept.creativeBasisType || "历史方案未标注" },
+        { label: "依据证据", content: concept.creativeBasisEvidence || concept.videoMatch },
         { label: "剧集匹配", content: concept.videoMatch },
         { label: "玩法卖点", content: concept.gameplaySellingPoint },
         { label: "目标受众", content: concept.audience },
@@ -580,6 +582,8 @@ async function regenerateConcept(concept, feedback, textarea) {
   }
   const original = [
     `标题：${concept.title}`,
+    `创意依据：${concept.creativeBasisType || "历史方案未标注"}`,
+    `依据证据：${concept.creativeBasisEvidence || concept.videoMatch}`,
     `片尾角度：${concept.tailAdAngle}`,
     `剧集匹配：${concept.videoMatch}`,
     `玩法卖点：${concept.gameplaySellingPoint}`,
@@ -602,6 +606,14 @@ function conceptChatCards(workspace) {
     previewUrl: "",
     status: workspace.selectedConceptIds?.includes(concept.id) ? "selected" : "candidate",
     details: [
+      { label: "创意依据", content: concept.creativeBasisType || "历史方案未标注" },
+      { label: "依据证据", content: concept.creativeBasisEvidence || concept.videoMatch },
+      ...(concept.creativeBasisType === "剧尾" ? [
+        { label: "尾帧状态", content: concept.tailFrameState },
+        { label: "最后对白", content: concept.lastDialogue },
+        { label: "残留情绪", content: concept.residualEmotion },
+        { label: "未完成钩子", content: concept.unfinishedHook },
+      ] : []),
       { label: "剧集匹配", content: concept.videoMatch },
       { label: "玩法卖点", content: concept.gameplaySellingPoint },
       { label: "目标受众", content: concept.audience },
@@ -634,6 +646,8 @@ function renderChatCard(card, disabled) {
   const candidateNumber = characterCandidateNumbers[card.id] || card.candidateNumber;
   const kindLabel = card.kind === "character_image" && candidateNumber ? `人物候选 ${candidateNumber}` : chatCardKindLabels[card.kind] || "";
   if (kindLabel) header.append(element("span", "chat-card-kind", kindLabel));
+  const conceptBasis = card.kind === "concept" ? (card.details || []).find((item) => item.label === "创意依据")?.content : "";
+  if (conceptBasis) header.append(element("span", "concept-basis-badge", conceptBasis));
   header.append(element("span", "chat-card-status", ({ candidate: "候选", selected: "已选择", confirmed: "已确认", superseded: "已替代", generating: "生成中", completed: "已生成", failed: "生成失败" })[card.status] || card.status));
   node.append(header, element("strong", "chat-card-title", card.title), element("p", `chat-card-summary ${["storyboard", "storyboard_image"].includes(card.kind) ? "storyboard-readable" : ""}`, ["storyboard", "storyboard_image"].includes(card.kind) ? readableStoryboardText(card.summary) : card.summary));
   if (card.previewUrl) {
@@ -1195,11 +1209,13 @@ function renderCanvas(session) {
     const card = canvasDetails(element("details", `concept-card has-folding ${selected ? "selected" : ""}`), `concept:${concept.id}`, !hasSelectedConcept || selected);
     const summary = element("summary", "concept-summary");
     const summaryCopy = element("div", "concept-summary-copy");
-    summaryCopy.append(element("strong", "", concept.title), element("p", "", concept.tailAdAngle));
+    const conceptHeading = element("div", "concept-heading");
+    conceptHeading.append(element("strong", "", concept.title), element("span", "concept-basis-badge", concept.creativeBasisType || "历史方案"));
+    summaryCopy.append(conceptHeading, element("p", "", concept.tailAdAngle));
     summary.append(element("div", "concept-id", concept.id), summaryCopy, element("span", "concept-fold-label", selected ? "已选方案" : "查看详情"));
     const body = element("div", "concept-body");
     const facts = element("dl");
-    [["匹配点", concept.videoMatch], ["玩法卖点", concept.gameplaySellingPoint], ["受众", concept.audience], ["情绪桥", concept.emotionalBridge], ["节奏", concept.rhythm]].forEach(([name, value]) => {
+    [["创意依据", concept.creativeBasisType || "历史方案未标注"], ["依据证据", concept.creativeBasisEvidence || concept.videoMatch], ...(concept.creativeBasisType === "剧尾" ? [["尾帧状态", concept.tailFrameState], ["最后对白", concept.lastDialogue], ["残留情绪", concept.residualEmotion], ["未完成钩子", concept.unfinishedHook]] : []), ["匹配点", concept.videoMatch], ["玩法卖点", concept.gameplaySellingPoint], ["受众", concept.audience], ["情绪桥", concept.emotionalBridge], ["节奏", concept.rhythm]].forEach(([name, value]) => {
       const row = element("div");
       row.append(element("dt", "", name), element("dd", "", value));
       facts.append(row);

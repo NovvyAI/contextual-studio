@@ -21,6 +21,12 @@
     {
       "id": "A",
       "productName": "",
+      "creativeBasisType": "剧情点或剧尾",
+      "creativeBasisEvidence": "",
+      "tailFrameState": "",
+      "lastDialogue": "",
+      "residualEmotion": "",
+      "unfinishedHook": "",
       "videoMatch": "",
       "tailAdAngle": "",
       "modelCombination": {
@@ -43,7 +49,7 @@
         "cta": ""
       },
       "tailEntry": "",
-      "rhythm": "",
+      "rhythm": "可变内容时长范围、节奏分配及其叙事依据；不得默认或固定为12秒",
       "recommendationReason": "",
       "risks": []
     }
@@ -52,5 +58,4 @@
 }
 ```
 
-`options` 只能有 3-4 项；证据不足时可少于 3 项并在 `unknowns` 说明。每个方案固定一个主欲望、最多一个辅助欲望、一个叙事模型、一个入场承诺、最多一个加速器、一个核心玩法动词和一个 CTR，不得混合多个互相竞争的主线。主 agent 只负责把该 JSON 渲染成用户可见推荐表并等待选择。
-
+首次 `options` 必须有 A/B/C/D 四项，至少一个 `creativeBasisType=剧情点`、一个 `creativeBasisType=剧尾`。剧尾方案完整填写四个剧尾证据字段；剧情点方案将四项留空。每个方案固定一个主欲望、最多一个辅助欲望、一个叙事模型、一个入场承诺、最多一个加速器、一个核心玩法动词和一个 CTR，不得混合多个互相竞争的主线。主 agent 只负责把该 JSON 渲染成用户可见推荐表并等待选择。

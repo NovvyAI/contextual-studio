@@ -155,7 +155,7 @@ async function pollVideoTask(client, sessionId, card, taskId, providerSessionId,
         ...card,
         previewUrl: finalVideoUrl,
         status: "completed",
-        details: [...(card.details || []).filter((item) => !["视频任务", "落版处理"].includes(item.label)), { label: "视频任务", content: taskId || providerSessionId }, { label: "落版处理", content: "前12秒使用模型视频，最后3秒直接拼接已确认原始落版图" }],
+        details: [...(card.details || []).filter((item) => !["视频任务", "落版处理"].includes(item.label)), { label: "视频任务", content: taskId || providerSessionId }, { label: "落版处理", content: `完整保留 ${shot.durationSeconds} 秒内容视频，最后追加 ${productionProfile.final_assembly.final_card_duration_seconds} 秒已确认原始落版图` }],
       });
       db.prepare("UPDATE creative_sessions SET stage='video_review',error_message=NULL,updated_at=? WHERE id=?").run(now(), sessionId);
       return;

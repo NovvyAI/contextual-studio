@@ -9,9 +9,12 @@ const model = process.env.CODEX_ANALYSIS_MODEL || "";
 const stringArray = { type: "array", items: { type: "string" } };
 const conceptSchema = {
   type: "object", additionalProperties: false,
-  required: ["id", "title", "primaryDesire", "secondaryDesire", "narrativeModel", "entryPromise", "accelerator", "dialogueRelationship", "coreGameplayVerb", "stagedSuccess", "causalEscalation", "singleCtr", "tailAdAngle", "videoMatch", "gameplaySellingPoint", "audience", "marketMessage", "emotionalBridge", "conversionPath", "entryMethod", "rhythm", "recommendation", "risks"],
+  required: ["id", "title", "creativeBasisType", "creativeBasisEvidence", "tailFrameState", "lastDialogue", "residualEmotion", "unfinishedHook", "primaryDesire", "secondaryDesire", "narrativeModel", "entryPromise", "accelerator", "dialogueRelationship", "coreGameplayVerb", "stagedSuccess", "causalEscalation", "singleCtr", "tailAdAngle", "videoMatch", "gameplaySellingPoint", "audience", "marketMessage", "emotionalBridge", "conversionPath", "entryMethod", "rhythm", "recommendation", "risks"],
   properties: {
-    id: { type: "string" }, title: { type: "string" }, primaryDesire: { type: "string" }, secondaryDesire: { type: "string" },
+    id: { type: "string" }, title: { type: "string" },
+    creativeBasisType: { type: "string", enum: ["剧情点", "剧尾"] }, creativeBasisEvidence: { type: "string" },
+    tailFrameState: { type: "string" }, lastDialogue: { type: "string" }, residualEmotion: { type: "string" }, unfinishedHook: { type: "string" },
+    primaryDesire: { type: "string" }, secondaryDesire: { type: "string" },
     narrativeModel: { type: "string" }, entryPromise: { type: "string" }, accelerator: { type: "string" }, dialogueRelationship: { type: "string" },
     coreGameplayVerb: { type: "string" }, stagedSuccess: { type: "string" }, causalEscalation: { type: "string" }, singleCtr: { type: "string" },
     tailAdAngle: { type: "string" }, videoMatch: { type: "string" },
@@ -131,7 +134,8 @@ ${screenshotIndex}
 硬性规则：
 1. 只做片尾植入，不做中插；从短剧最后的情绪、动作、物件或未满足愿望自然进入真实游戏玩法。
 2. 游戏受众必须影响创意角度、节奏、玩法镜头、文案语气、声音情绪和 CTA。
-3. 初次输出 3-4 个稳定编号 A/B/C/D 的候选，让用户选择；选择前不得生成落版图、上传参考图或提交视频。
+2a. 创意内容时长必须可变，不能默认、暗示或固定为 12 秒。初次 concept 的 rhythm 应根据该方案完成“剧情承接→真实玩法操作→可见反馈→升级钩子”实际需要，写出建议内容时长范围及节奏依据；此时不锁死最终总时长。正式内容时长由用户确认的文字分镜逐镜 durationSeconds 相加并扣除镜间交叉淡化得到，每镜遵守生产 Profile 的 ${productionProfile.min_shot_duration_seconds}-${productionProfile.max_shot_duration_seconds} 秒范围、最多 ${productionProfile.max_shots_per_final} 镜；最后另加 ${productionProfile.final_assembly.final_card_duration_seconds} 秒落版，不占内容时长。
+3. 初次必须输出 4 个稳定编号 A/B/C/D 的候选，让用户选择；选择前不得生成落版图、上传参考图或提交视频。四个方案不能全部使用同一种创意依据：至少一个是“剧情点”，至少一个是“剧尾”。每个 concept 必须填写 creativeBasisType（只能是“剧情点”或“剧尾”）和 creativeBasisEvidence（指出具体情节、人物行动或结尾证据）。剧尾方案还必须逐项填写 tailFrameState、lastDialogue、residualEmotion、unfinishedHook；剧情点方案这四项填空字符串。不得把普通剧情点冒充剧尾，也不得只写笼统的“承接剧情”。
 4. 用户选择后才能把 selectedConceptIds 写入；后续只准备审核材料，任何消耗型生成必须明确等待用户确认。
 4a. 当用户明确选择并确认 concept 后，本轮必须立即返回 2-4 张 kind=final_card、previewUrl=""、status=candidate 的落版图方案卡，并进入落版方案审核；不能只描述“下一步会准备”。每张候选必须包含视觉构图、准确英文标题/副标题/CTA、字体层级、色彩、产品真实性边界和可直接提交给 GPT-image-2 的完整英文提示词。此时只生成文字方案卡，不调用图片生成。
 5. 产品 icon 不进入生成输入。视频参考槽位为 male_front、male_side、female_front、female_side、final_card。
@@ -227,6 +231,11 @@ export async function runCreativeTurn(sessionId, userMessage, initial = false, a
         id: revisedCardId, kind: "concept", title: `${turnPolicy.conceptRevisionId}｜${revisedConcept.title}`,
         summary: revisedConcept.tailAdAngle, previewUrl: "", status: "candidate",
         details: [
+          { label: "创意依据", content: revisedConcept.creativeBasisType }, { label: "依据证据", content: revisedConcept.creativeBasisEvidence },
+          ...(revisedConcept.creativeBasisType === "剧尾" ? [
+            { label: "尾帧状态", content: revisedConcept.tailFrameState }, { label: "最后对白", content: revisedConcept.lastDialogue },
+            { label: "残留情绪", content: revisedConcept.residualEmotion }, { label: "未完成钩子", content: revisedConcept.unfinishedHook },
+          ] : []),
           { label: "模型组合", content: `${revisedConcept.primaryDesire}；${revisedConcept.secondaryDesire}；${revisedConcept.narrativeModel}；${revisedConcept.entryPromise}；${revisedConcept.accelerator}` },
           { label: "视频匹配点", content: revisedConcept.videoMatch }, { label: "片尾进入方式", content: revisedConcept.entryMethod },
           { label: "玩法卖点", content: revisedConcept.gameplaySellingPoint }, { label: "对白关系", content: revisedConcept.dialogueRelationship },
@@ -264,6 +273,24 @@ export async function runCreativeTurn(sessionId, userMessage, initial = false, a
       }
       if (!generatedVisualKinds.has(card.kind) || !card.previewUrl || knownVisual.get(card.id) === card.previewUrl) return card;
       return { ...card, previewUrl: "", status: "candidate", details: [...(card.details || []), { label: "生成状态", content: "尚未执行真实图片生成；不得分配或声称新的图片资产编号" }] };
+    });
+    const conceptsByCardId = new Map((output.workspace?.concepts || []).map((concept) => [`concept-${concept.id}`, concept]));
+    output.assistantCards = (output.assistantCards || []).map((card) => {
+      if (card.kind !== "concept") return card;
+      const concept = conceptsByCardId.get(card.id);
+      if (!concept) return card;
+      const basisLabels = new Set(["创意依据", "依据证据", "尾帧状态", "最后对白", "残留情绪", "未完成钩子"]);
+      const basisDetails = [
+        { label: "创意依据", content: concept.creativeBasisType },
+        { label: "依据证据", content: concept.creativeBasisEvidence },
+        ...(concept.creativeBasisType === "剧尾" ? [
+          { label: "尾帧状态", content: concept.tailFrameState },
+          { label: "最后对白", content: concept.lastDialogue },
+          { label: "残留情绪", content: concept.residualEmotion },
+          { label: "未完成钩子", content: concept.unfinishedHook },
+        ] : []),
+      ];
+      return { ...card, details: [...basisDetails, ...(card.details || []).filter((item) => !basisLabels.has(item.label))] };
     });
     const timestamp = now();
     db.prepare("INSERT INTO creative_messages (session_id, role, content, cards_json, created_at) VALUES (?, 'assistant', ?, ?, ?)").run(sessionId, output.assistantMessage, JSON.stringify(output.assistantCards || []), timestamp);
