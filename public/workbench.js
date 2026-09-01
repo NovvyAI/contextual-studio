@@ -450,7 +450,7 @@ const cardKindLabels = {
   concept: "创意方案",
   final_card: "落版图",
   reference_panel: "人物与参考图",
-  audiovisual_direction: "视听方向",
+  audiovisual_direction: "视听语言 Bible",
   storyboard: "剧情与分镜",
   video_prompt: "视频提示词",
   video_shot: "视频镜头",
@@ -459,9 +459,14 @@ const cardKindLabels = {
 
 const chatCardKindLabels = {
   concept: "创意方案", final_card: "落版图", character_image: "人物图", prop_image: "道具图",
-  reference_image: "参考图", audiovisual_direction: "视听方向", storyboard: "剧情与分镜", storyboard_image: "分镜图片", video_prompt: "视频提示词", video_shot: "视频镜头",
+  reference_image: "参考图", audiovisual_direction: "视听语言 Bible", storyboard: "剧情与分镜", storyboard_image: "分镜图片", video_prompt: "视频提示词", video_shot: "视频镜头",
 };
 const characterCandidateNumbers = { "reference-male_front": "01", "reference-male_side": "02", "reference-female_front": "03", "reference-female_side": "04" };
+
+function cardDisplayTitle(card) {
+  if (card.kind !== "audiovisual_direction") return card.title;
+  return String(card.title || "视听语言 Bible V1").replace(/^视听方向(?:\s*V?1)?/i, "视听语言 Bible V1");
+}
 
 function legacyConfirmedCards(workspace) {
   if (workspace.confirmedCards?.length || !workspace.selectedConceptIds?.length) return workspace.confirmedCards || [];
@@ -501,7 +506,7 @@ function renderConfirmedCard(card, expanded) {
     const thumbnail = element("img", "artifact-summary-preview"); thumbnail.src = previewUrl; thumbnail.alt = ""; thumbnail.loading = "lazy";
     identity.append(thumbnail);
   }
-  identity.append(element("span", `artifact-kind kind-${card.kind}`, cardKindLabels[card.kind] || "已确认成果"), element("strong", "", card.title));
+  identity.append(element("span", `artifact-kind kind-${card.kind}`, cardKindLabels[card.kind] || "已确认成果"), element("strong", "", cardDisplayTitle(card)));
   summary.append(identity, element("span", "artifact-toggle", "查看详情"));
   const body = element("div", "artifact-body");
   if (previewUrls.length) {
@@ -721,7 +726,8 @@ function renderChatCard(card, disabled) {
   const conceptBasis = card.kind === "concept" ? (card.details || []).find((item) => item.label === "创意依据")?.content : "";
   if (conceptBasis) header.append(element("span", "concept-basis-badge", conceptBasis));
   header.append(element("span", "chat-card-status", ({ candidate: "候选", selected: "已选择", confirmed: "已确认", superseded: "已替代", generating: "生成中", completed: "已生成", failed: "生成失败" })[card.status] || card.status));
-  node.append(header, element("strong", "chat-card-title", card.title), element("p", `chat-card-summary ${["storyboard", "storyboard_image"].includes(card.kind) ? "storyboard-readable" : ""}`, ["storyboard", "storyboard_image"].includes(card.kind) ? readableStoryboardText(card.summary) : card.summary));
+  const visibleTitle = cardDisplayTitle(card);
+  node.append(header, element("strong", "chat-card-title", visibleTitle), element("p", `chat-card-summary ${["storyboard", "storyboard_image"].includes(card.kind) ? "storyboard-readable" : ""}`, ["storyboard", "storyboard_image"].includes(card.kind) ? readableStoryboardText(card.summary) : card.summary));
   if (card.previewUrl) {
     if (card.kind === "video_prompt" || card.kind === "video_shot" || /\.(mp4|mov|webm)(\?|$)/i.test(card.previewUrl)) {
       const video = element("video", "chat-card-preview chat-card-video"); video.src = card.previewUrl; video.controls = true; video.playsInline = true; video.preload = "metadata"; node.append(video);
@@ -825,6 +831,8 @@ function renderChatCard(card, disabled) {
     }
   });
   const isFinalCardDraft = card.kind === "final_card" && !card.previewUrl;
+  const finalCardStatus = currentSession?.workspace?.productionPlan?.finalCardStatus || "";
+  const isFinalCardDirection = isFinalCardDraft && finalCardStatus === "direction_review";
   const isFailedFinalCard = isFinalCardDraft && card.status === "failed";
   const isGeneratedFinalCard = card.kind === "final_card" && Boolean(card.previewUrl);
   const isVideoPromptDraft = card.kind === "video_prompt" && !card.previewUrl;
@@ -857,7 +865,7 @@ function renderChatCard(card, disabled) {
     providerRow.append(videoProvider);
     actions.append(providerRow);
   }
-  const adoptLabel = card.kind === "concept" ? "选择这个方案" : card.kind === "audiovisual_direction" ? "确认视听方向并生成剧情与分镜" : card.kind === "storyboard" ? "选择并生成分镜图" : isFailedFinalCard ? "重新生成落版图" : isFinalCardDraft ? "确认并生成落版图" : isGeneratedFinalCard ? "确认使用" : isFinalVideo && card.status === "confirmed" ? "最终成片已确认" : isFinalVideo ? "确认最终成片" : isShotBatchReady ? "确认全部镜头并合成" : isVideoPromptDraft && card.status === "failed" ? "按所选方式重新生成" : isVideoPromptDraft ? "确认并生成逐镜视频" : "采用这个候选";
+  const adoptLabel = card.kind === "concept" ? "选择这个方案" : card.kind === "audiovisual_direction" ? "确认视听方向并生成剧情与分镜" : card.kind === "storyboard" ? "选择并生成分镜图" : isFinalCardDirection ? "确认这个落版方向" : isFailedFinalCard ? "重新生成落版图" : isFinalCardDraft ? "确认并生成落版图" : isGeneratedFinalCard ? "确认使用" : isFinalVideo && card.status === "confirmed" ? "最终成片已确认" : isFinalVideo ? "确认最终成片" : isShotBatchReady ? "确认全部镜头并合成" : isVideoPromptDraft && card.status === "failed" ? "按所选方式重新生成" : isVideoPromptDraft ? "确认并生成逐镜视频" : "采用这个候选";
   const adopt = element("button", "chat-card-adopt", adoptLabel); adopt.type = "button";
   const actionStages = card.kind === "concept" ? ["concept_review"]
     : card.kind === "audiovisual_direction" ? ["audiovisual_review"]
@@ -881,6 +889,15 @@ function renderChatCard(card, disabled) {
         await api(`/api/creative/sessions/${sessionId}/cards/${encodeURIComponent(card.id)}/approve-audiovisual-direction`, {
           method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ directorChoice: directorChoice?.() || "" }),
         });
+        return refreshSession();
+      } catch (error) {
+        adopt.disabled = false; adopt.textContent = adoptLabel; alert(error.message); return;
+      }
+    }
+    if (isFinalCardDirection) {
+      adopt.disabled = true; adopt.textContent = "正在确认落版方向…";
+      try {
+        await api(`/api/creative/sessions/${sessionId}/cards/${encodeURIComponent(card.id)}/approve-final-card-direction`, { method: "POST" });
         return refreshSession();
       } catch (error) {
         adopt.disabled = false; adopt.textContent = adoptLabel; alert(error.message); return;
@@ -945,7 +962,7 @@ function renderChatCard(card, disabled) {
         return;
       }
     }
-    if (!isFinalCardDraft) return sendMessage(`我选择并确认采用候选卡 ${card.id}：${card.title}。请保留其他历史内容。现在立即根据已确认创意生成 2-4 个可审核的落版图方案候选卡：kind 必须为 final_card，previewUrl 保持为空，status 为 candidate；每张卡写清视觉构图、英文标题/副标题/CTA、字体层级、色彩、产品真实性边界和 GPT-image-2 英文生成提示词。此步骤只准备候选方案，不执行图片生成，也不要只告诉我下一步。`);
+    if (!isFinalCardDraft) return sendMessage(`我选择并确认采用候选卡 ${card.id}：${card.title}。请保留其他历史内容并只确认这个创意方案。下一步进入人物与参考图选择；现在不要生成落版方向、落版图片、视听方向或剧情分镜。`);
     adopt.disabled = true;
     adopt.textContent = "正在创建任务…";
     try {
@@ -1024,11 +1041,11 @@ function currentStagePresentation(session, workspace) {
   const hasGeneratedFinalCard = latestFinalCardSet.some((card) => Boolean(card.previewUrl));
   return ({
     concept_review: { stage, title: "创意方案候选", heading: "正在讨论的创意方向", kind: "concept", statusKey: "" },
-    concept_selected: { stage, title: "已选方案深化", heading: "已选创意与落版准备", kind: "concept", statusKey: "finalCardStatus" },
+    concept_selected: { stage, title: "已选方案深化", heading: "已选创意与人物准备", kind: "concept", statusKey: "referenceStatus" },
     final_card_review: {
       stage,
-      title: hasGeneratedFinalCard ? "确认落版图" : "确认落版方案",
-      heading: hasGeneratedFinalCard ? "落版图已生成" : "落版图方案待确认",
+      title: hasGeneratedFinalCard ? "确认落版图" : workspace.productionPlan?.finalCardStatus === "ready_to_generate" ? "生成真实落版图" : "确认落版方向",
+      heading: hasGeneratedFinalCard ? "落版图已生成" : workspace.productionPlan?.finalCardStatus === "ready_to_generate" ? "已结合末镜校准落版图" : "落版方向待确认",
       kind: "final_card",
       statusKey: "finalCardStatus",
     },
@@ -1239,7 +1256,7 @@ function renderCanvas(session) {
       const item = element("article", "current-focus-card");
       const focusNumber = characterCandidateNumbers[card.id] || card.candidateNumber;
       const focusLabel = card.kind === "character_image" && focusNumber ? `人物候选 ${focusNumber}` : chatCardKindLabels[card.kind] || "候选";
-      item.append(element("small", "", focusLabel), element("strong", "", card.title), element("p", "", card.summary));
+      item.append(element("small", "", focusLabel), element("strong", "", cardDisplayTitle(card)), element("p", "", card.summary));
       if (card.previewUrl) {
         const image = element("img", "current-focus-preview"); image.src = card.previewUrl; image.alt = card.title; image.loading = "lazy";
         item.append(image);
