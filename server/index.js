@@ -77,6 +77,25 @@ async function parseMultipart(req) {
   return request.formData();
 }
 
+async function parseImageEditRequest(req) {
+  const isMultipart = String(req.headers["content-type"] || "").includes("multipart/form-data");
+  if (!isMultipart) {
+    const body = JSON.parse((await requestBody(req)).toString("utf8") || "{}");
+    return { feedback: body.feedback, editInput: null };
+  }
+  const body = await parseMultipart(req);
+  const fileInput = async (name) => {
+    const file = body.get(name);
+    if (!file || typeof file.arrayBuffer !== "function" || !file.size) return null;
+    return { buffer: Buffer.from(await file.arrayBuffer()), mimeType: file.type, fileName: file.name };
+  };
+  const maskInput = await fileInput("mask");
+  return {
+    feedback: body.get("feedback"),
+    editInput: maskInput ? { maskInput } : null,
+  };
+}
+
 function sendFile(res, filePath, contentType) {
   if (!fs.existsSync(filePath)) return json(res, 404, { error: "文件不存在" });
   res.writeHead(200, { "content-type": contentType, "accept-ranges": "bytes" });
@@ -344,18 +363,26 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && finalCardRegenerateMatch) {
       const id = Number(finalCardRegenerateMatch[1]);
       const cardId = decodeURIComponent(finalCardRegenerateMatch[2]);
-      const body = JSON.parse((await requestBody(req)).toString("utf8") || "{}");
-      startFinalCardRegeneration(id, cardId, body.feedback);
-      return json(res, 202, { id, cardId, status: "working", action: "final_card_regeneration" });
+      const body = await parseImageEditRequest(req);
+      try {
+        startFinalCardRegeneration(id, cardId, body.feedback, body.editInput);
+      } catch (error) {
+        return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+      }
+      return json(res, 202, { id, cardId, status: "working", action: "final_card_regeneration", masked: Boolean(body.editInput?.maskInput) });
     }
 
     const characterRegenerateMatch = url.pathname.match(/^\/api\/creative\/sessions\/(\d+)\/cards\/([^/]+)\/regenerate-image$/);
     if (req.method === "POST" && characterRegenerateMatch) {
       const id = Number(characterRegenerateMatch[1]);
       const cardId = decodeURIComponent(characterRegenerateMatch[2]);
-      const body = JSON.parse((await requestBody(req)).toString("utf8") || "{}");
-      startCharacterRegeneration(id, cardId, body.feedback);
-      return json(res, 202, { id, cardId, status: "working" });
+      const body = await parseImageEditRequest(req);
+      try {
+        startCharacterRegeneration(id, cardId, body.feedback, body.editInput);
+      } catch (error) {
+        return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+      }
+      return json(res, 202, { id, cardId, status: "working", masked: Boolean(body.editInput?.maskInput) });
     }
 
     const characterApproveMatch = url.pathname.match(/^\/api\/creative\/sessions\/(\d+)\/characters\/approve$/);
@@ -430,9 +457,13 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && storyboardRegenerateMatch) {
       const id = Number(storyboardRegenerateMatch[1]);
       const cardId = decodeURIComponent(storyboardRegenerateMatch[2]);
-      const body = JSON.parse((await requestBody(req)).toString("utf8") || "{}");
-      startStoryboardImageRegeneration(id, cardId, body.feedback);
-      return json(res, 202, { id, cardId, status: "working" });
+      const body = await parseImageEditRequest(req);
+      try {
+        startStoryboardImageRegeneration(id, cardId, body.feedback, body.editInput);
+      } catch (error) {
+        return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+      }
+      return json(res, 202, { id, cardId, status: "working", masked: Boolean(body.editInput?.maskInput) });
     }
 
     const storyboardApproveMatch = url.pathname.match(/^\/api\/creative\/sessions\/(\d+)\/storyboards\/approve$/);
@@ -455,9 +486,13 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && assetRegenerateMatch) {
       const id = Number(assetRegenerateMatch[1]);
       const assetNumber = Number(assetRegenerateMatch[2]);
-      const body = JSON.parse((await requestBody(req)).toString("utf8") || "{}");
-      startAssetRegeneration(id, assetNumber, body.feedback);
-      return json(res, 202, { id, assetNumber, status: "working" });
+      const body = await parseImageEditRequest(req);
+      try {
+        startAssetRegeneration(id, assetNumber, body.feedback, body.editInput);
+      } catch (error) {
+        return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+      }
+      return json(res, 202, { id, assetNumber, status: "working", masked: Boolean(body.editInput?.maskInput) });
     }
 
     const assetCreateMatch = url.pathname.match(/^\/api\/creative\/sessions\/(\d+)\/assets\/generate$/);

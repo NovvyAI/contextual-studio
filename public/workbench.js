@@ -6,6 +6,7 @@ let suppressChatScrollTracking = false;
 let canvasRenderSignature = "";
 const canvasDetailsOpenState = new Map();
 const chatCardFeedbackDrafts = new Map();
+const pendingImageMasks = new Map();
 const pendingChatFiles = [];
 let pendingChatPreviewUrls = [];
 const selectedCharacterIds = new Set();
@@ -185,13 +186,61 @@ function annotationInstruction(items) {
   return `\n\n图片标注（坐标按图片左上角为原点，宽高均归一化为 0%-100%）：\n${lines.join("\n")}\n请把用户文字中的区域编号与以上位置对应，并保留未被点名的区域。`;
 }
 
-function openImageAnnotator(imageUrl, title, onApply) {
+function maskEditInstruction(items) {
+  const requests = items.map((item, index) => `- 修改要求 ${index + 1}：${item.note.trim()}`);
+  return `\n\n局部编辑要求（待修改位置已通过 PNG alpha 蒙版提供）：\n${requests.join("\n")}\n只修改蒙版允许编辑的区域，保留蒙版外的所有内容。`;
+}
+
+async function createAnnotationMask(image, annotations) {
+  if (!image.complete || !image.naturalWidth || !image.naturalHeight) {
+    await new Promise((resolve, reject) => {
+      image.addEventListener("load", resolve, { once: true });
+      image.addEventListener("error", () => reject(new Error("原图加载失败，暂时无法生成编辑蒙版")), { once: true });
+    });
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = image.naturalWidth;
+  canvas.height = image.naturalHeight;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("当前浏览器无法创建图片编辑蒙版");
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.globalCompositeOperation = "destination-out";
+  const px = (value, size) => value / 100 * size;
+  const pointRadius = Math.max(8, Math.min(canvas.width, canvas.height) * 0.035);
+  annotations.forEach((item) => {
+    context.beginPath();
+    if (item.type === "rect") {
+      context.rect(px(item.x, canvas.width), px(item.y, canvas.height), px(item.width, canvas.width), px(item.height, canvas.height));
+    } else {
+      const x = item.type === "arrow" ? item.x2 : item.x;
+      const y = item.type === "arrow" ? item.y2 : item.y;
+      context.arc(px(x, canvas.width), px(y, canvas.height), pointRadius, 0, Math.PI * 2);
+    }
+    context.fill();
+  });
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+  if (!blob) throw new Error("编辑蒙版生成失败，请重新标注");
+  return { blob, width: canvas.width, height: canvas.height };
+}
+
+function imageEditRequestOptions(instruction, mask, fileStem) {
+  if (!mask) return { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ feedback: instruction }) };
+  const request = new FormData();
+  request.append("feedback", instruction);
+  request.append("mask", mask.blob, `${fileStem}-mask.png`);
+  return { method: "POST", body: request };
+}
+
+function openImageAnnotator(imageUrl, title, onApply, options = {}) {
   const dialog = element("dialog", "image-annotator-dialog");
   const header = element("header", "image-annotator-header");
   header.append(element("div", "", "标注修改位置"));
   const close = element("button", "image-annotator-close", "×"); close.type = "button"; close.setAttribute("aria-label", "关闭标注");
   header.append(close);
-  const help = element("p", "image-annotator-help", `${title} · 在图片上点选、框选或画箭头，标注会自动编号。`);
+  const help = element("p", "image-annotator-help", options.useMask
+    ? `${title} · 在图片上点选、框选或画箭头；选中的区域会生成真实 PNG 编辑蒙版。`
+    : `${title} · 在图片上点选、框选或画箭头，标注会自动编号。`);
   const toolbar = element("div", "image-annotator-toolbar");
   let tool = "rect";
   const toolButtons = [["point", "点选"], ["rect", "框选"], ["arrow", "箭头"]].map(([value, label]) => {
@@ -252,24 +301,40 @@ function openImageAnnotator(imageUrl, title, onApply) {
   const dismiss = () => { dialog.close(); dialog.remove(); };
   close.addEventListener("click", dismiss); cancel.addEventListener("click", dismiss);
   dialog.addEventListener("cancel", (event) => { event.preventDefault(); dismiss(); });
-  apply.addEventListener("click", () => {
+  apply.addEventListener("click", async () => {
     const firstEmpty = annotations.findIndex((item) => !item.note?.trim());
     if (firstEmpty >= 0) {
       const input = list.querySelectorAll(".image-annotation-note")[firstEmpty];
       input.setCustomValidity(`请填写区域 ${firstEmpty + 1} 的修改要求`); input.reportValidity(); input.setCustomValidity(""); input.focus(); return;
     }
-    onApply(annotationInstruction(annotations)); dismiss();
+    try {
+      apply.disabled = true;
+      apply.textContent = options.useMask ? "正在生成蒙版…" : "正在应用…";
+      const mask = options.useMask ? await createAnnotationMask(image, annotations) : null;
+      await onApply({ instruction: options.useMask ? maskEditInstruction(annotations) : annotationInstruction(annotations), mask });
+      dismiss();
+    } catch (error) {
+      apply.disabled = false;
+      apply.textContent = "使用这些标注";
+      alert(error instanceof Error ? error.message : String(error));
+    }
   });
   render(); dialog.showModal();
 }
 
-function addAnnotationButton(container, imageUrl, title, textarea, disabled) {
+function addAnnotationButton(container, imageUrl, title, textarea, disabled, options = {}) {
   if (!imageUrl || /\.(mp4|mov|webm)(\?|$)/i.test(imageUrl)) return;
-  const button = element("button", "image-annotate-button", "标注图片位置"); button.type = "button"; button.disabled = disabled;
-  button.addEventListener("click", () => openImageAnnotator(imageUrl, title, (instruction) => {
+  const existingMask = options.maskKey ? pendingImageMasks.get(options.maskKey) : null;
+  const button = element("button", "image-annotate-button", existingMask ? "已添加局部编辑蒙版" : options.useMask ? "蒙版选择修改区域" : "标注图片位置"); button.type = "button"; button.disabled = disabled;
+  button.addEventListener("click", () => openImageAnnotator(imageUrl, title, ({ instruction, mask }) => {
     textarea.value = `${textarea.value.trim()}${textarea.value.trim() ? "\n" : ""}${instruction.trim()}`;
+    if (mask && options.maskKey) {
+      pendingImageMasks.set(options.maskKey, mask);
+      button.textContent = "已添加局部编辑蒙版";
+    }
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
     textarea.focus();
-  }));
+  }, options));
   container.append(button);
 }
 
@@ -790,14 +855,20 @@ function renderChatCard(card, disabled) {
   }
   const editor = element("div", "chat-card-editor");
   const feedback = element("textarea", "chat-card-feedback"); feedback.rows = 2; feedback.placeholder = "填写修改意见；可直接引用图片 04、图片 06…"; feedback.disabled = disabled;
+  const imageMaskKey = `card:${card.id}`;
   feedback.value = chatCardFeedbackDrafts.get(card.id) || "";
   feedback.addEventListener("input", () => {
     if (feedback.value) chatCardFeedbackDrafts.set(card.id, feedback.value);
-    else chatCardFeedbackDrafts.delete(card.id);
+    else {
+      chatCardFeedbackDrafts.delete(card.id);
+      pendingImageMasks.delete(imageMaskKey);
+    }
   });
   const actions = element("div", "chat-card-actions");
   const regenerate = element("button", "chat-card-regenerate", "按意见重新生成"); regenerate.type = "button"; regenerate.disabled = disabled;
-  if (["character_image", "storyboard_image", "final_card", "prop_image", "reference_image"].includes(card.kind)) addAnnotationButton(actions, card.previewUrl, card.title, feedback, disabled);
+  if (["character_image", "storyboard_image", "final_card", "prop_image", "reference_image"].includes(card.kind)) {
+    addAnnotationButton(actions, card.previewUrl, card.title, feedback, disabled, { useMask: true, maskKey: imageMaskKey });
+  }
   regenerate.addEventListener("click", async () => {
     try {
       regenerate.disabled = true; regenerate.textContent = "正在提交…";
@@ -806,21 +877,41 @@ function renderChatCard(card, disabled) {
         const instruction = feedback.value.trim();
         if (!instruction) { feedback.setCustomValidity("请先填写对这张人物图的修改意见"); feedback.reportValidity(); feedback.setCustomValidity(""); submitted = false; }
         else {
-          await api(`/api/creative/sessions/${sessionId}/cards/${encodeURIComponent(card.id)}/regenerate-image`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ feedback: instruction }) });
+          const mask = pendingImageMasks.get(imageMaskKey);
+          await api(`/api/creative/sessions/${sessionId}/cards/${encodeURIComponent(card.id)}/regenerate-image`, imageEditRequestOptions(instruction, mask, `character-${card.id}`));
+          pendingImageMasks.delete(imageMaskKey);
+          chatCardFeedbackDrafts.delete(card.id);
           submitted = true; await refreshSession();
         }
       } else if (card.kind === "storyboard_image") {
         const instruction = feedback.value.trim();
         if (!instruction) { feedback.setCustomValidity("请先填写对这张分镜图的修改意见"); feedback.reportValidity(); feedback.setCustomValidity(""); submitted = false; }
         else {
-          await api(`/api/creative/sessions/${sessionId}/cards/${encodeURIComponent(card.id)}/regenerate-storyboard-image`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ feedback: instruction }) });
+          const mask = pendingImageMasks.get(imageMaskKey);
+          await api(`/api/creative/sessions/${sessionId}/cards/${encodeURIComponent(card.id)}/regenerate-storyboard-image`, imageEditRequestOptions(instruction, mask, `storyboard-${card.id}`));
+          pendingImageMasks.delete(imageMaskKey);
           chatCardFeedbackDrafts.delete(card.id); submitted = true; await refreshSession();
         }
       } else if (card.kind === "final_card" && card.previewUrl) {
         const instruction = feedback.value.trim();
         if (!instruction) { feedback.setCustomValidity("请先填写对这张落版图的修改意见"); feedback.reportValidity(); feedback.setCustomValidity(""); submitted = false; }
         else {
-          await api(`/api/creative/sessions/${sessionId}/cards/${encodeURIComponent(card.id)}/regenerate-final-card`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ feedback: instruction }) });
+          const mask = pendingImageMasks.get(imageMaskKey);
+          await api(`/api/creative/sessions/${sessionId}/cards/${encodeURIComponent(card.id)}/regenerate-final-card`, imageEditRequestOptions(instruction, mask, `final-card-${card.id}`));
+          pendingImageMasks.delete(imageMaskKey);
+          chatCardFeedbackDrafts.delete(card.id);
+          submitted = true; await refreshSession();
+        }
+      } else if (["prop_image", "reference_image"].includes(card.kind) && card.previewUrl) {
+        const instruction = feedback.value.trim();
+        if (!instruction) { feedback.setCustomValidity("请先填写对这张图片的修改意见"); feedback.reportValidity(); feedback.setCustomValidity(""); submitted = false; }
+        else {
+          const asset = currentSession?.assets?.find((item) => item.sourceCardId === card.id && item.url === card.previewUrl);
+          if (!asset) throw new Error("找不到这张图片对应的资产版本，请刷新页面后重试");
+          const mask = pendingImageMasks.get(imageMaskKey);
+          await api(`/api/creative/sessions/${sessionId}/assets/${asset.number}/regenerate`, imageEditRequestOptions(instruction, mask, `asset-${asset.number}`));
+          pendingImageMasks.delete(imageMaskKey);
+          chatCardFeedbackDrafts.delete(card.id);
           submitted = true; await refreshSession();
         }
       } else submitted = await sendChatCardFeedback(card, feedback.value, feedback);
@@ -1092,17 +1183,21 @@ function renderAssetLibrary(assets, screenshots, disabled) {
     });
     const revision = element("div", "asset-revision");
     const feedback = element("textarea", "asset-feedback"); feedback.rows = 2; feedback.placeholder = `对${asset.reference}提出修改；可引用其他图片或截图…`; feedback.disabled = disabled;
+    const imageMaskKey = `asset:${asset.number}`;
+    feedback.addEventListener("input", () => { if (!feedback.value) pendingImageMasks.delete(imageMaskKey); });
     const regenerate = element("button", "asset-regenerate", "按意见重新生成"); regenerate.type = "button"; regenerate.disabled = disabled;
     regenerate.addEventListener("click", async () => {
       const instruction = feedback.value.trim(); if (!instruction) return feedback.focus();
       try {
         regenerate.disabled = true; regenerate.textContent = "正在提交…";
-        await api(`/api/creative/sessions/${sessionId}/assets/${asset.number}/regenerate`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ feedback: instruction }) });
+        const mask = pendingImageMasks.get(imageMaskKey);
+        await api(`/api/creative/sessions/${sessionId}/assets/${asset.number}/regenerate`, imageEditRequestOptions(instruction, mask, `asset-${asset.number}`));
+        pendingImageMasks.delete(imageMaskKey);
         await refreshSession();
       } catch (error) { regenerate.disabled = false; regenerate.textContent = "按意见重新生成"; alert(error.message); }
     });
     revision.append(feedback);
-    addAnnotationButton(revision, asset.url, `${asset.reference} ${asset.title}`, feedback, disabled);
+    addAnnotationButton(revision, asset.url, `${asset.reference} ${asset.title}`, feedback, disabled, { useMask: true, maskKey: imageMaskKey });
     revision.append(regenerate);
     const actions = element("div", "asset-actions"); actions.append(use, remove);
     body.append(actions, revision); card.append(media, body); grid.append(card);
