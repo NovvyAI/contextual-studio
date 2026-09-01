@@ -91,6 +91,7 @@ main { width:min(1240px,92vw); margin:auto; padding:70px 0 100px; }
 .director-reference-option input { margin-top: 4px; }
 .director-reference-option span { display: grid; gap: 4px; }
 .director-reference-option small { line-height: 1.5; color: var(--muted, #adb3a7); }
+.director-reference-select{display:block;width:100%;margin-top:4px;border:1px solid #4b583d;border-radius:9px;background:#151a13;color:#e7ecdf;padding:11px 34px 11px 11px;font:14px/1.4 inherit;outline:none}.director-reference-select:focus{border-color:var(--lime)}.director-reference-select:disabled{opacity:.45}.director-reference-description{display:block;margin-top:9px;color:#aeb8a4;line-height:1.55;overflow-wrap:anywhere}
 .concept-heading { display:flex; align-items:center; gap:7px; min-width:0; }
 .concept-heading strong { flex:1; min-width:0; }
 .concept-basis-badge { display:inline-flex; align-items:center; flex:0 0 auto; border:1px solid #718346; border-radius:999px; background:#242c1b; color:#d8f46c; padding:2px 7px; font-size:8px; line-height:1.25; white-space:nowrap; }

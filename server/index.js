@@ -23,6 +23,7 @@ import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
 import { backfillCreativeTelemetry, flushTelemetryOutbox, recordCreativeFeedback, recordCreativeRunStart, recordCreativeStage, startTelemetryWorker, telemetryStatus } from "./creative-telemetry.js";
 import { mlflowTracingStatus } from "./mlflow-tracing.js";
 import { dramaAnalysisContract, dramaAnalysisView, isDramaAnalysisV3 } from "./drama-analysis-v3.js";
+import { listDirectorStyles } from "./director-library.js";
 
 const port = Number(process.env.PORT || 4180);
 const publicDir = path.resolve("public");
@@ -202,6 +203,10 @@ const server = http.createServer(async (req, res) => {
         ORDER BY sessions.id DESC
       `).all(dramaAnalysisContract);
       return json(res, 200, { items: rows.map(serializeCreativeSession) });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/audiovisual/directors") {
+      return json(res, 200, { items: listDirectorStyles() });
     }
 
     if (req.method === "POST" && url.pathname === "/api/creative/sessions") {

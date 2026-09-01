@@ -10,6 +10,16 @@ const pendingChatFiles = [];
 let pendingChatPreviewUrls = [];
 const selectedCharacterIds = new Set();
 let currentSession = null;
+let directorLibrary = [];
+let directorLibraryPromise = null;
+
+function loadDirectorLibrary() {
+  directorLibraryPromise ||= api("/api/audiovisual/directors").then((result) => {
+    directorLibrary = Array.isArray(result.items) ? result.items : [];
+    return directorLibrary;
+  });
+  return directorLibraryPromise;
+}
 
 const workbenchSplitStorageKey = "contextual-studio:workbench-canvas-ratio";
 const defaultWorkbenchCanvasRatio = 2 / 3;
@@ -823,20 +833,19 @@ function renderChatCard(card, disabled) {
   let directorChoice;
   if (card.kind === "audiovisual_direction") {
     const picker = element("fieldset", "director-reference-picker");
-    picker.append(element("legend", "", "导演风格参考（可不选）"));
-    const options = (card.details || []).filter((item) => /^(?:AI推荐导演|导演选项)｜/.test(String(item.label || "")));
-    options.forEach((item, index) => {
-      const name = item.label.split("｜").slice(1).join("｜");
-      const label = element("label", "director-reference-option");
-      const radio = document.createElement("input"); radio.type = "radio"; radio.name = `director-${card.id}`; radio.value = name; radio.checked = index === 0; radio.disabled = disabled;
-      const copy = element("span"); copy.append(element("b", "", `${item.label.startsWith("AI推荐") ? "AI 推荐 · " : ""}${name}`), element("small", "", item.content));
-      label.append(radio, copy); picker.append(label);
+    picker.append(element("legend", "", `导演风格参考 · 本地 ${directorLibrary.length} 位`));
+    const select = document.createElement("select"); select.className = "director-reference-select"; select.disabled = disabled;
+    select.append(new Option("请选择导演…", ""), new Option("不使用导演参考", "不使用导演参考"));
+    directorLibrary.forEach((director) => select.append(new Option(`${director.name}${director.completeness === "部分" ? "（部分资料）" : ""}`, director.name)));
+    const description = element("small", "director-reference-description", "请选择一位导演；确认时系统会采用本地库中的可观察制作参数，不复制具体作品或镜头。" );
+    select.addEventListener("change", () => {
+      const selected = directorLibrary.find((director) => director.name === select.value);
+      description.textContent = select.value === "不使用导演参考"
+        ? "只遵循原短剧证据和本卡的视听语言 Bible。"
+        : selected?.parameters?.join("；") || "请选择一位导演。";
     });
-    const none = element("label", "director-reference-option");
-    const radio = document.createElement("input"); radio.type = "radio"; radio.name = `director-${card.id}`; radio.value = "不使用导演参考"; radio.disabled = disabled;
-    const copy = element("span"); copy.append(element("b", "", "不使用导演参考"), element("small", "", "只遵循原短剧证据和本卡的视听语言 Bible。"));
-    none.append(radio, copy); picker.append(none); node.append(picker);
-    directorChoice = () => picker.querySelector("input:checked")?.value || "";
+    picker.append(select, description); node.append(picker);
+    directorChoice = () => select.value;
   }
   let videoProvider;
   if (isVideoPromptDraft && !isShotBatchReady) {
@@ -1540,7 +1549,7 @@ function renderError(error) {
 async function refreshSession() {
   if (!Number.isInteger(sessionId) || sessionId <= 0) return renderError(new Error("工作台地址无效，请从项目列表重新进入。"));
   try {
-    const session = await api(`/api/creative/sessions/${sessionId}`);
+    const [session] = await Promise.all([api(`/api/creative/sessions/${sessionId}`), loadDirectorLibrary()]);
     currentSession = session;
     renderCanvas(session);
     renderMessages(session);
