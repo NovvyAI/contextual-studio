@@ -1,4 +1,4 @@
-import { creativeAssets, db, now, resolveAssetReferences } from "./database.js";
+import { creativeAssets, creativeCharacterReferenceAssets, db, now, resolveAssetReferences } from "./database.js";
 import { publicInputUrl } from "./character-generator.js";
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
 import { recordCreativeAsset, recordCreativeFeedback } from "./creative-telemetry.js";
@@ -203,7 +203,38 @@ export function startAssetRegeneration(sessionId, assetNumber, feedback) {
   regenerate(sessionId, asset, sourceCard, instruction);
 }
 
-async function regenerate(sessionId, asset, sourceCard, feedback) {
+export function startCharacterReferenceRegeneration(sessionId, characterReferenceNumber, feedback) {
+  const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
+  if (!session) throw new Error("创意工作台不存在");
+  if (session.stage === "working") throw new Error("当前仍有任务正在处理");
+  const asset = creativeCharacterReferenceAssets(sessionId).find((item) => item.number === Number(characterReferenceNumber));
+  if (!asset) throw new Error(`找不到人物图 ${String(characterReferenceNumber).padStart(2, "0")}`);
+  const instruction = String(feedback || "").trim();
+  if (!instruction) throw new Error("请填写对这张人物参考图的修改意见");
+  const timestamp = now();
+  const sourceCard = {
+    id: `character-reference-edit-${asset.characterId}-${asset.view}-${Date.now()}`,
+    kind: "character_image",
+    title: `${asset.title}｜修改候选`,
+    summary: instruction,
+    previewUrl: "",
+    version: 1,
+    status: "generating",
+    details: [
+      { label: "原始人物参考", content: asset.reference },
+      { label: "修改意见", content: instruction },
+      { label: "生成方式", content: "以原视频人物截图为第一张高保真参考图" },
+    ],
+  };
+  db.prepare("INSERT INTO creative_messages (session_id,role,content,visibility,created_at) VALUES (?,'user',?,'asset',?)")
+    .run(sessionId, `修改${asset.reference}（${asset.title}）：${instruction}`, timestamp);
+  appendAsset(sessionId, `正在以${asset.reference}为主图重新生成。原始人物参考图会继续保留。`, sourceCard);
+  db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, sessionId);
+  regenerate(sessionId, asset, sourceCard, instruction, { assetOnly: true, returnStage: session.stage });
+}
+
+async function regenerate(sessionId, asset, sourceCard, feedback, options = {}) {
+  const appendResult = options.assetOnly ? appendAsset : append;
   try {
     const referenced = resolveAssetReferences(sessionId, feedback).filter((item) => item.url !== asset.url);
     const inputs = [await publicInputUrl(asset.url)];
@@ -224,13 +255,13 @@ async function regenerate(sessionId, asset, sourceCard, feedback) {
     const previewUrl = imageUrl(result); if (!previewUrl) throw new Error("图片生成查询超时");
     const version = Math.max(Number(asset.version || 1), Number(sourceCard.version || 1)) + 1;
     const completed = { ...sourceCard, previewUrl, version, status: "candidate", summary: `${sourceCard.summary || asset.description}（基于${asset.reference}修改）`, details: [...(sourceCard.details || []), { label: `V${version} 修改`, content: feedback }, { label: "主参考资产", content: asset.reference }, ...(referenced.length ? [{ label: "额外引用", content: referenced.map((item) => item.reference).join("、") }] : []), { label: "生成任务", content: taskId || providerSessionId }] };
-    append(sessionId, `${asset.reference}的修改版已经生成。旧图保留，新版本已加入资产区域。`, completed);
-    const stage = asset.kind === "final_card" ? "final_card_review" : asset.kind === "storyboard_image" ? "storyboard_review" : "reference_review";
+    appendResult(sessionId, `${asset.reference}的修改版已经生成。原图保留，新版本已加入生成图片区域。`, completed);
+    const stage = options.returnStage || (asset.kind === "final_card" ? "final_card_review" : asset.kind === "storyboard_image" ? "storyboard_review" : "reference_review");
     db.prepare("UPDATE creative_sessions SET stage=?,error_message=NULL,updated_at=? WHERE id=?").run(stage, now(), sessionId);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    append(sessionId, `${asset.reference}重新生成失败：${message}。原资产仍然保留。`, { ...sourceCard, previewUrl: asset.url, status: "failed" });
-    const stage = asset.kind === "final_card" ? "final_card_review" : asset.kind === "storyboard_image" ? "storyboard_review" : "reference_review";
+    appendResult(sessionId, `${asset.reference}重新生成失败：${message}。原资产仍然保留。`, { ...sourceCard, previewUrl: asset.url, status: "failed" });
+    const stage = options.returnStage || (asset.kind === "final_card" ? "final_card_review" : asset.kind === "storyboard_image" ? "storyboard_review" : "reference_review");
     db.prepare("UPDATE creative_sessions SET stage=?,error_message=?,updated_at=? WHERE id=?").run(stage, message, now(), sessionId);
   }
 }

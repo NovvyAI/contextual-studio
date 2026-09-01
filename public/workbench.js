@@ -1095,7 +1095,21 @@ function renderAssetLibrary(assets, characterReferences, screenshots, disabled) 
       const prefix = input.value.trim(); input.value = `${prefix}${prefix ? "\n" : ""}使用${asset.reference}（${asset.title}）：`;
       input.focus(); input.setSelectionRange(input.value.length, input.value.length);
     });
-    body.append(use); card.append(media, body); characterGrid.append(card);
+    const revision = element("div", "asset-revision");
+    const feedback = element("textarea", "asset-feedback"); feedback.rows = 2; feedback.placeholder = `对${asset.reference}提出修改；可先标注具体位置，也可引用其他图片…`; feedback.disabled = disabled;
+    const regenerate = element("button", "asset-regenerate", "按意见重新生成"); regenerate.type = "button"; regenerate.disabled = disabled;
+    regenerate.addEventListener("click", async () => {
+      const instruction = feedback.value.trim(); if (!instruction) return feedback.focus();
+      try {
+        regenerate.disabled = true; regenerate.textContent = "正在提交…";
+        await api(`/api/creative/sessions/${sessionId}/character-references/${asset.number}/regenerate`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ feedback: instruction }) });
+        await refreshSession();
+      } catch (error) { regenerate.disabled = false; regenerate.textContent = "按意见重新生成"; alert(error.message); }
+    });
+    revision.append(feedback);
+    addAnnotationButton(revision, asset.url, `${asset.reference} ${asset.title}`, feedback, disabled);
+    revision.append(regenerate);
+    body.append(use, revision); card.append(media, body); characterGrid.append(card);
   });
   if (!characterReferences.length) characterGrid.append(element("p", "asset-library-empty", "短剧分析生成人物候选后，会显示在这里。"));
   section.append(element("h3", "asset-zone-title", "生成图片"));

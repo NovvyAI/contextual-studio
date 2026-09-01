@@ -18,7 +18,7 @@ import { approveAndFinalizeVideoShots, approveFinalVideo } from "./video-shot-re
 import { generatedVideoPath } from "./video-finalizer.js";
 import { productionProfile } from "./production-profile.js";
 import { landingPackagePath, packageLandingPage } from "./landing-page-packager.js";
-import { registerChatAttachmentsAsAssets, startAssetCreation, startAssetRegeneration, startAttachmentImageEdit } from "./asset-generator.js";
+import { registerChatAttachmentsAsAssets, startAssetCreation, startAssetRegeneration, startAttachmentImageEdit, startCharacterReferenceRegeneration } from "./asset-generator.js";
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
 import { backfillCreativeTelemetry, flushTelemetryOutbox, recordCreativeFeedback, recordCreativeRunStart, recordCreativeStage, startTelemetryWorker, telemetryStatus } from "./creative-telemetry.js";
 import { mlflowTracingStatus } from "./mlflow-tracing.js";
@@ -466,6 +466,15 @@ const server = http.createServer(async (req, res) => {
       const body = JSON.parse((await requestBody(req)).toString("utf8") || "{}");
       startAssetCreation(id, body.description);
       return json(res, 202, { id, status: "working" });
+    }
+
+    const characterReferenceRegenerateMatch = url.pathname.match(/^\/api\/creative\/sessions\/(\d+)\/character-references\/(\d+)\/regenerate$/);
+    if (req.method === "POST" && characterReferenceRegenerateMatch) {
+      const id = Number(characterReferenceRegenerateMatch[1]);
+      const characterReferenceNumber = Number(characterReferenceRegenerateMatch[2]);
+      const body = JSON.parse((await requestBody(req)).toString("utf8") || "{}");
+      startCharacterReferenceRegeneration(id, characterReferenceNumber, body.feedback);
+      return json(res, 202, { id, characterReferenceNumber, status: "working" });
     }
 
     const assetDeleteMatch = url.pathname.match(/^\/api\/creative\/sessions\/(\d+)\/assets\/(\d+)$/);
