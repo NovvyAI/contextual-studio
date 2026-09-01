@@ -51,6 +51,7 @@ function dramaAnalysisView(result = {}) {
     chronology: [], characters: [], emotionalCurve: [], keyDialogue: [], motifs: [],
     hookAndCliffhanger: {}, creativeHandoff: { transitionOpportunities: [] },
     referenceImageCandidates: {},
+    characterLibrary: { characters: [], unassignedCandidateIds: [], limitations: [] },
     confidence: { overall: "low", observed: [], strongInferences: [], limitations: [] },
   };
   const episode = Array.isArray(result.episodeAnalyses) ? result.episodeAnalyses.at(-1) || {} : {};
@@ -84,6 +85,7 @@ function dramaAnalysisView(result = {}) {
     hookAndCliffhanger: detailed.hookAndCliffhanger || {},
     creativeHandoff: detailed.creativeHandoff || { transitionOpportunities: [] },
     referenceImageCandidates: candidates,
+    characterLibrary: episode.characterLibrary || { characters: [], unassignedCandidateIds: [], limitations: [] },
     confidence: {
       overall: episode.confidence || "low",
       observed: notes.observed || [],
@@ -124,21 +126,41 @@ function renderAnalysis(root, result, screenshots) {
     [["欲望", item.desire], ["脆弱点", item.vulnerability], ["关键选择", item.keyChoice], ["关系变化", item.relationshipMovement]].forEach(([name, value]) => { const line = element("div"); line.append(element("dt", "", name), element("dd", "", value)); dl.append(line); });
     return card;
   }));
+  root.append(analysisSection("动态人物参考候选", result.characterLibrary?.characters || [], (character) => {
+    const card = element("article", "character-card");
+    const allCandidates = character.candidates || [];
+    card.append(element("strong", "", `${character.displayName || character.characterId} · ${character.narrativeRole || "unknown"}`), element("p", "", `${character.selectionReason || "本地人脸扫描候选"}（共 ${allCandidates.length} 张候选）`));
+    const gallery = element("div", "source-screenshot-grid character-reference-gallery");
+    const bestByView = new Map();
+    for (const candidate of allCandidates) {
+      const current = bestByView.get(candidate.view);
+      if (!current || Number(candidate.qualityScore || 0) > Number(current.qualityScore || 0)) bestByView.set(candidate.view, candidate);
+    }
+    for (const candidate of bestByView.values()) {
+      const figure = element("figure", "source-screenshot reference-selected");
+      const image = element("img"); image.src = candidate.url; image.alt = `${character.displayName || character.characterId} ${candidate.view}`; image.loading = "lazy";
+      const caption = element("figcaption"); caption.append(element("span", "", `${candidate.view} · ${Number(candidate.timestampSeconds || 0).toFixed(2)}s`));
+      figure.append(image, caption); gallery.append(figure);
+    }
+    card.append(gallery); return card;
+  }));
   const candidateLabels = { maleFront: "男主 · 正面", maleSide: "男主 · 侧面", femaleFront: "女主 · 正面", femaleSide: "女主 · 侧面" };
   const screenshotMap = new Map((screenshots || []).map((shot) => [shot.id, shot]));
-  root.append(analysisSection("主人公参考截图", Object.entries(result.referenceImageCandidates || {}), ([slot, candidate]) => {
-    const card = element("article", `reference-card ${candidate.available ? "" : "missing"}`);
-    const shot = screenshotMap.get(candidate.screenshotId);
-    if (candidate.available && shot) {
-      const image = element("img"); image.src = shot.url; image.alt = candidateLabels[slot]; card.append(image);
-    } else {
-      card.append(element("div", "reference-placeholder", "暂无可靠画面"));
-    }
-    const copy = element("div", "reference-copy");
-    copy.append(element("strong", "", candidateLabels[slot] || slot), element("span", `candidate-confidence ${candidate.confidence}`, candidate.confidence), element("p", "", candidate.available ? candidate.visibleFeatures : "当前采样画面中没有可靠候选"), element("small", "", candidate.selectionReason));
-    if (candidate.risks?.length) copy.append(element("div", "candidate-risk", candidate.risks.join("；")));
-    card.append(copy); return card;
-  }));
+  if (!(result.characterLibrary?.characters || []).length) {
+    root.append(analysisSection("历史主人公参考截图", Object.entries(result.referenceImageCandidates || {}), ([slot, candidate]) => {
+      const card = element("article", `reference-card ${candidate.available ? "" : "missing"}`);
+      const shot = screenshotMap.get(candidate.screenshotId);
+      if (candidate.available && shot) {
+        const image = element("img"); image.src = shot.url; image.alt = candidateLabels[slot]; card.append(image);
+      } else {
+        card.append(element("div", "reference-placeholder", "暂无可靠画面"));
+      }
+      const copy = element("div", "reference-copy");
+      copy.append(element("strong", "", candidateLabels[slot] || slot), element("span", `candidate-confidence ${candidate.confidence}`, candidate.confidence), element("p", "", candidate.available ? candidate.visibleFeatures : "当前采样画面中没有可靠候选"), element("small", "", candidate.selectionReason));
+      if (candidate.risks?.length) copy.append(element("div", "candidate-risk", candidate.risks.join("；")));
+      card.append(copy); return card;
+    }));
+  }
   root.append(analysisSection("观众情绪曲线", result.emotionalCurve, (item) => {
     const row = element("article", "emotion-item"); row.append(element("span", "timeline-time", item.timeRange), element("strong", "", item.audienceEmotion), element("p", "", `${item.stimulus} → ${item.viewingImpulse}`)); return row;
   }));

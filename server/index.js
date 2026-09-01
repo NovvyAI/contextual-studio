@@ -572,6 +572,14 @@ const server = http.createServer(async (req, res) => {
       return res.end(row.image_blob);
     }
 
+    const faceCandidateMatch = url.pathname.match(/^\/api\/face-candidates\/(\d+)$/);
+    if (req.method === "GET" && faceCandidateMatch) {
+      const row = db.prepare("SELECT image_blob, mime_type FROM drama_face_candidates WHERE id = ?").get(Number(faceCandidateMatch[1]));
+      if (!row) return json(res, 404, { error: "人物候选截图不存在" });
+      res.writeHead(200, { "content-type": row.mime_type, "cache-control": "public, max-age=31536000, immutable" });
+      return res.end(row.image_blob);
+    }
+
     const relativePath = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
     const filePath = path.resolve(publicDir, relativePath);
     if (!filePath.startsWith(publicDir) || !fs.existsSync(filePath)) return json(res, 404, { error: "Not found" });

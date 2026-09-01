@@ -58,11 +58,18 @@ elif [ -x /usr/local/bin/brew ]; then
 fi
 command -v brew >/dev/null 2>&1 || fail "Homebrew 已安装但当前终端找不到它。请关闭终端、重新打开后再运行脚本。"
 
-say "正在安装 Node.js 24、Python 3 和 FFmpeg…"
-brew install node@24 python ffmpeg
+say "正在检查 Node.js 24、Python 3.12 和 FFmpeg…"
+if command -v node >/dev/null 2>&1 && [ "$(node -p "Number(process.versions.node.split('.')[0])")" -ge 24 ]; then
+  echo "检测到 Node.js $(node --version)，跳过安装。"
+  NODE_PREFIX="$(dirname "$(dirname "$(command -v node)")")"
+else
+  brew install node@24
+  NODE_PREFIX="$(brew --prefix node@24)"
+  export PATH="$NODE_PREFIX/bin:$PATH"
+fi
+if [ ! -x "$(brew --prefix python@3.12 2>/dev/null)/bin/python3.12" ]; then brew install python@3.12; else echo "检测到 Python 3.12，跳过安装。"; fi
+if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then echo "检测到 FFmpeg/FFprobe，跳过安装。"; else brew install ffmpeg; fi
 
-NODE_PREFIX="$(brew --prefix node@24)"
-export PATH="$NODE_PREFIX/bin:$PATH"
 SHELL_PROFILE="$HOME/.zprofile"
 PATH_LINE="export PATH=\"$NODE_PREFIX/bin:\$PATH\""
 touch "$SHELL_PROFILE"
@@ -87,9 +94,17 @@ if [ "$NODE_MAJOR" -lt 24 ]; then
 fi
 
 PYTHON_ENV_DIR="$SCRIPT_DIR/.venv"
+PYTHON312_BIN="$(brew --prefix python@3.12)/bin/python3.12"
+if [ ! -x "$PYTHON312_BIN" ]; then
+  fail "没有找到 Homebrew Python 3.12。"
+fi
+if [ -x "$PYTHON_ENV_DIR/bin/python" ] && ! "$PYTHON_ENV_DIR/bin/python" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)' >/dev/null 2>&1; then
+  say "现有项目 Python 环境不是 3.12，正在保留旧环境并重建…"
+  mv "$PYTHON_ENV_DIR" "$SCRIPT_DIR/.venv.pre-vision-$(date +%Y%m%d%H%M%S)"
+fi
 if [ ! -x "$PYTHON_ENV_DIR/bin/python" ]; then
   say "正在创建项目 Python 环境…"
-  python3 -m venv "$PYTHON_ENV_DIR"
+  "$PYTHON312_BIN" -m venv "$PYTHON_ENV_DIR"
 else
   echo "检测到已有项目 Python 环境，跳过创建。"
 fi
@@ -102,6 +117,24 @@ else
 fi
 
 "$PYTHON_ENV_DIR/bin/python" -c "from PIL import Image; print('Pillow 已就绪：' + Image.__version__)"
+
+if "$PYTHON_ENV_DIR/bin/python" -c "import cv2" >/dev/null 2>&1; then
+  echo "检测到本地人物扫描依赖已安装，跳过安装。"
+else
+  say "正在安装本地人物扫描依赖 OpenCV…"
+  "$PYTHON_ENV_DIR/bin/python" -m pip install -r requirements-vision.txt
+fi
+
+FACE_MODEL_DIR="$SCRIPT_DIR/data/models"
+FACE_MODEL_PATH="$FACE_MODEL_DIR/face_detection_yunet_2023mar.onnx"
+if [ -s "$FACE_MODEL_PATH" ]; then
+  echo "检测到 OpenCV YuNet 人脸模型，跳过下载。"
+else
+  say "正在下载本地人物扫描模型…"
+  mkdir -p "$FACE_MODEL_DIR"
+  curl -L --fail --silent --show-error -o "$FACE_MODEL_PATH" "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
+fi
+"$PYTHON_ENV_DIR/bin/python" -c "import cv2; print('本地人物扫描已就绪：OpenCV ' + cv2.__version__)"
 
 if "$PYTHON_ENV_DIR/bin/python" -c "import mlflow; raise SystemExit(0 if mlflow.__version__ == '3.15.2' else 1)" >/dev/null 2>&1; then
   echo "检测到 MLflow 3.15.2 已安装，跳过安装。"

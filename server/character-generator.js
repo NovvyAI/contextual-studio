@@ -27,12 +27,36 @@ export function prepareCharacterReferenceReview(sessionId) {
   if (!session) throw new Error("创意工作台不存在");
   const drama = db.prepare("SELECT analysis_json FROM drama_analyses WHERE id=?").get(session.drama_id);
   const analysis = drama?.analysis_json ? JSON.parse(drama.analysis_json) : {};
+  const episode = Array.isArray(analysis.episodeAnalyses) ? analysis.episodeAnalyses.at(-1) : null;
+  const dynamicCharacters = Array.isArray(episode?.characterLibrary?.characters) ? episode.characterLibrary.characters : [];
   const candidates = dramaReferenceImageCandidates(analysis);
   const slotMeta = {
     maleFront: ["male_front", "男主人公正面"], maleSide: ["male_side", "男主人公侧面"],
     femaleFront: ["female_front", "女主人公正面"], femaleSide: ["female_side", "女主人公侧面"],
   };
-  const referenceCards = Object.entries(slotMeta).flatMap(([key, [slot, title]]) => {
+  let referenceCards = dynamicCharacters.flatMap((character) => {
+    const bestByView = new Map();
+    for (const candidate of character.candidates || []) {
+      const current = bestByView.get(candidate.view);
+      if (!current || Number(candidate.qualityScore || 0) > Number(current.qualityScore || 0)) bestByView.set(candidate.view, candidate);
+    }
+    return [...bestByView.values()].map((candidate) => ({
+      id: `reference-${character.characterId}-${candidate.candidateId}`,
+      kind: "character_image",
+      title: `${character.displayName || character.characterId}｜${({ front: "正面", left_profile: "左侧面", right_profile: "右侧面", three_quarter_left: "左侧 3/4", three_quarter_right: "右侧 3/4" })[candidate.view] || "人物候选"}`,
+      summary: character.selectionReason || "由本地人脸检测从全片筛选的人物参考截图候选。",
+      previewUrl: candidate.url || (candidate.screenshotId ? `/api/face-candidates/${candidate.screenshotId}` : ""),
+      candidateNumber: 0,
+      details: [
+        { label: "人物编号", content: character.characterId },
+        { label: "剧情身份", content: character.narrativeRole || "unknown" },
+        { label: "画面角度", content: candidate.view || "unknown" },
+        { label: "本地质量分", content: String(candidate.qualityScore ?? "unknown") },
+        { label: "候选编号", content: candidate.candidateId },
+      ], status: "candidate",
+    }));
+  });
+  if (!referenceCards.length) referenceCards = Object.entries(slotMeta).flatMap(([key, [slot, title]]) => {
     const item = candidates[key];
     if (!item?.available || !item.screenshotId) return [];
     return [{
@@ -47,6 +71,7 @@ export function prepareCharacterReferenceReview(sessionId) {
       ], status: "candidate",
     }];
   });
+  referenceCards = referenceCards.map((card, index) => ({ ...card, candidateNumber: index + 1 }));
   const timestamp = now();
   if (referenceCards.length) {
     db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,created_at) VALUES (?,'assistant',?,?,?)")
@@ -83,8 +108,11 @@ export async function publicInputUrl(previewUrl) {
     return uploadLocalImage(attachment.storedPath, "uploaded_reference");
   }
   const match = previewUrl.match(/^\/api\/screenshots\/(\d+)$/);
-  if (!match) throw new Error("人物候选缺少可上传的真实图片");
-  const screenshot = db.prepare("SELECT image_blob,mime_type FROM drama_screenshots WHERE id=?").get(Number(match[1]));
+  const faceMatch = previewUrl.match(/^\/api\/face-candidates\/(\d+)$/);
+  if (!match && !faceMatch) throw new Error("人物候选缺少可上传的真实图片");
+  const screenshot = match
+    ? db.prepare("SELECT image_blob,mime_type FROM drama_screenshots WHERE id=?").get(Number(match[1]))
+    : db.prepare("SELECT image_blob,mime_type FROM drama_face_candidates WHERE id=?").get(Number(faceMatch[1]));
   if (!screenshot) throw new Error("人物候选原图不存在");
   const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "contextual-character-"));
   const inputPath = path.join(tempDir, screenshot.mime_type === "image/png" ? "input.png" : "input.jpg");

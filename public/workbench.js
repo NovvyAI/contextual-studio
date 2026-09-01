@@ -411,6 +411,19 @@ function renderDramaMedia(drama) {
   });
   if (!drama.screenshots?.length) gallery.append(element("p", "source-empty-value", "没有已保存的截图。"));
   section.append(gallery);
+  if (drama.faceCandidates?.length) {
+    section.append(element("h3", "", "本地人物候选"));
+    const faceGallery = element("div", "source-screenshot-grid");
+    for (const candidate of drama.faceCandidates) {
+      const figure = element("figure", "source-screenshot");
+      const image = element("img"); image.src = candidate.url; image.alt = `${candidate.characterId || "未归组人物"} ${candidate.view}`; image.loading = "lazy";
+      const caption = element("figcaption");
+      caption.append(element("span", "", `${candidate.timestampSeconds.toFixed(2)}s · ${candidate.view}`));
+      if (candidate.characterId) caption.append(element("b", "", candidate.characterId));
+      figure.append(image, caption); faceGallery.append(figure);
+    }
+    section.append(faceGallery);
+  }
   return section;
 }
 

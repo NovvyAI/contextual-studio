@@ -98,3 +98,4 @@ main { width:min(1240px,92vw); margin:auto; padding:70px 0 100px; }
 .concept-card .concept-summary-copy,.concept-card .concept-body,.concept-card dl div,.chat-candidate-card,.chat-card-details dl div{min-width:0}
 .concept-card .concept-summary p,.concept-card dd,.chat-card-summary,.chat-card-details dd{min-width:0;max-width:100%;white-space:normal;overflow-wrap:anywhere;word-break:break-word}
 .custom-concept-card{border-style:dashed;background:linear-gradient(145deg,#1a2016,#121511);padding-top:16px}.custom-concept-card>strong{display:block;color:#e5edcf}.custom-concept-card>p{margin:7px 0 12px;color:#939d8b}.custom-concept-card>label{display:block;margin-bottom:6px;color:#bdd270;font-size:9px;font-weight:700}.custom-concept-input{min-height:104px}.custom-concept-generate{margin-top:8px}
+.character-reference-gallery .source-screenshot img{aspect-ratio:9/16;object-fit:contain;background:#0b0c0a}

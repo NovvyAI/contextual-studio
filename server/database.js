@@ -42,6 +42,25 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_drama_screenshots_analysis
     ON drama_screenshots(analysis_id, timestamp_seconds);
 
+  CREATE TABLE IF NOT EXISTS drama_face_candidates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    analysis_id INTEGER NOT NULL REFERENCES drama_analyses(id) ON DELETE CASCADE,
+    candidate_id TEXT NOT NULL,
+    character_id TEXT,
+    timestamp_seconds REAL NOT NULL,
+    view TEXT NOT NULL,
+    yaw_degrees REAL,
+    quality_score REAL NOT NULL DEFAULT 0,
+    bbox_json TEXT,
+    mime_type TEXT NOT NULL DEFAULT 'image/jpeg',
+    image_blob BLOB NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(analysis_id, candidate_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_drama_face_candidates_analysis
+    ON drama_face_candidates(analysis_id, character_id, view, quality_score DESC);
+
   CREATE TABLE IF NOT EXISTS game_analyses (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT,
@@ -186,6 +205,10 @@ export function serializeAnalysis(row) {
     SELECT id, timestamp_seconds, width, height
     FROM drama_screenshots WHERE analysis_id = ? ORDER BY timestamp_seconds
   `).all(row.id);
+  const faceCandidates = db.prepare(`
+    SELECT id,candidate_id,character_id,timestamp_seconds,view,yaw_degrees,quality_score
+    FROM drama_face_candidates WHERE analysis_id=? ORDER BY timestamp_seconds,id
+  `).all(row.id);
   return {
     id: row.id,
     title: row.title,
@@ -208,6 +231,16 @@ export function serializeAnalysis(row) {
       width: item.width,
       height: item.height,
       url: `/api/screenshots/${item.id}`,
+    })),
+    faceCandidates: faceCandidates.map((item) => ({
+      id: item.id,
+      candidateId: item.candidate_id,
+      characterId: item.character_id || "",
+      timestampSeconds: item.timestamp_seconds,
+      view: item.view,
+      yawDegrees: item.yaw_degrees,
+      qualityScore: item.quality_score,
+      url: `/api/face-candidates/${item.id}`,
     })),
   };
 }

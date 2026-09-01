@@ -143,7 +143,7 @@ NOVVY_PYTHON_BIN="$("$SKILL_DIR/scripts/novvy_python.sh")" && "$NOVVY_PYTHON_BIN
 
 - 没有审核通过的落版图，不上传参考图组，不提交视频生成任务。
 - `product_icon` 不作为生成输入或上传槽位；可作为产品候选元信息展示，但不得传给 GPT-image-2、视频生成模型或上传平台。
-- 参考图组默认包含 5 个独立槽位并保持标准顺序：`male_front`、`male_side`、`female_front`、`female_side`、`final_card`。若视频不是男女双主，改用最重要的 2 个可见角色并说明替代关系。
+- 人物参考图以短剧分析的动态 `characterLibrary` 和用户勾选结果为准，允许任意数量、性别组合和剧情身份；人物槽位使用稳定的角色编号与角度，不得为了兼容而虚构男主或女主。`male_front`、`male_side`、`female_front`、`female_side` 仅是旧工作台的过渡投影，最终参考组在人物图之后追加独立 `final_card`。
 - 如果关键人物正/侧视图缺失或置信度低，先说明缺失槽位和风险，等待用户确认替代帧。
 - 视频画风必须输出 `visualStyle.renderingType` 和 `visualStyle.uploadMode`。真人写实用 `live_action_realistic` 和 `seedance-human`；卡通/动画/CG/漫画用 `cartoon_animation` 和 `asset`；证据不足用 `mixed_unknown`，保守默认 `asset` 并说明风险。
 - 游戏受众群体必须影响创意角度、分镜节奏、玩法镜头、屏幕文案、声音情绪和 CTA，不能只当装饰标签。

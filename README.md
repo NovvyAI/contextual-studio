@@ -299,7 +299,8 @@ chmod +x install_environment.sh start_server.sh
 - 安装 Apple 命令行工具和 Homebrew。
 - 安装 Codex CLI，并登录 Codex。
 - 从 `NovvyAI/skills` 下载或更新 `novvy-ad-creative` 插件并执行安装；若在交互式终端运行且尚未配置，会用隐藏输入询问本机 `admin_user.apikey`，同步到插件运行缓存的 MCP Authorization。直接回车可跳过，之后运行 `$novvy-env-check` 补配。
-- 安装 Node.js 24、npm、Python 3、FFmpeg/FFprobe。
+- 安装 Node.js 24、npm、Python 3.12、FFmpeg/FFprobe。
+- 安装 OpenCV，并下载 Apache 2.0 的 YuNet 人脸模型；短剧人物检测、角度判断和候选截图筛选均在本机完成，不会把全量视频帧发送给第三方人脸服务。
 - 安装 Google Cloud CLI，供 ImaRouter 上传本地参考图。
 - 执行 `npm install`。
 - 在不存在时从 `.env.example` 创建 `.env`，但不会写入或覆盖团队密钥。

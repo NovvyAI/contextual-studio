@@ -17,6 +17,7 @@ Produce an evidence-based narrative and creative analysis from the video itself.
    - Run `scripts/make_contact_sheets.sh VIDEO OUTPUT_DIR` when `ffmpeg` is available.
    - Inspect the overview sheet first, then the denser sheet and individual frames around reversals, reveals, entrances, exits, injuries, kisses, slaps, confrontations, and cliffhangers.
    - Increase sampling density for rapid editing or unclear action. A contact sheet is navigation, not proof that nothing happened between frames.
+   - In Contextual Studio, run the project-local `scripts/detect_face_candidates.py` pipeline for character-reference discovery. Treat its output as anonymous face observations, not verified identities. Group observations conservatively, allow any number or gender composition of characters, and keep uncertain observations unassigned rather than forcing male/female protagonist slots.
 
 3. Recover dialogue and chronology.
    - Prefer embedded subtitles when present.
@@ -69,5 +70,6 @@ Adapt length to the request. For a full analysis, use:
 ## Resources
 
 - `scripts/make_contact_sheets.sh`: Generate overview, dense contact sheets, media metadata, and sequential sample frames.
+- `scripts/detect_face_candidates.py`: Run on-device OpenCV YuNet face/landmark scanning, view classification, and quality filtering to build anonymous character-reference candidates.
 - `references/analysis-rubric.md`: Use for detailed narrative, emotion, visual, and contextual-ad analysis criteria.
 - `references/drama-understanding-package.schema.json`: Use when building or mapping a persistent cross-stage drama evidence package; ordinary one-off summaries do not need to emit the full schema.

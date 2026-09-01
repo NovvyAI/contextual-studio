@@ -145,6 +145,21 @@ NOVVY_PYTHON_BIN="$("$SKILL_DIR/scripts/novvy_python.sh")"
         "uploadMode": "seedance-human|asset",
         "classificationEvidence": ""
       },
+      "characterLibrary": {
+        "characters": [
+          {
+            "characterId": "character-01",
+            "displayName": "人物 01",
+            "narrativeRole": "protagonist|co_protagonist|supporting|antagonist|unknown",
+            "genderPresentation": "female|male|nonbinary_unknown|not_applicable",
+            "candidateIds": ["face-001", "face-014"],
+            "selectionReason": "",
+            "confidence": "high|medium|low|unknown"
+          }
+        ],
+        "unassignedCandidateIds": [],
+        "limitations": []
+      },
       "referenceImageCandidates": {
         "slots": [
           {
