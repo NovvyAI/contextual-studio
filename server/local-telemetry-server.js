@@ -1,6 +1,6 @@
 import http from "node:http";
 import path from "node:path";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 
 const port = Number(process.env.LOCAL_TELEMETRY_PORT || 4191);
@@ -8,6 +8,7 @@ const token = String(process.env.LOCAL_TELEMETRY_TOKEN || "contextual-local-dev"
 const dataDir = path.resolve(process.env.LOCAL_TELEMETRY_DATA_DIR || "data");
 mkdirSync(dataDir, { recursive: true });
 const db = new DatabaseSync(path.join(dataDir, "local-telemetry.sqlite"));
+const dashboardDir = path.resolve("public");
 
 db.exec(`
   PRAGMA journal_mode=WAL;
@@ -79,6 +80,57 @@ const send = (res, status, payload) => {
   res.end(body);
 };
 
+const sendFile = (res, fileName, contentType) => {
+  const body = readFileSync(path.join(dashboardDir, fileName));
+  res.writeHead(200, { "content-type": contentType, "content-length": body.length, "cache-control": "no-store" });
+  res.end(body);
+};
+
+function parseJson(value, fallback = {}) {
+  try { return JSON.parse(value || ""); } catch { return fallback; }
+}
+
+function safeUrl(value) {
+  try {
+    const parsed = new URL(String(value || ""));
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch { return ""; }
+}
+
+function sanitize(value, key = "") {
+  if (/authorization|api.?key|token|cookie|signature/i.test(key)) return "[已隐藏]";
+  if (Array.isArray(value)) return value.map((item) => sanitize(item));
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([childKey, child]) => [childKey, sanitize(child, childKey)]));
+  if (typeof value !== "string") return value;
+  if (/^https?:\/\//.test(value)) return safeUrl(value);
+  if (/^(?:\/Users\/|\/home\/|[A-Za-z]:\\)/.test(value)) return "[本机路径已隐藏]";
+  return value;
+}
+
+function dashboardData() {
+  const totals = Object.fromEntries(["runs", "stages", "assets", "feedback"].map((table) => [table, db.prepare(`SELECT COUNT(*) count FROM ${table}`).get().count]));
+  const runs = db.prepare(`SELECT r.*,sv.skill_name,sv.version skill_version,
+    (SELECT COUNT(*) FROM stages WHERE run_id=r.id) stage_count,
+    (SELECT COUNT(*) FROM assets WHERE run_id=r.id) asset_count,
+    (SELECT COUNT(*) FROM feedback WHERE run_id=r.id) feedback_count
+    FROM runs r JOIN skill_versions sv ON sv.id=r.skill_version_id ORDER BY r.updated_at DESC,r.id DESC LIMIT 100`).all();
+  return {
+    generatedAt: now(), totals,
+    runs: runs.map((run) => ({
+      id: run.id, createdBy: run.created_by, brief: sanitize(parseJson(run.brief_json)), briefRaw: sanitize(run.brief_raw),
+      productName: run.product_name, channel: run.channel, market: run.market, referenceVideoUri: sanitize(run.reference_video_uri),
+      status: run.status, createdAt: run.created_at, updatedAt: run.updated_at, skillName: run.skill_name, skillVersion: run.skill_version,
+      counts: { stages: run.stage_count, assets: run.asset_count, feedback: run.feedback_count },
+      stages: db.prepare("SELECT id,stage,payload_json,version,status,created_at FROM stages WHERE run_id=? ORDER BY created_at,id").all(run.id)
+        .map((row) => ({ id: row.id, stage: row.stage, payload: sanitize(parseJson(row.payload_json)), version: row.version, status: row.status, createdAt: row.created_at })),
+      assets: db.prepare("SELECT id,asset_type,storage_uri,version,stage_output_id,parent_asset_id,metadata_json,created_at FROM assets WHERE run_id=? ORDER BY created_at,id").all(run.id)
+        .map((row) => ({ id: row.id, assetType: row.asset_type, storageUri: safeUrl(row.storage_uri), version: row.version, stageOutputId: row.stage_output_id, parentAssetId: row.parent_asset_id, metadata: sanitize(parseJson(row.metadata_json)), createdAt: row.created_at })),
+      feedback: db.prepare("SELECT id,raw_feedback,decision,asset_id,stage_output_id,creative_version,time_range,created_at FROM feedback WHERE run_id=? ORDER BY created_at,id").all(run.id)
+        .map((row) => ({ id: row.id, feedback: sanitize(row.raw_feedback), decision: row.decision, assetId: row.asset_id, stageOutputId: row.stage_output_id, creativeVersion: row.creative_version, timeRange: row.time_range, createdAt: row.created_at })),
+    })),
+  };
+}
+
 async function readJson(req) {
   const chunks = [];
   let size = 0;
@@ -109,6 +161,10 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || `127.0.0.1:${port}`}`);
   try {
     if (url.pathname === "/health") return send(res, 200, { ok: true, service: "contextual-local-telemetry" });
+    if (req.method === "GET" && ["/", "/dashboard"].includes(url.pathname)) return sendFile(res, "telemetry-dashboard.html", "text/html; charset=utf-8");
+    if (req.method === "GET" && url.pathname === "/telemetry-dashboard.css") return sendFile(res, "telemetry-dashboard.css", "text/css; charset=utf-8");
+    if (req.method === "GET" && url.pathname === "/telemetry-dashboard.js") return sendFile(res, "telemetry-dashboard.js", "text/javascript; charset=utf-8");
+    if (req.method === "GET" && url.pathname === "/v1/local/dashboard-data") return send(res, 200, dashboardData());
     if (req.headers["x-api-key"] !== token) return send(res, 401, { error: "Invalid telemetry token" });
 
     if (req.method === "GET" && url.pathname === "/v1/skill-versions/resolve") {

@@ -172,7 +172,7 @@ NOVVY_SKILL_VERSION=contextual-studio-v1
 ./start_local_telemetry.sh
 ```
 
-本地接收端默认监听 `http://127.0.0.1:4191`，数据保存到 `data/local-telemetry.sqlite`。启动 Contextual Studio 时配置 `NOVVY_TELEMETRY_URL=http://127.0.0.1:4191`、`NOVVY_TELEMETRY_TOKEN=contextual-local-dev`；用带 `X-API-Key` 的 `GET /v1/local/status` 查看本地接收数量。它只用于本机开发，不要暴露到公网。
+本地接收端默认监听 `http://127.0.0.1:4191`，数据保存到 `data/local-telemetry.sqlite`。启动 Contextual Studio 时配置 `NOVVY_TELEMETRY_URL=http://127.0.0.1:4191`、`NOVVY_TELEMETRY_TOKEN=contextual-local-dev`。浏览器打开 `http://127.0.0.1:4191/dashboard` 可查看任务列表、阶段时间线、资产和用户反馈；页面每 10 秒自动刷新。也可用带 `X-API-Key` 的 `GET /v1/local/status` 查看接收数量。监控页与接收端只监听本机回环地址，不要暴露到公网。
 
 ### 全新电脑一键安装（推荐）
 
