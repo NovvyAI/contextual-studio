@@ -332,19 +332,60 @@ export function creativeScreenshotAssets(sessionId) {
     }));
 }
 
+export function creativeCharacterReferenceAssets(sessionId) {
+  const session = db.prepare("SELECT drama_id FROM creative_sessions WHERE id=?").get(sessionId);
+  if (!session) return [];
+  const drama = db.prepare("SELECT analysis_json FROM drama_analyses WHERE id=?").get(session.drama_id);
+  let analysis = {};
+  try { analysis = JSON.parse(drama?.analysis_json || "{}"); } catch { return []; }
+  const episode = Array.isArray(analysis.episodeAnalyses) ? analysis.episodeAnalyses.at(-1) : null;
+  const viewOrder = ["front", "three_quarter_left", "three_quarter_right", "left_profile", "right_profile"];
+  const viewLabels = { front: "正面", three_quarter_left: "左侧 3/4", three_quarter_right: "右侧 3/4", left_profile: "左侧面", right_profile: "右侧面" };
+  const selected = [];
+  for (const character of episode?.characterLibrary?.characters || []) {
+    const bestByView = new Map();
+    for (const candidate of character.candidates || []) {
+      const current = bestByView.get(candidate.view);
+      if (!current || Number(candidate.qualityScore || 0) > Number(current.qualityScore || 0)) bestByView.set(candidate.view, candidate);
+    }
+    for (const view of viewOrder) {
+      const candidate = bestByView.get(view);
+      if (!candidate?.screenshotId) continue;
+      selected.push({ character, candidate, view });
+    }
+  }
+  return selected.map(({ character, candidate, view }, index) => ({
+    number: index + 1,
+    reference: `人物图 ${String(index + 1).padStart(2, "0")}`,
+    kind: "character_reference",
+    title: `${character.displayName || character.characterId}｜${viewLabels[view] || view}`,
+    description: `${character.narrativeRole || "unknown"}；来自短剧原视频 ${Number(candidate.timestampSeconds || 0).toFixed(2)} 秒；本地质量分 ${Number(candidate.qualityScore || 0).toFixed(2)}。`,
+    url: candidate.url || `/api/face-candidates/${candidate.screenshotId}`,
+    characterId: character.characterId,
+    candidateId: candidate.candidateId,
+    timestampSeconds: candidate.timestampSeconds,
+    view,
+    qualityScore: candidate.qualityScore,
+    version: 1,
+  }));
+}
+
 export function resolveAssetReferences(sessionId, text) {
   const imageByNumber = new Map(creativeAssets(sessionId).map((asset) => [asset.number, asset]));
   const screenshotByNumber = new Map(creativeScreenshotAssets(sessionId).map((asset) => [asset.number, asset]));
+  const characterByNumber = new Map(creativeCharacterReferenceAssets(sessionId).map((asset) => [asset.number, asset]));
   const value = String(text || "");
   const imageNumbers = [...new Set([...value.matchAll(/(?:参考)?图片\s*0*(\d+)/gi)].map((match) => Number(match[1])))];
   const screenshotNumbers = [...new Set([...value.matchAll(/(?:视频)?截图\s*0*(\d+)/gi)].map((match) => Number(match[1])))];
+  const characterNumbers = [...new Set([...value.matchAll(/人物图\s*0*(\d+)/gi)].map((match) => Number(match[1])))];
   const missingImages = imageNumbers.filter((number) => !imageByNumber.has(number));
   const missingScreenshots = screenshotNumbers.filter((number) => !screenshotByNumber.has(number));
-  if (missingImages.length || missingScreenshots.length) {
-    const missing = [missingImages.length ? `图片 ${missingImages.map((number) => String(number).padStart(2, "0")).join("、")}` : "", missingScreenshots.length ? `截图 ${missingScreenshots.map((number) => String(number).padStart(2, "0")).join("、")}` : ""].filter(Boolean).join("；");
+  const missingCharacters = characterNumbers.filter((number) => !characterByNumber.has(number));
+  if (missingImages.length || missingScreenshots.length || missingCharacters.length) {
+    const missing = [missingImages.length ? `图片 ${missingImages.map((number) => String(number).padStart(2, "0")).join("、")}` : "", missingScreenshots.length ? `截图 ${missingScreenshots.map((number) => String(number).padStart(2, "0")).join("、")}` : "", missingCharacters.length ? `人物图 ${missingCharacters.map((number) => String(number).padStart(2, "0")).join("、")}` : ""].filter(Boolean).join("；");
     throw new Error(`找不到资产${missing}`);
   }
-  return [...imageNumbers.map((number) => imageByNumber.get(number)), ...screenshotNumbers.map((number) => screenshotByNumber.get(number))];
+  return [...imageNumbers.map((number) => imageByNumber.get(number)), ...screenshotNumbers.map((number) => screenshotByNumber.get(number)), ...characterNumbers.map((number) => characterByNumber.get(number))];
 }
 
 function conceptRevisionFeedback(content) {
@@ -472,6 +513,7 @@ export function serializeCreativeSession(row) {
       createdAt: message.created_at,
     })),
     assets: creativeAssets(row.id),
+    characterReferences: creativeCharacterReferenceAssets(row.id),
     screenshots: creativeScreenshotAssets(row.id),
     landingPackages,
     createdAt: row.created_at, updatedAt: row.updated_at,

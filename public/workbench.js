@@ -1071,13 +1071,33 @@ function currentStagePresentation(session, workspace) {
   })[stage] || { stage, title: "当前创作", heading: "当前创作内容", kind: "generic", statusKey: "" };
 }
 
-function renderAssetLibrary(assets, screenshots, disabled) {
+function renderAssetLibrary(assets, characterReferences, screenshots, disabled) {
   const section = element("section", "asset-library");
   const heading = element("div", "asset-library-heading");
   const copy = element("div");
-  copy.append(element("small", "", "ASSETS"), element("h2", "", "资产区域"), element("p", "", "聊天时可直接说“图片 04”或组合多个图片编号。"));
-  heading.append(copy, element("span", "asset-count", `${assets.length + screenshots.length} 项`));
+  copy.append(element("small", "", "ASSETS"), element("h2", "", "资产区域"), element("p", "", "聊天时可直接引用“图片 04”“人物图 02”或“截图 08”。"));
+  heading.append(copy, element("span", "asset-count", `${assets.length + characterReferences.length + screenshots.length} 项`));
   section.append(heading);
+  const characterHeading = element("div", "asset-screenshot-heading");
+  characterHeading.append(element("h3", "asset-zone-title", "人物参考图"), element("span", "asset-count", `${characterReferences.length} 张`));
+  const characterGrid = element("div", "asset-library-grid character-asset-grid");
+  characterReferences.forEach((asset) => {
+    const card = element("article", "asset-library-card character-reference-asset-card");
+    const media = element("button", "asset-library-media"); media.type = "button"; media.setAttribute("aria-label", `查看大图：${asset.reference} ${asset.title}`);
+    const image = element("img"); image.src = asset.url; image.alt = `${asset.reference} ${asset.title}`; image.loading = "lazy"; media.append(image);
+    media.addEventListener("click", () => openImagePreview(asset.url, `${asset.reference} · ${asset.title}`));
+    const body = element("div", "asset-library-body");
+    const top = element("div", "asset-library-card-heading"); top.append(element("b", "asset-number character-reference-number", asset.reference), element("small", "", `${Number(asset.timestampSeconds || 0).toFixed(2)}s`));
+    body.append(top, element("strong", "", asset.title), element("p", "", asset.description));
+    const use = element("button", "asset-use-button", `引用 ${asset.reference}`); use.type = "button";
+    use.addEventListener("click", () => {
+      const input = document.querySelector("#creative-chat-input");
+      const prefix = input.value.trim(); input.value = `${prefix}${prefix ? "\n" : ""}使用${asset.reference}（${asset.title}）：`;
+      input.focus(); input.setSelectionRange(input.value.length, input.value.length);
+    });
+    body.append(use); card.append(media, body); characterGrid.append(card);
+  });
+  if (!characterReferences.length) characterGrid.append(element("p", "asset-library-empty", "短剧分析生成人物候选后，会显示在这里。"));
   section.append(element("h3", "asset-zone-title", "生成图片"));
   const grid = element("div", "asset-library-grid");
   assets.forEach((asset) => {
@@ -1156,7 +1176,7 @@ function renderAssetLibrary(assets, screenshots, disabled) {
     } catch (error) { generate.disabled = false; generate.textContent = "根据描述生成图片"; alert(error.message); }
   });
   createBody.append(input, selection, choose, upload, divider, description, generate); createCard.append(createMedia, createBody); grid.append(createCard);
-  section.append(grid);
+  section.append(grid, characterHeading, characterGrid);
   const screenshotHeading = element("div", "asset-screenshot-heading");
   screenshotHeading.append(element("h3", "asset-zone-title", "视频截图区"), element("span", "asset-count", `${screenshots.length} 张`));
   section.append(screenshotHeading);
@@ -1190,7 +1210,7 @@ function renderCanvas(session) {
   status.textContent = session.stage === "working" ? "Novvy 处理中" : session.stage === "error" ? "需要处理" : "可交互";
   updateProcessingStatus(session);
 
-  const renderSignature = JSON.stringify([session.stage, session.workspace, session.messages, session.conceptRevisions, session.finalCardRevisions, session.assets, session.screenshots]);
+  const renderSignature = JSON.stringify([session.stage, session.workspace, session.messages, session.conceptRevisions, session.finalCardRevisions, session.assets, session.characterReferences, session.screenshots]);
   if (renderSignature === canvasRenderSignature) return;
   canvasRenderSignature = renderSignature;
   document.querySelectorAll("#creative-canvas details[data-canvas-details-key]").forEach((details) => canvasDetailsOpenState.set(details.dataset.canvasDetailsKey, details.open));
@@ -1381,7 +1401,7 @@ function renderCanvas(session) {
   conceptArchive.append(element("summary", "", presentation.stage === "concept_review" ? "创意方案候选" : `创意方案回看${workspace.selectedConceptIds?.length ? ` · 已选择 ${workspace.selectedConceptIds.join("、")}` : ""}`), concepts);
   liveCard.append(conceptArchive); live.append(liveCard); flow.append(live);
   layoutWorkflowNodes(flow);
-  canvas.append(flow, renderAssetLibrary(session.assets || [], session.screenshots || [], session.stage === "working"));
+  canvas.append(flow, renderAssetLibrary(session.assets || [], session.characterReferences || [], session.screenshots || [], session.stage === "working"));
 }
 
 function renderCharacterGroupActions(session) {
@@ -1456,11 +1476,13 @@ function renderMessages(session) {
   root.replaceChildren();
   const latestCharacterCards = new Map();
   let characterGroupMessageId = null;
+  let conceptGroupMessageId = null;
   const latestStoryboardImageCards = new Map();
   let storyboardGroupMessageId = null;
   const mutableCardKinds = new Set(["final_card", "video_prompt", "video_shot"]);
   const latestMutableCardMessageIds = new Map();
   session.messages.forEach((message) => (message.cards || []).forEach((card) => {
+    if (card.kind === "concept") conceptGroupMessageId = message.id;
     if (card.kind === "character_image") {
       characterGroupMessageId = message.id;
       latestCharacterCards.set(card.id, card);
@@ -1497,6 +1519,9 @@ function renderMessages(session) {
       const cardList = element("div", "chat-candidate-list");
       if (cards.some((card) => card.kind === "storyboard_image")) cardList.classList.add("storyboard-image-list");
       cards.forEach((card) => cardList.append(renderChatCard(card, session.stage === "working")));
+      if (message.id === conceptGroupMessageId && session.stage === "concept_review" && !(session.workspace?.selectedConceptIds || []).length) {
+        cardList.append(renderCustomConceptCard(session, session.workspace || {}));
+      }
       if (message.id === characterGroupMessageId && groupedCharacterCards.some((card) => card.previewUrl)) cardList.append(renderCharacterGroupActions(session));
       if (message.id === storyboardGroupMessageId && groupedStoryboardImageCards.length) cardList.append(renderStoryboardGroupActions(session, groupedStoryboardImageCards));
       bubble.append(cardList);
