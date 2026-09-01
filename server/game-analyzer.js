@@ -1,6 +1,7 @@
 import path from "node:path";
 import { Codex } from "@openai/codex-sdk";
 import { db, now } from "./database.js";
+import { runCodexWithTrace } from "./mlflow-tracing.js";
 
 const analysisModel = process.env.CODEX_ANALYSIS_MODEL || "";
 const strings = { type: "array", items: { type: "string" } };
@@ -54,7 +55,7 @@ export async function analyzeGame(id) {
     const product = productInput(row);
     const codex = new Codex();
     const thread = codex.startThread({ ...(analysisModel ? { model: analysisModel } : {}), workingDirectory: path.resolve("."), skipGitRepoCheck: true, sandboxMode: "read-only", approvalPolicy: "never", networkAccessEnabled: true, webSearchMode: "live" });
-    const turn = await thread.run(prompt(product), { outputSchema: schema, signal: AbortSignal.timeout(15 * 60 * 1000) });
+    const turn = await runCodexWithTrace(thread, prompt(product), { outputSchema: schema, signal: AbortSignal.timeout(15 * 60 * 1000) }, { name: "codex.game_analysis", sessionId: `game:${id}`, model: analysisModel || "codex-config-default" });
     if (!turn.finalResponse) throw new Error("Novvy 没有返回商品分析结果");
     const output = JSON.parse(turn.finalResponse);
     const result = { ...output, engine: "codex-sdk", model: analysisModel || "codex-config-default", codexThreadId: thread.id, analyzedAt: now(), contract: "novvy.product-analysis.v1" };

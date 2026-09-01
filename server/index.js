@@ -21,6 +21,8 @@ import { landingPackagePath, packageLandingPage } from "./landing-page-packager.
 import { registerChatAttachmentsAsAssets, startAssetCreation, startAssetRegeneration, startAttachmentImageEdit } from "./asset-generator.js";
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
 import { backfillCreativeTelemetry, flushTelemetryOutbox, recordCreativeFeedback, recordCreativeRunStart, recordCreativeStage, startTelemetryWorker, telemetryStatus } from "./creative-telemetry.js";
+import { mlflowTracingStatus } from "./mlflow-tracing.js";
+import { dramaAnalysisContract, dramaAnalysisView, isDramaAnalysisV3 } from "./drama-analysis-v3.js";
 
 const port = Number(process.env.PORT || 4180);
 const publicDir = path.resolve("public");
@@ -112,6 +114,7 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   try {
     if (req.method === "GET" && url.pathname === "/api/telemetry/status") return json(res, 200, telemetryStatus());
+    if (req.method === "GET" && url.pathname === "/api/mlflow/status") return json(res, 200, mlflowTracingStatus());
     if (req.method === "POST" && url.pathname === "/api/telemetry/retry") {
       db.prepare("UPDATE creative_telemetry_outbox SET status='pending',next_attempt_at=NULL WHERE status='failed'").run();
       setImmediate(flushTelemetryOutbox);
@@ -180,13 +183,24 @@ const server = http.createServer(async (req, res) => {
       const dramas = db.prepare("SELECT id, title, analysis_json, created_at FROM drama_analyses WHERE status = 'completed' ORDER BY id DESC").all();
       const games = db.prepare("SELECT id, title, analysis_json, platform, created_at FROM game_analyses WHERE status = 'completed' ORDER BY id DESC").all();
       return json(res, 200, {
-        dramas: dramas.map((item) => ({ id: item.id, title: item.title, summary: item.analysis_json ? JSON.parse(item.analysis_json).oneSentenceThesis : "", createdAt: item.created_at })),
+        dramas: dramas.flatMap((item) => {
+          const analysis = item.analysis_json ? JSON.parse(item.analysis_json) : null;
+          return isDramaAnalysisV3(analysis) ? [{ id: item.id, title: item.title, summary: dramaAnalysisView(analysis).oneSentenceThesis, createdAt: item.created_at }] : [];
+        }),
         games: games.map((item) => { const analysis = item.analysis_json ? JSON.parse(item.analysis_json) : {}; return { id: item.id, title: item.title, platform: item.platform, summary: analysis.products?.[0]?.descriptionSummary || analysis.productThesis || "", createdAt: item.created_at }; }),
       });
     }
 
     if (req.method === "GET" && url.pathname === "/api/creative/sessions") {
-      const rows = db.prepare("SELECT * FROM creative_sessions ORDER BY id DESC").all();
+      const rows = db.prepare(`
+        SELECT sessions.*
+        FROM creative_sessions AS sessions
+        INNER JOIN drama_analyses AS dramas ON dramas.id = sessions.drama_id
+        WHERE dramas.status = 'completed'
+          AND json_valid(dramas.analysis_json)
+          AND json_extract(dramas.analysis_json, '$.contract') = ?
+        ORDER BY sessions.id DESC
+      `).all(dramaAnalysisContract);
       return json(res, 200, { items: rows.map(serializeCreativeSession) });
     }
 
@@ -197,6 +211,8 @@ const server = http.createServer(async (req, res) => {
       const drama = db.prepare("SELECT * FROM drama_analyses WHERE id = ? AND status = 'completed'").get(dramaId);
       const game = db.prepare("SELECT * FROM game_analyses WHERE id = ? AND status = 'completed'").get(gameId);
       if (!drama || !game) return json(res, 400, { error: "请选择已完成分析的短剧和游戏" });
+      const dramaResult = drama.analysis_json ? JSON.parse(drama.analysis_json) : {};
+      if (!isDramaAnalysisV3(dramaResult)) return json(res, 400, { error: "所选短剧不是 novvy.video-analysis.v3，请重新分析短剧" });
       const timestamp = now();
       const title = `${drama.title} × ${game.title || "游戏创意"}`;
       const inserted = db.prepare("INSERT INTO creative_sessions (drama_id, game_id, title, stage, created_at, updated_at) VALUES (?, ?, ?, 'working', ?, ?)")
@@ -205,13 +221,13 @@ const server = http.createServer(async (req, res) => {
       db.prepare("INSERT INTO creative_messages (session_id, role, content, created_at) VALUES (?, 'assistant', ?, ?)")
         .run(id, "已连接短剧与游戏分析，正在生成第一组片尾广告创意方向。", timestamp);
       recordCreativeRunStart(id);
-      const dramaResult = drama.analysis_json ? JSON.parse(drama.analysis_json) : {};
+      const dramaView = dramaAnalysisView(dramaResult);
       const gameResult = game.analysis_json ? JSON.parse(game.analysis_json) : {};
       recordCreativeStage(id, "video_analysis", {
         title: drama.title,
-        thesis: dramaResult.oneSentenceThesis || dramaResult.oneLineSummary || "",
-        endingState: dramaResult.narrativeContinuity?.lastFrameState || "",
-        visualStyle: dramaResult.visualStyle || {},
+        thesis: dramaView.oneSentenceThesis,
+        endingState: dramaView.narrativeContinuity?.lastFrameState || "",
+        visualStyle: dramaView.visualStyle,
       }, { key: `session:${id}:stage:video_analysis:source:${drama.id}` });
       recordCreativeStage(id, "product_analysis", {
         title: game.title || "",

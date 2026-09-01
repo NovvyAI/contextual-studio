@@ -174,6 +174,17 @@ NOVVY_SKILL_VERSION=contextual-studio-v1
 
 本地接收端默认监听 `http://127.0.0.1:4191`，数据保存到 `data/local-telemetry.sqlite`。启动 Contextual Studio 时配置 `NOVVY_TELEMETRY_URL=http://127.0.0.1:4191`、`NOVVY_TELEMETRY_TOKEN=contextual-local-dev`。浏览器打开 `http://127.0.0.1:4191/dashboard` 可查看任务列表、阶段时间线、资产和用户反馈；页面每 10 秒自动刷新。也可用带 `X-API-Key` 的 `GET /v1/local/status` 查看接收数量。监控页与接收端只监听本机回环地址，不要暴露到公网。
 
+### 可选：MLflow GenAI tracing
+
+项目 Python 环境安装 MLflow Server/UI 3.15.2，Node 依赖包含官方 `@mlflow/core` tracing SDK。启动本地 MLflow：
+
+```bash
+./start_mlflow.sh
+# 或 npm run mlflow:server
+```
+
+UI 默认位于 <http://127.0.0.1:5050>（避免与 macOS Control Center 常用的 5000 端口冲突），数据写入 `data/mlflow/`。`.env.example` 提供 `MLFLOW_TRACKING_URI`、`MLFLOW_PORT` 和 `MLFLOW_EXPERIMENT_ID`。配置后，Codex SDK 的编译后 Prompt/最终输出、Novvy MCP 工具输入输出和 ImaRouter 请求结果会写入 MLflow；`GET /api/mlflow/status` 可确认当前服务是否启用。发送前会移除认证字段、签名查询参数、base64、二进制和本机绝对路径。
+
 ### 全新电脑一键安装（推荐）
 
 如果电脑没有安装 Node.js、Python、FFmpeg 或其他开发工具，在项目目录中运行：

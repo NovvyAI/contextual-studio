@@ -40,7 +40,7 @@ Produce an evidence-based narrative and creative analysis from the video itself.
 
 7. Preserve a production-grade evidence shape when the result will enter Contextual Studio.
    - Use `references/drama-understanding-package.schema.json` as the field inventory for series, characters, episodes, audiovisual archive, evidence, source assets, confidence, and review status.
-   - The current web analyzer may return its smaller `novvy.video-analysis.v2` projection; do not fabricate missing full-package fields merely to satisfy the larger schema. Keep the projection traceable to screenshots, timestamps, and the cached episode artifact.
+   - The current web analyzer returns and only supports the smaller `novvy.video-analysis.v3` projection. Its canonical detailed analysis lives only in `episodeAnalyses[].detailedAnalysis`; consumers may derive a temporary UI view but must not persist duplicate root fields. Do not fabricate missing full-package fields merely to satisfy the larger schema. Keep the projection traceable to screenshots, timestamps, and the cached episode artifact.
 
 ## Output Shape
 

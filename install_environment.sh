@@ -103,6 +103,13 @@ fi
 
 "$PYTHON_ENV_DIR/bin/python" -c "from PIL import Image; print('Pillow 已就绪：' + Image.__version__)"
 
+if "$PYTHON_ENV_DIR/bin/python" -c "import mlflow; raise SystemExit(0 if mlflow.__version__ == '3.15.2' else 1)" >/dev/null 2>&1; then
+  echo "检测到 MLflow 3.15.2 已安装，跳过安装。"
+else
+  say "正在安装 MLflow Server 和 Tracing 依赖…"
+  "$PYTHON_ENV_DIR/bin/python" -m pip install -r requirements-mlflow.txt
+fi
+
 say "正在安装 Contextual Studio 项目依赖…"
 npm install
 

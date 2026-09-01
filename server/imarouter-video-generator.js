@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { db, now } from "./database.js";
 import { parseStoryboardVideoPlan, shotCard } from "./storyboard-video-plan.js";
+import { traceToolCall } from "./mlflow-tracing.js";
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const execFileAsync = promisify(execFile);
@@ -21,12 +22,16 @@ function config() {
 }
 
 async function request(url, options) {
-  const response = await fetch(url, { ...options, signal: AbortSignal.timeout(90_000) });
-  const text = await response.text();
-  let data;
-  try { data = JSON.parse(text); } catch { data = { message: text }; }
-  if (!response.ok) throw new Error(`ImaRouter HTTP ${response.status}: ${data?.message || text.slice(0, 300)}`);
-  return data;
+  let body = options?.body;
+  try { body = typeof body === "string" ? JSON.parse(body) : body; } catch { /* Preserve non-JSON bodies as text. */ }
+  return traceToolCall("imarouter", "http_request", { method: options?.method || "GET", url, body }, async () => {
+    const response = await fetch(url, { ...options, signal: AbortSignal.timeout(90_000) });
+    const text = await response.text();
+    let data;
+    try { data = JSON.parse(text); } catch { data = { message: text }; }
+    if (!response.ok) throw new Error(`ImaRouter HTTP ${response.status}: ${data?.message || text.slice(0, 300)}`);
+    return { httpStatus: response.status, data };
+  }).then((result) => result.data);
 }
 
 function append(sessionId, content, card) {

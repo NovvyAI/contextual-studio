@@ -2,6 +2,7 @@ import { db, now } from "./database.js";
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
 import { publicInputUrl } from "./character-generator.js";
 import { recordCreativeAsset, recordCreativeFeedback, recordCreativeStage } from "./creative-telemetry.js";
+import { dramaReferenceImageCandidates } from "./drama-analysis-v3.js";
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -108,7 +109,7 @@ export function approveFinalCard(sessionId, cardId) {
   if (!card) throw new Error("找不到已经生成的落版图预览");
   const drama = db.prepare("SELECT analysis_json FROM drama_analyses WHERE id = ?").get(session.drama_id);
   const analysis = drama?.analysis_json ? JSON.parse(drama.analysis_json) : {};
-  const candidates = analysis.referenceImageCandidates || {};
+  const candidates = dramaReferenceImageCandidates(analysis);
   const slotMeta = {
     maleFront: ["male_front", "男主人公正面"], maleSide: ["male_side", "男主人公侧面"],
     femaleFront: ["female_front", "女主人公正面"], femaleSide: ["female_side", "女主人公侧面"],

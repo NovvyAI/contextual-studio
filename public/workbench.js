@@ -104,6 +104,22 @@ const analysisLabels = {
   model: "模型", analyzedAt: "分析时间", codexThreadId: "Novvy 会话", version: "版本",
 };
 
+function dramaAnalysisView(result = {}) {
+  result = result && typeof result === "object" ? result : {};
+  if (result.contract !== "novvy.video-analysis.v3") return { unsupported: Boolean(result.contract), oneSentenceThesis: "", referenceImageCandidates: {} };
+  const episode = Array.isArray(result.episodeAnalyses) ? result.episodeAnalyses.at(-1) || {} : {};
+  const detailed = episode.detailedAnalysis || {};
+  const slotNames = { male_front: "maleFront", male_side: "maleSide", female_front: "femaleFront", female_side: "femaleSide" };
+  const candidates = Array.isArray(episode.referenceImageCandidates?.slots)
+    ? Object.fromEntries(episode.referenceImageCandidates.slots.map((item) => [slotNames[item.slot], { ...item, available: Boolean(item.screenshotId), view: item.slot.endsWith("_side") ? "side" : "front" }]).filter(([slot]) => slot))
+    : {};
+  return {
+    unsupported: false,
+    oneSentenceThesis: detailed.oneSentenceThesis || episode.oneLineSummary || "",
+    referenceImageCandidates: candidates,
+  };
+}
+
 function element(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -365,7 +381,7 @@ function renderAnalysisValue(value) {
 function referenceSlots(drama) {
   const names = { maleFront: "男主正面", maleSide: "男主侧面", femaleFront: "女主正面", femaleSide: "女主侧面" };
   const byId = new Map();
-  Object.entries(drama?.result?.referenceImageCandidates || {}).forEach(([slot, candidate]) => {
+  Object.entries(dramaAnalysisView(drama?.result).referenceImageCandidates).forEach(([slot, candidate]) => {
     if (candidate?.available && candidate.screenshotId) byId.set(candidate.screenshotId, names[slot] || slot);
   });
   return byId;
@@ -395,7 +411,8 @@ function openSourceAnalysis(type, source) {
   document.querySelector("#source-analysis-title").textContent = source.title || source.result?.storeFacts?.productName || "完整分析";
   const body = document.querySelector("#source-analysis-body"); body.replaceChildren();
   const intro = element("section", "source-analysis-intro");
-  intro.append(element("small", "", type === "drama" ? "分析命题" : "产品判断"), element("p", "", type === "drama" ? source.result?.oneSentenceThesis : source.result?.productThesis));
+  const dramaView = type === "drama" ? dramaAnalysisView(source.result) : null;
+  intro.append(element("small", "", type === "drama" ? "分析命题" : "产品判断"), element("p", "", type === "drama" ? (dramaView.unsupported ? "旧版分析需要重新分析" : dramaView.oneSentenceThesis) : source.result?.productThesis));
   if (type === "game" && source.storeUrl) {
     const link = element("a", "source-store-link", "打开原始商店页面 ↗"); link.href = source.storeUrl; link.target = "_blank"; link.rel = "noreferrer"; intro.append(link);
   }
