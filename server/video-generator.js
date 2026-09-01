@@ -2,6 +2,7 @@ import path from "node:path";
 import { Codex } from "@openai/codex-sdk";
 import { db, now } from "./database.js";
 import { publicInputUrl } from "./character-generator.js";
+import { runCodexWithTrace } from "./mlflow-tracing.js";
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
 import { parseStoryboardVideoPlan, shotCard } from "./storyboard-video-plan.js";
 import { finalizeVideoWithApprovedCard } from "./video-finalizer.js";
@@ -184,7 +185,8 @@ export async function translatePromptWithCodex(card) {
   const codex = new Codex();
   const thread = codex.startThread({ workingDirectory: path.resolve("."), skipGitRepoCheck: true, sandboxMode: "read-only", approvalPolicy: "never", networkAccessEnabled: false });
   const audit = (card.details || []).map((item) => `${item.label}: ${item.content}`).join("\n\n");
-  const turn = await thread.run(`Convert the following approved Chinese video audit into one complete English Seedance video-generation prompt. Preserve every approved story beat and constraint. Use no more than 3 shots. All on-screen text, dialogue, voiceover, speech, CTA, and final-card copy must be English only. Keep the same male and female identities from the supplied human reference images. Do not mention URLs, model names, resolution fields, JSON, or internal implementation. Return only the required JSON object.\n\n${audit}`, { outputSchema: schema, signal: AbortSignal.timeout(10 * 60 * 1000) });
+  const input = `Convert the following approved Chinese video audit into one complete English Seedance video-generation prompt. Preserve every approved story beat and constraint. Use no more than 3 shots. All on-screen text, dialogue, voiceover, speech, CTA, and final-card copy must be English only. Keep the same male and female identities from the supplied human reference images. Do not mention URLs, model names, resolution fields, JSON, or internal implementation. Return only the required JSON object.\n\n${audit}`;
+  const turn = await runCodexWithTrace(thread, input, { outputSchema: schema, signal: AbortSignal.timeout(10 * 60 * 1000) }, { name: "codex.video_prompt_translation", sessionId: `video-prompt:${card.id}` });
   const prompt = String(JSON.parse(turn.finalResponse).prompt || "").trim();
   if (!prompt) throw new Error("Novvy 未能生成英文视频提交提示词");
   return prompt;

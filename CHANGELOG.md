@@ -10,6 +10,13 @@
 - 前端展示、创意上下文、人物参考图、素材登记和采集只读取 v3 的 `episodeAnalyses[]`；不保留 v2 根级字段回退，旧记录需重新分析后才能继续使用。
 - 人物参考角度改为受限枚举，并按参考槽位确定正侧面，修复自然语言角度导致 `female_side` 被投影成 `front`；同时修复视听母题前后端字段名不一致造成的空白展示。
 
+### MLflow 本地运行时
+
+- 新增独立分支上的 MLflow 3.15.2 Server/UI、本地 SQLite/Artifact 启动脚本及官方 `@mlflow/core` TypeScript tracing SDK，为后续 Codex SDK、Novvy MCP 和 ImaRouter 全链路埋点提供运行基础。
+- 一键安装脚本会在项目 `.venv` 中按 `requirements-mlflow.txt` 安装 MLflow；`npm run mlflow:server` 或 `./start_mlflow.sh` 在回环地址 5050 启动 UI，避开 macOS Control Center 常用的 5000 端口，数据保存在被 Git 忽略的 `data/mlflow/`。
+- 新增统一脱敏 tracing 边界，覆盖 Codex SDK `thread.run()`、Novvy MCP `callTool()` 和 ImaRouter HTTP 请求；记录编译后 Prompt、最终输出、工具参数、结果、耗时与异常，并通过 session metadata 关联工作台。
+- 发送 trace 前移除认证字段、签名查询参数、base64、二进制和本机绝对路径；新增 `GET /api/mlflow/status` 检查运行时是否实际启用。
+
 ### 分镜稳定编号解析兼容
 
 - 分镜图生成器除“镜头 01”“Shot 01”外，新增识别 `A-01｜…`、`B-02｜…`、`storyboard-C-03｜…` 等方案前缀稳定镜头编号。

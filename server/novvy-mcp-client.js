@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { traceToolCall } from "./mlflow-tracing.js";
 
 function readJson(filePath) {
   try { return JSON.parse(fs.readFileSync(filePath, "utf8")); } catch { return null; }
@@ -87,7 +88,7 @@ export class NovvyMcpClient {
   }
 
   callTool(name, args) {
-    return this.request("tools/call", { name, arguments: args });
+    return traceToolCall("novvy_mcp", name, args, () => this.request("tools/call", { name, arguments: args }));
   }
 }
 

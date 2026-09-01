@@ -21,6 +21,7 @@ import { landingPackagePath, packageLandingPage } from "./landing-page-packager.
 import { registerChatAttachmentsAsAssets, startAssetCreation, startAssetRegeneration, startAttachmentImageEdit } from "./asset-generator.js";
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
 import { backfillCreativeTelemetry, flushTelemetryOutbox, recordCreativeFeedback, recordCreativeRunStart, recordCreativeStage, startTelemetryWorker, telemetryStatus } from "./creative-telemetry.js";
+import { mlflowTracingStatus } from "./mlflow-tracing.js";
 import { dramaAnalysisView, isDramaAnalysisV3 } from "./drama-analysis-v3.js";
 
 const port = Number(process.env.PORT || 4180);
@@ -113,6 +114,7 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   try {
     if (req.method === "GET" && url.pathname === "/api/telemetry/status") return json(res, 200, telemetryStatus());
+    if (req.method === "GET" && url.pathname === "/api/mlflow/status") return json(res, 200, mlflowTracingStatus());
     if (req.method === "POST" && url.pathname === "/api/telemetry/retry") {
       db.prepare("UPDATE creative_telemetry_outbox SET status='pending',next_attempt_at=NULL WHERE status='failed'").run();
       setImmediate(flushTelemetryOutbox);
