@@ -94,3 +94,5 @@ main { width:min(1240px,92vw); margin:auto; padding:70px 0 100px; }
 .concept-heading { display:flex; align-items:center; gap:7px; min-width:0; }
 .concept-heading strong { flex:1; min-width:0; }
 .concept-basis-badge { display:inline-flex; align-items:center; flex:0 0 auto; border:1px solid #718346; border-radius:999px; background:#242c1b; color:#d8f46c; padding:2px 7px; font-size:8px; line-height:1.25; white-space:nowrap; }
+.concept-card .concept-summary-copy,.concept-card .concept-body,.concept-card dl div,.chat-candidate-card,.chat-card-details dl div{min-width:0}
+.concept-card .concept-summary p,.concept-card dd,.chat-card-summary,.chat-card-details dd{min-width:0;max-width:100%;white-space:normal;overflow-wrap:anywhere;word-break:break-word}
