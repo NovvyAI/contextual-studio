@@ -492,6 +492,7 @@ document.querySelector("#creative-create-form").addEventListener("submit", async
     });
     creativeEntryMessage.textContent = "";
     newPage.location.replace(`/workbench.html#${session.id}`);
+    await loadCreativeHome();
   } catch (error) {
     newPage.close();
     creativeEntryMessage.textContent = error.message;
