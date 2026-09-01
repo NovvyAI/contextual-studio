@@ -11,9 +11,12 @@ const model = process.env.CODEX_ANALYSIS_MODEL || "";
 const stringArray = { type: "array", items: { type: "string" } };
 const conceptSchema = {
   type: "object", additionalProperties: false,
-  required: ["id", "title", "primaryDesire", "secondaryDesire", "narrativeModel", "entryPromise", "accelerator", "dialogueRelationship", "coreGameplayVerb", "stagedSuccess", "causalEscalation", "singleCtr", "tailAdAngle", "videoMatch", "gameplaySellingPoint", "audience", "marketMessage", "emotionalBridge", "conversionPath", "entryMethod", "rhythm", "recommendation", "risks"],
+  required: ["id", "title", "creativeBasisType", "creativeBasisEvidence", "tailFrameState", "lastDialogue", "residualEmotion", "unfinishedHook", "primaryDesire", "secondaryDesire", "narrativeModel", "entryPromise", "accelerator", "dialogueRelationship", "coreGameplayVerb", "stagedSuccess", "causalEscalation", "singleCtr", "tailAdAngle", "videoMatch", "gameplaySellingPoint", "audience", "marketMessage", "emotionalBridge", "conversionPath", "entryMethod", "rhythm", "recommendation", "risks"],
   properties: {
-    id: { type: "string" }, title: { type: "string" }, primaryDesire: { type: "string" }, secondaryDesire: { type: "string" },
+    id: { type: "string" }, title: { type: "string" },
+    creativeBasisType: { type: "string", enum: ["剧情点", "剧尾"] }, creativeBasisEvidence: { type: "string" },
+    tailFrameState: { type: "string" }, lastDialogue: { type: "string" }, residualEmotion: { type: "string" }, unfinishedHook: { type: "string" },
+    primaryDesire: { type: "string" }, secondaryDesire: { type: "string" },
     narrativeModel: { type: "string" }, entryPromise: { type: "string" }, accelerator: { type: "string" }, dialogueRelationship: { type: "string" },
     coreGameplayVerb: { type: "string" }, stagedSuccess: { type: "string" }, causalEscalation: { type: "string" }, singleCtr: { type: "string" },
     tailAdAngle: { type: "string" }, videoMatch: { type: "string" },
@@ -117,9 +120,11 @@ ${screenshotIndex}
 硬性规则：
 1. 只做片尾植入，不做中插；从短剧最后的情绪、动作、物件或未满足愿望自然进入真实游戏玩法。
 2. 游戏受众必须影响创意角度、节奏、玩法镜头、文案语气、声音情绪和 CTA。
-3. 初次输出 3-4 个稳定编号 A/B/C/D 的候选，让用户选择；选择前不得生成落版图、上传参考图或提交视频。
+2a. 创意内容时长必须可变，不能默认、暗示或固定为 12 秒。初次 concept 的 rhythm 应根据该方案完成“剧情承接→真实玩法操作→可见反馈→升级钩子”实际需要，写出建议内容时长范围及节奏依据；此时不锁死最终总时长。正式内容时长由用户确认的文字分镜逐镜 durationSeconds 相加并扣除镜间交叉淡化得到，每镜遵守生产 Profile 的 ${productionProfile.min_shot_duration_seconds}-${productionProfile.max_shot_duration_seconds} 秒范围、最多 ${productionProfile.max_shots_per_final} 镜；最后另加 ${productionProfile.final_assembly.final_card_duration_seconds} 秒落版，不占内容时长。
+3. 初次必须输出 4 个稳定编号 A/B/C/D 的候选，让用户选择；选择前不得生成落版图、上传参考图或提交视频。四个方案不能全部使用同一种创意依据：至少一个是“剧情点”，至少一个是“剧尾”。每个 concept 必须填写 creativeBasisType（只能是“剧情点”或“剧尾”）和 creativeBasisEvidence（指出具体情节、人物行动或结尾证据）。剧尾方案还必须逐项填写 tailFrameState、lastDialogue、residualEmotion、unfinishedHook；剧情点方案这四项填空字符串。不得把普通剧情点冒充剧尾，也不得只写笼统的“承接剧情”。
+3a. 用户通过自定义创意卡要求新增方案 E/F/G 等时，只根据用户想法新增该编号的一张完整 concept；A-D 和其他已有方案保持原样。自定义想法仍须结合短剧与真实游戏证据补齐 concept 全部结构字段，但不得擅自改变用户的核心意图。该操作停留在 concept_review，不得写入 selectedConceptIds、confirmedCards 或提前生成落版方案。
 4. 用户选择后才能把 selectedConceptIds 写入；后续只准备审核材料，任何消耗型生成必须明确等待用户确认。
-4a. 当用户明确选择并确认 concept 后，本轮必须立即返回 2-4 张 kind=final_card、previewUrl=""、status=candidate 的落版图方案卡，并进入落版方案审核；不能只描述“下一步会准备”。每张候选必须包含视觉构图、准确英文标题/副标题/CTA、字体层级、色彩、产品真实性边界和可直接提交给 GPT-image-2 的完整英文提示词。此时只生成文字方案卡，不调用图片生成。
+4a. 当用户明确选择并确认 concept 后，只确认创意并进入人物参考图选择，不生成落版方向或真实落版图。人物参考图组确认后，才生成 2-4 张 kind=final_card、previewUrl=""、status=candidate 的落版方向卡；每张包含末镜衔接意图、9:16 构图、英文文案、字体层级、色彩、真实性边界和后续图片提示词，此时不调用图片生成。
 5. 产品 icon 不进入生成输入。视频参考槽位为 male_front、male_side、female_front、female_side、final_card。
 6. 严格按当前生产 Profile 生成独立镜头任务；不得套用外部 Skill 的 single_final_video_pass 硬编码。当前允许的提供者、镜头数、时长、用户授权重试和成片数量都以该 Profile 为准。视频为 9:16、720p，Novvy 和 ImaRouter 均使用 seedance-2.0-fast。所有生成画面文字、CTA、对白、旁白和语音使用英文。内容镜头完成后由后端拼接，并确定性追加已确认原始落版图；不要要求视频模型重绘落版文字。
 7. 当前创意对话 thread 只负责创意协作和画布状态；落版图候选确认后的真实生成由工作台的专用生成动作执行。不要声称本对话已调用图片或视频生成工具，也不要告诉用户需要去其他执行环节。
@@ -130,13 +135,13 @@ ${screenshotIndex}
 12. 把自己当作正在与用户一起工作的真人创意搭档。assistantMessage 必须先直接回应用户刚说的话：是问题就先回答问题，是反馈就先表示理解并复述关键修改点，再给出下一步。语气自然、口语化、有主语，不要把内部状态当成回复。
 13. assistantMessage 禁止出现“正在整理画布”“更新画布”“处理请求”“阶段流转”“当前 thread”“JSON”“系统状态”等内部实现表达。用户只是询问能否反馈或修改时，应直接回答“当然可以”，邀请对方给出具体意见，并说明会保留旧版本方便比较；不要假装已经收到尚未提供的修改细节。
 14. 用户从某张候选卡提交“只重新生成方案 X”时，只改写 concepts 中对应编号的完整方案并保持编号稳定；其他候选、selectedConceptIds、confirmedCards、制作状态和未被点名的内容必须原样保留。该操作只是修改候选，除非用户明确说“选择”或“确认”，否则不得新增确认卡或推进制作阶段。assistantMessage 应直接说明修改后的方案和主要变化。
-15. assistantCards 用于右侧聊天中的可交互候选卡。生成创意候选、落版图候选、人物图候选、道具图候选、参考图、视频提示词或其他需要用户查看/修改的候选时，必须为本轮相关候选生成卡片；普通问答可返回空数组。创意方案卡 id 使用 concept-A、concept-B 等稳定格式。
+15. assistantCards 用于右侧聊天中的可交互候选卡。生成创意候选、落版图候选、人物图候选、道具图候选、参考图、视频提示词或其他需要用户查看/修改的候选时，必须为本轮相关候选生成卡片；普通问答可返回空数组。创意方案卡 id 使用 concept-A、concept-B、concept-E 等稳定格式。
 16. assistantCards 的 kind 必须准确：创意方案 concept、落版图 final_card、人物图 character_image、道具图 prop_image、其他参考图 reference_image、视听方向 audiovisual_direction、剧情与分镜 storyboard、视频提示词 video_prompt。不存在通用或兜底卡片类型；无法明确归类的普通回答必须返回空 assistantCards。previewUrl 只有存在真实可访问预览时才填写，否则返回空字符串。details 保留用户判断和修改所需的关键字段。
 17. 用户要求修改某一聊天卡片时，只修改该 card id 对应的候选及必要的当前工作区字段，返回同 id 的新版卡片；不得连带重写其他卡片或把修改视为确认。
 18. 对人物图、道具图、参考图或落版图的视觉修改，只有存在真实生成或处理后的图片 URL 时才能说“已经修改/已经裁切/已经去除”并替换 previewUrl。若当前创意 thread 没有实际处理图片，必须保留原 previewUrl，明确说这是待执行的修改要求，不得返回空 previewUrl 或假装图片已经完成。
-19. 人物参考图组确认后，必须先生成一张 id=audiovisual-direction-v1、kind=audiovisual_direction、stage=audiovisual_review 的「视听方向」卡，不能直接生成剧情与分镜。卡片以紧凑中文写清：视听语言 Bible 摘要（构图/机位与焦段/运镜触发/光色/表演/剪辑节奏/声音/连续性与禁止项）；AI 推荐的导演参考与推荐理由；2-3 个可替换导演候选；明确的“不使用导演参考”选项。每个导演项使用 detail label “导演选项｜姓名”，content 只写 2-4 个转译后的可观察参数，不得只写姓名或模仿受保护作品。AI 推荐项 label 使用“AI推荐导演｜姓名”。如果原剧不适合导演参考，应推荐“不使用导演参考”。此步骤等待用户选择和确认，不生成 storyboard。
-19a. 只有用户确认视听方向后，才按已确认 Bible 和导演选择，使用本地 $storyboard-production-contract 生成 3 个稳定编号 storyboard-A/B/C 的候选卡，kind 必须为 storyboard，stage 必须为 storyboard_review。每张卡包含整体剧情线及最多 3 镜；每镜必须按 $audiovisual-language-design 写清时间、剧情功能、开始/峰值/结果/反应状态、人物调度与表演、景别/构图/机位/焦段/景深、带触发与路径的运镜、光色连续性、真实玩法动作、剪辑接点/转场、英文对白/画面文字、分层声音、绑定人物参考槽位和落版衔接。每镜落实 character_or_user_input -> physical_world_action -> physical_world_result -> ui_feedback -> character_reaction -> larger_hook；UI、旁白或庆祝不能替代实体结果，人物反应必须发生在看见结果之后。对白同时写清 speaker、addressee、why_now、gaze、gesture、blocking 与是否允许打破第四墙。用 $creative-quality-review 排除 OOC、无动机运镜、不可读动作、连续性断裂、虚假玩法和 UI 先于实体结果。此步骤只生成分镜候选，不提交媒体生成。
-20. 选择 storyboard 文字候选后，工作台会先生成逐镜分镜图片；不要提前生成 video_prompt。只有逐镜分镜图片统一确认后，才按 $storyboard-production-contract 自动生成 id 为 video-prompt-v1、kind 为 video_prompt、stage 为 prompt_review 的视频提示词卡。details 同时包含“中文审核稿”“英文提交提示词”和“分镜任务 JSON”。JSON 使用 {schemaVersion:"contextual.storyboard-video.v1",shots:[{shotId:"shot-01",order:1,durationSeconds:4到15的整数,reviewZh:"完整中文审核稿",promptEn:"等义英文提交提示词"}]}，最多 3 镜、order 连续。reviewZh/promptEn 必须逐项等义并包含已批准画面的构图、机位、动作、表演、光色、声音、连续性和参考绑定；每镜只描述内容镜头，不重绘最终落版图。列出 Novvy MCP 与 ImaRouter、9:16、720p 与人物/同序号分镜图绑定。所有生成素材文字和声音使用英文。此时不调用视频生成。
+19. 人物参考图组确认后先生成并确认“落版方向”，再生成一张 id=audiovisual-direction-v1、kind=audiovisual_direction、stage=audiovisual_review 的「视听方向」卡。落版方向只定义末镜交接、构图、文案和视觉目标，不生成真实图片；视听方向卡只总结可执行的视听语言 Bible，不推荐导演。完整导演库由 UI 下拉框提供。
+19a. 只有落版方向和视听方向都已确认后，才生成 storyboard-A/B/C。每套分镜的末镜必须明确读取已确认落版方向，落实主体停留位置、动作终点、视线、光色、文案安全区及转入落版图的方式。每张卡包含整体剧情线及最多 3 镜；每镜必须按 $audiovisual-language-design 写清时间、剧情功能、开始/峰值/结果/反应状态、人物调度与表演、景别/构图/机位/焦段/景深、带触发与路径的运镜、光色连续性、真实玩法动作、剪辑接点/转场、英文对白/画面文字、分层声音、绑定人物参考槽位和落版衔接。此步骤只生成分镜候选，不提交媒体生成。
+20. 选择 storyboard 文字候选后先生成逐镜分镜图片。逐镜图片统一确认后，不得直接生成 video_prompt；先根据末镜与已确认落版方向准备真实落版图，等用户明确生成并审核通过后，才生成 id=video-prompt-v1、kind=video_prompt、stage=prompt_review 的视频提示词卡。details 同时包含中文审核稿、英文提交提示词和分镜任务 JSON；每镜只描述内容镜头，不重绘最终落版图。
 22. 初次生成创意候选时，每个 concept 必须先依据本地叙事与台词参考固定：1 个主欲望、最多 1 个辅助欲望、1 个 M01-M19 叙事模型、1 个 P01-P19 入场承诺、最多 1 个 A01-A08 加速器、对白说话者与对象、唯一核心玩法动词、阶段成功、因果升级和单一 CTR。把这些分别写入 concept 的结构化字段；不要只在文案里笼统提及。
 23. 整个创意工作台只使用当前这一条 Codex thread。创意策略、叙事与台词、制作、参考审核和分镜契约是同一 session 内的结构化阶段；不得建议或声称为这些阶段创建新的 Codex task 或 subagent。
 24. 短剧结果只支持 novvy.video-analysis.v3，游戏结果遵循 novvy.product-analysis.v1。短剧详细分析的唯一事实源是 episodeAnalyses[].detailedAnalysis，不要寻找或要求根级重复副本。首次剧游匹配时，先在当前同一 Codex session 内按 references/video-analysis-subagent.md 补充“已选游戏”语境：沿用原始视频事实、尾帧、最后对白、残留情绪、人物关系和连续性资产，只新增与当前 productTruth 的片尾连接、市场传达与转化判断；不得改写原视频事实，也不得创建新的 Codex task。
@@ -165,27 +170,33 @@ export async function runCreativeTurn(sessionId, userMessage, initial = false, a
     const audiovisualDirectionRequested = /audiovisual-direction-v1/.test(userMessage) && /不要生成 storyboard/.test(userMessage);
     if (audiovisualDirectionRequested) {
       const directionCard = (output.assistantCards || []).find((card) => card.kind === "audiovisual_direction" && card.id === "audiovisual-direction-v1");
-      const directorOptions = (directionCard?.details || []).filter((item) => /^(?:AI推荐导演|导演选项)｜/.test(String(item.label || "")));
-      if (!directionCard || directorOptions.length < 3) {
-        const repairPrompt = `补齐刚才遗漏的视听方向审核卡。只返回一张 id=audiovisual-direction-v1、kind=audiovisual_direction、previewUrl=""、status=candidate 的卡片，stage=audiovisual_review。summary 概括本项目统一视听方向；details 写清构图、机位与焦段、运镜触发、光色、表演、剪辑节奏、声音、连续性、禁止项；并提供一个“AI推荐导演｜姓名”和至少两个“导演选项｜姓名”，每项 content 只写 2-4 个已经转译的可观察制作参数。保留完整 workspace，不能生成 storyboard。`;
+      if (!directionCard) {
+      const repairPrompt = `补齐刚才遗漏的视听方向审核卡。只返回一张 id=audiovisual-direction-v1、kind=audiovisual_direction、previewUrl=""、status=candidate 的卡片，stage=audiovisual_review。summary 概括本项目统一视听方向；details 只写清构图、机位与焦段、运镜触发、光色、表演、剪辑节奏、声音、连续性、禁止项；不要推荐、选择或列举导演，导演由用户在 UI 下拉框选择。保留完整 workspace，不能生成 storyboard。`;
         const repairTurn = await runCodexWithTrace(thread, repairPrompt, { outputSchema: creativeTurnSchema, signal: AbortSignal.timeout(10 * 60 * 1000) }, { name: "codex.audiovisual_direction_repair", sessionId: `creative:${sessionId}`, model: model || "codex-config-default" });
         output = JSON.parse(repairTurn.finalResponse);
       }
       const repairedDirection = (output.assistantCards || []).find((card) => card.kind === "audiovisual_direction" && card.id === "audiovisual-direction-v1");
       if (!repairedDirection) throw new Error("Novvy 没有返回视听方向卡片");
-      output.assistantCards = [{ ...repairedDirection, id: "audiovisual-direction-v1", kind: "audiovisual_direction", previewUrl: "", status: "candidate" }];
+      output.assistantCards = [{ ...repairedDirection, id: "audiovisual-direction-v1", kind: "audiovisual_direction", title: String(repairedDirection.title || "视听语言 Bible V1").replace(/^视听方向(?:\s*V?1)?/i, "视听语言 Bible V1"), previewUrl: "", status: "candidate", details: (repairedDirection.details || []).filter((item) => !/^(?:AI推荐导演|导演选项)｜/.test(String(item.label || ""))) }];
       output.stage = "audiovisual_review";
-      output.nextAction = "选择导演参考或不使用导演参考，并确认视听方向";
+      output.nextAction = "从本地导演库选择一位导演或不使用导演参考，并确认视听方向";
     }
     const conceptWasConfirmed = Boolean(turnPolicy.prepareFinalCardCandidates)
-      || /我选择并确认采用候选卡\s+concept-[A-D]/i.test(userMessage);
-    if (conceptWasConfirmed && output.workspace?.selectedConceptIds?.length && !(output.assistantCards || []).some((card) => card.kind === "final_card")) {
+      || /我选择并确认采用候选卡\s+concept-[A-Z]/i.test(userMessage);
+    if (conceptWasConfirmed && output.workspace?.selectedConceptIds?.length) {
+      output.assistantCards = (output.assistantCards || []).filter((card) => card.kind === "concept");
+      output.stage = "reference_review";
+      output.nextAction = "选择并确认人物参考图组";
+      output.workspace.productionPlan = { ...(output.workspace.productionPlan || {}), referenceStatus: "candidate_review", finalCardStatus: "waiting_for_characters" };
+    }
+    const finalCardDirectionRequested = /现在生成 2-4 张 final_card 落版方向候选卡/.test(userMessage);
+    if (finalCardDirectionRequested && !(output.assistantCards || []).some((card) => card.kind === "final_card")) {
       const confirmedWorkspace = output.workspace;
-      const repairPrompt = `刚才已经确认创意方案，但你漏掉了必须在同一轮交付的落版图方案候选。现在立即补齐 2-4 张 assistantCards：kind 必须为 final_card，previewUrl 必须为空字符串，status 必须为 candidate。每张卡写清视觉构图、准确英文标题/副标题/CTA、字体层级、色彩、产品真实性边界，以及可直接提交给 GPT-image-2 的完整英文提示词。只准备文字候选，不调用图片生成，不要只解释下一步。完整保留当前 workspace、selectedConceptIds 和 confirmedCards。stage 使用 concept_selected，nextAction 明确为审核并选择一个落版图方案。`;
+      const repairPrompt = `人物参考图组已经确认，但你漏掉了落版方向候选。立即返回 2-4 张 assistantCards：kind=final_card、previewUrl=""、status=candidate。每张写清末镜衔接意图、9:16 构图、准确英文标题/副标题/CTA、字体层级、色彩、产品真实性边界和后续 GPT-image-2 英文提示词。只准备方向，不执行图片生成。保留 workspace 和 confirmedCards。stage=final_card_review。`;
       const repairTurn = await runCodexWithTrace(thread, repairPrompt, { outputSchema: creativeTurnSchema, signal: AbortSignal.timeout(10 * 60 * 1000) }, { name: "codex.final_card_repair", sessionId: `creative:${sessionId}`, model: model || "codex-config-default" });
       const repaired = JSON.parse(repairTurn.finalResponse);
       const finalCardCandidates = (repaired.assistantCards || []).filter((card) => card.kind === "final_card");
-      if (!finalCardCandidates.length) throw new Error("已确认创意，但 Novvy 两次都没有返回落版图方案候选；请点击重试落版方案");
+      if (!finalCardCandidates.length) throw new Error("人物参考图已确认，但 Novvy 两次都没有返回落版方向候选；请重试落版方向");
       output = {
         ...repaired,
         stage: "concept_selected",
@@ -196,8 +207,16 @@ export async function runCreativeTurn(sessionId, userMessage, initial = false, a
           confirmedCards: confirmedWorkspace.confirmedCards,
         },
         assistantCards: finalCardCandidates,
-        nextAction: "审核并选择一个落版图方案，然后确认生成真实落版图",
+        nextAction: "审核并确认一个落版方向",
       };
+      output.stage = "final_card_review";
+      output.workspace.productionPlan = { ...(output.workspace.productionPlan || {}), finalCardStatus: "direction_review", videoPromptStatus: "waiting_for_final_card_direction" };
+    }
+    if (finalCardDirectionRequested) {
+      output.assistantCards = (output.assistantCards || []).filter((card) => card.kind === "final_card").map((card) => ({ ...card, previewUrl: "", status: "candidate" }));
+      output.stage = "final_card_review";
+      output.nextAction = "审核并确认一个落版方向";
+      output.workspace.productionPlan = { ...(output.workspace.productionPlan || {}), finalCardStatus: "direction_review", videoPromptStatus: "waiting_for_final_card_direction" };
     }
     if (turnPolicy.conceptRevisionId) {
       const originalWorkspace = session.workspace_json ? JSON.parse(session.workspace_json) : null;
@@ -215,11 +234,46 @@ export async function runCreativeTurn(sessionId, userMessage, initial = false, a
         id: revisedCardId, kind: "concept", title: `${turnPolicy.conceptRevisionId}｜${revisedConcept.title}`,
         summary: revisedConcept.tailAdAngle, previewUrl: "", status: "candidate",
         details: [
+          { label: "创意依据", content: revisedConcept.creativeBasisType }, { label: "依据证据", content: revisedConcept.creativeBasisEvidence },
+          ...(revisedConcept.creativeBasisType === "剧尾" ? [
+            { label: "尾帧状态", content: revisedConcept.tailFrameState }, { label: "最后对白", content: revisedConcept.lastDialogue },
+            { label: "残留情绪", content: revisedConcept.residualEmotion }, { label: "未完成钩子", content: revisedConcept.unfinishedHook },
+          ] : []),
           { label: "模型组合", content: `${revisedConcept.primaryDesire}；${revisedConcept.secondaryDesire}；${revisedConcept.narrativeModel}；${revisedConcept.entryPromise}；${revisedConcept.accelerator}` },
           { label: "视频匹配点", content: revisedConcept.videoMatch }, { label: "片尾进入方式", content: revisedConcept.entryMethod },
           { label: "玩法卖点", content: revisedConcept.gameplaySellingPoint }, { label: "对白关系", content: revisedConcept.dialogueRelationship },
           { label: "目标受众", content: revisedConcept.audience }, { label: "市场传达", content: revisedConcept.marketMessage },
           { label: "情绪接续", content: revisedConcept.emotionalBridge }, { label: "转化路径", content: revisedConcept.conversionPath },
+        ],
+      }];
+    }
+    if (turnPolicy.customConceptId) {
+      const originalWorkspace = session.workspace_json ? JSON.parse(session.workspace_json) : null;
+      const customConcept = output.workspace?.concepts?.find((concept) => concept.id === turnPolicy.customConceptId);
+      if (!originalWorkspace || !customConcept) throw new Error(`Novvy 没有返回自定义方案 ${turnPolicy.customConceptId}`);
+      output.workspace = {
+        ...originalWorkspace,
+        concepts: [...(originalWorkspace.concepts || []).filter((concept) => concept.id !== turnPolicy.customConceptId), customConcept],
+        selectedConceptIds: originalWorkspace.selectedConceptIds || [],
+        confirmedCards: originalWorkspace.confirmedCards || [],
+      };
+      output.stage = "concept_review";
+      output.nextAction = `审核自定义方案 ${turnPolicy.customConceptId}，可以继续修改或选择采用`;
+      const customCardId = `concept-${turnPolicy.customConceptId}`;
+      output.assistantCards = (output.assistantCards || []).filter((card) => card.kind === "concept" && card.id === customCardId);
+      if (!output.assistantCards.length) output.assistantCards = [{
+        id: customCardId, kind: "concept", title: `${turnPolicy.customConceptId}｜${customConcept.title}`,
+        summary: customConcept.tailAdAngle, previewUrl: "", status: "candidate",
+        details: [
+          { label: "创意依据", content: customConcept.creativeBasisType }, { label: "依据证据", content: customConcept.creativeBasisEvidence },
+          ...(customConcept.creativeBasisType === "剧尾" ? [
+            { label: "尾帧状态", content: customConcept.tailFrameState }, { label: "最后对白", content: customConcept.lastDialogue },
+            { label: "残留情绪", content: customConcept.residualEmotion }, { label: "未完成钩子", content: customConcept.unfinishedHook },
+          ] : []),
+          { label: "用户自定义想法", content: userMessage }, { label: "片尾进入方式", content: customConcept.entryMethod },
+          { label: "玩法卖点", content: customConcept.gameplaySellingPoint }, { label: "目标受众", content: customConcept.audience },
+          { label: "情绪接续", content: customConcept.emotionalBridge }, { label: "转化路径", content: customConcept.conversionPath },
+          { label: "节奏", content: customConcept.rhythm },
         ],
       }];
     }
@@ -229,9 +283,9 @@ export async function runCreativeTurn(sessionId, userMessage, initial = false, a
       if (!originalWorkspace || !revisedCard) throw new Error("Novvy 没有返回指定落版图方案的修改版本");
       output.workspace = originalWorkspace;
       output.stage = "final_card_review";
-      output.nextAction = "继续审核修改后的落版图方案";
+      output.nextAction = "继续审核修改后的落版方向";
       output.assistantCards = [{ ...revisedCard, id: turnPolicy.finalCardRevisionId, kind: "final_card", previewUrl: "", status: "candidate" }];
-      output.assistantMessage = `${output.assistantMessage}\n\n落版图方案已经按意见更新；这次只修改候选方案，确认生成前不会进入人物与参考图。`;
+      output.assistantMessage = `${output.assistantMessage}\n\n落版方向已经按意见更新；这次只修改方向候选，不生成真实图片，也不会跳过后续审核。`;
     }
     const historicalCards = db.prepare("SELECT cards_json FROM creative_messages WHERE session_id=? AND cards_json IS NOT NULL ORDER BY id").all(sessionId)
       .flatMap((row) => { try { return JSON.parse(row.cards_json || "[]"); } catch { return []; } });
@@ -253,10 +307,32 @@ export async function runCreativeTurn(sessionId, userMessage, initial = false, a
       if (!generatedVisualKinds.has(card.kind) || !card.previewUrl || knownVisual.get(card.id) === card.previewUrl) return card;
       return { ...card, previewUrl: "", status: "candidate", details: [...(card.details || []), { label: "生成状态", content: "尚未执行真实图片生成；不得分配或声称新的图片资产编号" }] };
     });
+    const conceptsByCardId = new Map((output.workspace?.concepts || []).map((concept) => [`concept-${concept.id}`, concept]));
+    output.assistantCards = (output.assistantCards || []).map((card) => {
+      if (card.kind !== "concept") return card;
+      const concept = conceptsByCardId.get(card.id);
+      if (!concept) return card;
+      const basisLabels = new Set(["创意依据", "依据证据", "尾帧状态", "最后对白", "残留情绪", "未完成钩子"]);
+      const basisDetails = [
+        { label: "创意依据", content: concept.creativeBasisType },
+        { label: "依据证据", content: concept.creativeBasisEvidence },
+        ...(concept.creativeBasisType === "剧尾" ? [
+          { label: "尾帧状态", content: concept.tailFrameState },
+          { label: "最后对白", content: concept.lastDialogue },
+          { label: "残留情绪", content: concept.residualEmotion },
+          { label: "未完成钩子", content: concept.unfinishedHook },
+        ] : []),
+      ];
+      return { ...card, details: [...basisDetails, ...(card.details || []).filter((item) => !basisLabels.has(item.label))] };
+    });
     const timestamp = now();
     db.prepare("INSERT INTO creative_messages (session_id, role, content, cards_json, created_at) VALUES (?, 'assistant', ?, ?, ?)").run(sessionId, output.assistantMessage, JSON.stringify(output.assistantCards || []), timestamp);
     db.prepare("UPDATE creative_sessions SET stage = ?, workspace_json = ?, codex_thread_id = ?, updated_at = ? WHERE id = ?")
       .run(output.stage, JSON.stringify(output.workspace), thread.id, timestamp, sessionId);
+    if (conceptWasConfirmed && output.workspace?.selectedConceptIds?.length) {
+      const { prepareCharacterReferenceReview } = await import("./character-generator.js");
+      prepareCharacterReferenceReview(sessionId);
+    }
     const cardKinds = new Set((output.assistantCards || []).map((card) => card.kind));
     const telemetryStage = cardKinds.has("video_prompt") ? "video_generation"
       : cardKinds.has("storyboard") || cardKinds.has("storyboard_image") ? "creative_plan"

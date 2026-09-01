@@ -171,11 +171,11 @@ export function approveStoryboardImages(sessionId, cardIds) {
       { label: `${card.title}｜文字描述`, content: card.details?.find((item) => item.label === "镜头内容")?.content || card.summary || "" },
     ]), status: "confirmed", confirmedAt: timestamp,
   });
-  workspace.productionPlan = { ...(workspace.productionPlan || {}), videoPromptStatus: "storyboard_images_approved" };
+  workspace.productionPlan = { ...(workspace.productionPlan || {}), videoPromptStatus: "waiting_for_final_card", finalCardStatus: "ready_to_generate" };
   db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, `统一确认 ${storyboardId} 的逐镜分镜图`, timestamp);
-  db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)").run(sessionId, "分镜图组已经确认。我现在基于已确认文字分镜和逐镜图片自动生成正式视频提示词。", timestamp);
+  db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)").run(sessionId, "分镜图组已经确认。现在根据末镜和已确认落版方向准备真实落版图生成稿。", timestamp);
   db.prepare("UPDATE creative_sessions SET stage='working',workspace_json=?,error_message=NULL,updated_at=? WHERE id=?").run(JSON.stringify(workspace), timestamp, sessionId);
-  import("./creative-agent.js").then(({ runCreativeTurn }) => runCreativeTurn(sessionId, `已确认 ${storyboardId} 及其逐镜分镜图片。现在生成正式 video_prompt 审核卡；保留全部历史内容，不提交视频生成。`, false));
+  import("./image-generator.js").then(({ prepareFinalCardGeneration }) => prepareFinalCardGeneration(sessionId, selected));
 }
 
 export function retryFailedStoryboardImages(sessionId, cardIds) {

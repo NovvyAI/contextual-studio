@@ -8,6 +8,7 @@ import { db, now, resolveAssetReferences } from "./database.js";
 import { preparePngEditSource, uploadPngEditInput, validatePngEditInputs } from "./image-mask.js";
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
 import { recordCreativeAsset, recordCreativeFeedback, recordCreativeStage } from "./creative-telemetry.js";
+import { dramaReferenceImageCandidates } from "./drama-analysis-v3.js";
 
 const execFileAsync = promisify(execFile);
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -20,6 +21,45 @@ function cards(sessionId) {
 function append(sessionId, content, card) {
   db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,created_at) VALUES (?,'assistant',?,?,?)")
     .run(sessionId, content, JSON.stringify([card]), now());
+}
+
+export function prepareCharacterReferenceReview(sessionId) {
+  const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
+  if (!session) throw new Error("创意工作台不存在");
+  const drama = db.prepare("SELECT analysis_json FROM drama_analyses WHERE id=?").get(session.drama_id);
+  const analysis = drama?.analysis_json ? JSON.parse(drama.analysis_json) : {};
+  const candidates = dramaReferenceImageCandidates(analysis);
+  const slotMeta = {
+    maleFront: ["male_front", "男主人公正面"], maleSide: ["male_side", "男主人公侧面"],
+    femaleFront: ["female_front", "女主人公正面"], femaleSide: ["female_side", "女主人公侧面"],
+  };
+  const referenceCards = Object.entries(slotMeta).flatMap(([key, [slot, title]]) => {
+    const item = candidates[key];
+    if (!item?.available || !item.screenshotId) return [];
+    return [{
+      id: `reference-${slot}`, kind: "character_image", title,
+      summary: item.selectionReason || item.visibleFeatures || "来自短剧分析的原始人物截图候选。",
+      previewUrl: `/api/screenshots/${item.screenshotId}`,
+      details: [
+        { label: "参考槽位", content: slot },
+        { label: "人物", content: item.character || title.replace(/[正侧]面$/, "") },
+        { label: "可见特征", content: item.visibleFeatures || "请查看截图" },
+        { label: "替代风险", content: item.risks || "请确认人物身份和角度是否适合作为生成参考" },
+      ], status: "candidate",
+    }];
+  });
+  const timestamp = now();
+  if (referenceCards.length) {
+    db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,created_at) VALUES (?,'assistant',?,?,?)")
+      .run(sessionId, "创意方案已经确认。请先选择用于后续制作的人物参考图；也可以继续添加或修改人物候选。", JSON.stringify(referenceCards), timestamp);
+  } else {
+    db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
+      .run(sessionId, "创意方案已经确认。当前短剧分析中没有完整人物参考截图，请先添加人物参考图。", timestamp);
+  }
+  const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
+  workspace.productionPlan = { ...(workspace.productionPlan || {}), referenceStatus: "candidate_review", finalCardStatus: "waiting_for_characters" };
+  db.prepare("UPDATE creative_sessions SET stage='reference_review',workspace_json=?,error_message=NULL,updated_at=? WHERE id=?")
+    .run(JSON.stringify(workspace), timestamp, sessionId);
 }
 
 function mcpConfigPath() {
@@ -156,10 +196,10 @@ export function approveCharacterReferences(sessionId, cardIds) {
     summary: `已采用 ${selected.length} 张人物参考图，供后续剧情分镜和视频人物一致性使用。`,
     details: selected.map((card) => ({ label: card.title, content: card.previewUrl })), status: "confirmed", confirmedAt: timestamp,
   });
-  workspace.productionPlan = { ...(workspace.productionPlan || {}), referenceStatus: "approved", videoPromptStatus: "audiovisual_direction_pending" };
+  workspace.productionPlan = { ...(workspace.productionPlan || {}), referenceStatus: "approved", finalCardStatus: "direction_pending", videoPromptStatus: "final_card_direction_pending" };
   db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, `统一采用人物候选：${selectedIds.join("、")}`, timestamp);
-  const autoMessage = `人物参考图组已确认，共采用 ${selected.length} 张真实图片。现在先生成一张 audiovisual-direction-v1 视听方向卡：总结可执行的视听语言 Bible，并提供 AI 推荐、2-3 个可替换导演参考和“不使用导演参考”。进入 audiovisual_review 等待用户确认，不要生成 storyboard。`;
-  db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)").run(sessionId, `已采用你勾选的 ${selected.length} 张人物图。接下来先确认视听方向；你可以采用 AI 推荐、改选其他导演参考，或完全不使用导演参考。确认后会自动生成剧情与分镜。`, timestamp);
+  const autoMessage = `人物参考图组已确认，共采用 ${selected.length} 张真实图片。现在生成 2-4 张 final_card 落版方向候选卡：只确定末镜衔接意图、主视觉、9:16 构图、英文标题/副标题/CTA、字体层级、色彩、产品真实性边界和后续图片生成提示词；previewUrl 为空，不执行图片生成。stage 使用 final_card_review，等待用户确认一个落版方向，不要生成 audiovisual_direction 或 storyboard。`;
+  db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)").run(sessionId, `已采用你勾选的 ${selected.length} 张人物图。现在自动生成落版方向候选；这里只确认结尾设计与末镜衔接，不会提前生成真实落版图。`, timestamp);
   db.prepare("UPDATE creative_sessions SET stage='working',workspace_json=?,error_message=NULL,updated_at=? WHERE id=?").run(JSON.stringify(workspace), timestamp, sessionId);
   recordCreativeFeedback(sessionId, `统一采用人物候选：${selectedIds.join("、")}`, { decision: "approved", stageOutputId: "reference-panel", key: `session:${sessionId}:reference-panel:approved:${timestamp}` });
   recordCreativeStage(sessionId, "reference_panel", { cards: selected.map((card) => ({ id: card.id, title: card.title, previewUrl: card.previewUrl })) }, { status: "confirmed", key: `session:${sessionId}:reference-panel:${timestamp}` });

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { dramaAnalysisView, dramaReferenceImageCandidates } from "./drama-analysis-v3.js";
+import { dramaAnalysisView, dramaReferenceImageCandidates, migrateDramaAnalysisToV3 } from "./drama-analysis-v3.js";
 
 const detailedAnalysis = {
   oneSentenceThesis: "canonical thesis",
@@ -50,4 +50,31 @@ test("v3 view reads the canonical episode and maps side slots by slot identity",
 test("v2 and missing contracts are rejected", () => {
   assert.throws(() => dramaAnalysisView({ contract: "novvy.video-analysis.v2" }), /请重新分析短剧/);
   assert.throws(() => dramaReferenceImageCandidates(null), /请重新分析短剧/);
+});
+
+test("legacy v2 analysis migrates deterministically and preserves reference screenshot ids", () => {
+  const legacy = {
+    version: 2,
+    oneSentenceThesis: "legacy thesis",
+    synopsis: "legacy synopsis",
+    chronology: [{ beat: "legacy turn" }],
+    characters: [{ name: "Eileen" }],
+    emotionalCurve: [], keyDialogue: [], motifs: [],
+    hookAndCliffhanger: { endingState: "unresolved" },
+    creativeHandoff: { safeToReuse: ["dress"], continuityRisks: [], transitionOpportunities: [] },
+    visualStyle: { renderingType: "live_action_realistic" },
+    confidence: { overall: "medium", observed: ["frame"], strongInferences: [], limitations: ["sampled"] },
+    referenceImageCandidates: {
+      maleFront: { screenshotId: 12, character: "Lucian", view: "front", confidence: "high" },
+      femaleSide: { screenshotId: 18, character: "Eileen", view: "side", confidence: "medium" },
+    },
+  };
+  const migrated = migrateDramaAnalysisToV3(legacy);
+  const view = dramaAnalysisView(migrated);
+  assert.equal(migrated.contract, "novvy.video-analysis.v3");
+  assert.equal(migrated.migration.sourceContract, "legacy.version.2");
+  assert.equal(view.oneSentenceThesis, "legacy thesis");
+  assert.equal(view.referenceImageCandidates.maleFront.screenshotId, 12);
+  assert.equal(view.referenceImageCandidates.femaleSide.screenshotId, 18);
+  assert.equal(view.referenceImageCandidates.maleSide.available, false);
 });

@@ -73,6 +73,8 @@ contextual-studio/
 │   ├── contextual-studio.sqlite     SQLite 数据库
 │   ├── uploads/                     上传的短剧原视频
 │   ├── chat-uploads/                对话图片、视频及视频关键帧
+│   ├── local-telemetry.sqlite       本地 telemetry 接收数据库
+│   ├── mlflow/                      本地 MLflow 数据与 artifacts
 │   └── generated/landing-pages/     一键打包生成的 HTML5 落地页及 ZIP
 ├── config/
 │   └── production-profile.json      本地视频生产预算与流程参数
@@ -81,6 +83,8 @@ contextual-studio/
 │   ├── app.js                       短剧、游戏及入口逻辑
 │   ├── workbench.html               独立创意工作台
 │   ├── workbench.js                 画布、聊天和资产交互
+│   ├── telemetry-dashboard.html     本地 telemetry 监控网页
+│   ├── telemetry-dashboard.js       telemetry 列表、时间线和筛选交互
 │   └── styles.css                   页面样式
 ├── server/
 │   ├── index.js                     HTTP 服务与 API 路由
@@ -88,6 +92,9 @@ contextual-studio/
 │   ├── analyzer.js                  短剧分析
 │   ├── game-analyzer.js             游戏分析
 │   ├── creative-agent.js            Codex 创意会话
+│   ├── creative-telemetry.js        创意事件记录、outbox 与补发
+│   ├── local-telemetry-server.js    本地采集 API 与监控页服务
+│   ├── mlflow-tracing.js            模型和工具端到端 tracing
 │   ├── chat-media.js                对话附件与视频关键帧预处理
 │   ├── image-generator.js           落版图生成
 │   ├── character-generator.js       人物图生成与修改
@@ -104,6 +111,8 @@ contextual-studio/
 ├── TODO.md                          后续开发及云端部署事项
 ├── package.json
 ├── install_environment.sh           全新 macOS 一键环境安装脚本
+├── start_local_telemetry.sh         本地 telemetry 服务启动脚本
+├── start_mlflow.sh                  本地 MLflow 服务启动脚本
 └── start_server.sh                  本地启动脚本
 ```
 
@@ -151,11 +160,110 @@ cp .env.example .env
 
 ## 启动项目
 
-### 可选：创意过程采集
+### 可选：创意过程 Telemetry
 
-项目会把工作台创建、分析摘要、创意阶段、落版图、参考图组、成片资产和用户反馈先写入本地 SQLite outbox。远端采集未配置或暂时不可用时不会阻塞创作，也不会丢弃待发送事件。
+Telemetry 用于记录一条创意从短剧与游戏输入、方案生成、用户修改，到图片、分镜和最终视频确认的完整生产过程。记录由服务端根据真实数据库状态确定性产生，不依赖 Codex 对话主动上报，也不会因为采集服务不可用而阻断创作。
 
-需要连接团队采集 API 时，在 `.env` 配置：
+#### 工作方式
+
+```text
+Contextual Studio 业务操作
+        ↓
+creative-telemetry.js 确定性生成事件
+        ↓
+主数据库 creative_telemetry_outbox（先本地落库）
+        ↓ 后台异步发送、幂等去重、失败指数退避
+本地采集服务或未来公司远端服务
+        ↓
+local-telemetry.sqlite / 公司数据平台
+```
+
+发送端和接收端是两层独立存储：
+
+- `data/contextual-studio.sqlite` 中的 `creative_telemetry_runs` 保存工作台与采集任务的映射，`creative_telemetry_outbox` 保存 `pending`、`sent`、`failed` 事件和重试状态。
+- `data/local-telemetry.sqlite` 是开发环境的本地接收库，保存已经接收到的任务、阶段、资产、反馈和 Skill 版本。
+- 公司远端尚未配置或暂时不可用时，事件继续留在 outbox，不影响工作台，也不会被静默丢弃。
+
+#### 采集内容
+
+| 事件 | 内容 |
+| --- | --- |
+| `run_start` | 工作台、短剧/游戏标识、紧凑 Brief、产品名称和 Skill 版本 |
+| `stage` | `product_analysis`、`video_analysis`、`recommendation`、`creative_plan`、`final_card`、`reference_panel`、`video_generation`、`video_review` 等阶段结果与状态 |
+| `asset` | 有安全公开 URL 的落版图、参考图、分镜图和生成视频，以及版本和父资产关系 |
+| `feedback` | 用户对候选或版本的反馈原话，以及 `approved`、`rework`、`rejected`、`unclassified` 决策 |
+| `run_complete` | 用户确认最终成片后的 `completed`，或明确取消/不可恢复失败状态 |
+
+Telemetry 不采集 API key、Authorization、Cookie、签名查询参数、base64、完整上传响应、完整聊天、聊天附件内容、模型逐步推理或本机绝对路径。监控接口还会再次隐藏认证字段、绝对路径和 URL 查询参数。
+
+#### 本地运行与监控网页
+
+公司远端采集服务尚未部署时，在 `.env` 配置本地接收端：
+
+```bash
+NOVVY_TELEMETRY_URL=http://127.0.0.1:4191
+NOVVY_TELEMETRY_TOKEN=contextual-local-dev
+NOVVY_TELEMETRY_USER_ID=你的团队用户名
+NOVVY_SKILL_VERSION=contextual-studio-v1
+
+LOCAL_TELEMETRY_PORT=4191
+LOCAL_TELEMETRY_TOKEN=contextual-local-dev
+```
+
+分别使用两个终端启动采集端和工作台。必须在启动工作台前写好 `.env`；修改配置后需要重启工作台服务。
+
+```bash
+# 终端 1：本地 telemetry 接收端和监控页
+./start_local_telemetry.sh
+# 或 npm run telemetry:local
+
+# 终端 2：Contextual Studio
+./start_server.sh
+```
+
+浏览器打开 <http://127.0.0.1:4191/dashboard>，可以查看：
+
+- 任务、阶段、资产和反馈总数；
+- 按产品名、任务编号或用户搜索任务；
+- 单个任务的阶段时间线和每阶段结构化结果；
+- 已记录的公开资产、版本与关联阶段；
+- 用户采用、修改、拒绝和普通讨论反馈；
+- 手动刷新或每 10 秒自动刷新。
+
+本地接收端和监控页只监听 `127.0.0.1`，仅供本机开发使用，不要直接暴露到公网。Dashboard 的只读数据无需在浏览器填写 Token；写入 API 仍要求 `X-API-Key`。
+
+#### 状态、重试和旧任务回补
+
+工作台运行后可以检查发送队列：
+
+```bash
+curl http://127.0.0.1:4180/api/telemetry/status
+```
+
+返回结果中的 `configured` 表示工作台启动时是否成功读取采集地址和 Token；`counts.pending`、`counts.sent`、`counts.failed` 分别表示等待发送、已经发送和发送失败的事件数。
+
+修复网络、Token 或服务地址后，可以把失败事件重新放回发送队列：
+
+```bash
+curl -X POST http://127.0.0.1:4180/api/telemetry/retry
+```
+
+旧工作台可以从现有数据库中的消息、卡片、公开资产和确认状态生成回补事件。`<工作台ID>` 是 `workbench.html#14` 中的数字部分：
+
+```bash
+curl -X POST http://127.0.0.1:4180/api/telemetry/backfill/14
+```
+
+回补和正常事件均使用稳定 `idempotency_key`，重复调用不会重复写入同一事件。也可以直接查看本地接收数量：
+
+```bash
+curl -H "X-API-Key: contextual-local-dev" \
+  http://127.0.0.1:4191/v1/local/status
+```
+
+#### 切换公司远端采集服务
+
+远端服务实现同一组 Skill 版本解析、run、stage、asset、feedback 和状态接口后，只需修改 `.env` 并重启 Contextual Studio；业务代码和本地 outbox 不需要改变：
 
 ```bash
 NOVVY_TELEMETRY_URL=https://telemetry.company.example
@@ -164,15 +272,7 @@ NOVVY_TELEMETRY_USER_ID=employee-123
 NOVVY_SKILL_VERSION=contextual-studio-v1
 ```
 
-状态检查：`GET /api/telemetry/status`。修复配置后可调用 `POST /api/telemetry/retry` 重试失败事件；旧工作台可调用 `POST /api/telemetry/backfill/<工作台ID>`，从已保存的阶段、卡片、资产和用户反馈生成幂等回补事件。采集不包含 API key、Cookie、base64、完整对话、模型思考或本机绝对文件路径。
-
-公司远端采集服务尚未部署时，可以在第二个终端启动项目自带的本地接收端：
-
-```bash
-./start_local_telemetry.sh
-```
-
-本地接收端默认监听 `http://127.0.0.1:4191`，数据保存到 `data/local-telemetry.sqlite`。启动 Contextual Studio 时配置 `NOVVY_TELEMETRY_URL=http://127.0.0.1:4191`、`NOVVY_TELEMETRY_TOKEN=contextual-local-dev`；用带 `X-API-Key` 的 `GET /v1/local/status` 查看本地接收数量。它只用于本机开发，不要暴露到公网。
+正式部署时应通过 GCP Secret Manager 等密钥系统注入 Token，不要把真实凭据写入 Git。远端恢复后可调用重试接口补发本地积压事件。
 
 ### 可选：MLflow GenAI tracing
 

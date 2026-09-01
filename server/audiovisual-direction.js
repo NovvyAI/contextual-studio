@@ -1,5 +1,6 @@
 import { db, now } from "./database.js";
 import { recordCreativeFeedback, recordCreativeStage } from "./creative-telemetry.js";
+import { directorStyle } from "./director-library.js";
 
 function latestDirectionCard(sessionId, cardId) {
   const rows = db.prepare("SELECT cards_json FROM creative_messages WHERE session_id=? AND cards_json IS NOT NULL ORDER BY id DESC").all(sessionId);
@@ -21,11 +22,9 @@ export function approveAudiovisualDirection(sessionId, cardId, directorChoice) {
   if (!card) throw new Error("找不到视听方向卡片");
   const choice = String(directorChoice || "").trim();
   if (!choice) throw new Error("请选择一个导演参考，或选择不使用导演参考");
-  const option = (card.details || []).find((item) => {
-    const label = String(item.label || "");
-    return /^(?:AI推荐导演|导演选项)｜/.test(label) && label.split("｜").slice(1).join("｜") === choice;
-  });
-  if (choice !== "不使用导演参考" && !option) throw new Error("所选导演参考不属于当前候选");
+  const selectedDirector = choice === "不使用导演参考" ? null : directorStyle(choice);
+  if (choice !== "不使用导演参考" && !selectedDirector) throw new Error("所选导演不属于本地导演风格库");
+  const parameters = selectedDirector?.parameters.join("；") || "不额外套用导演参考；只遵循原剧证据与视听语言 Bible。";
 
   const timestamp = now();
   const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
@@ -38,7 +37,7 @@ export function approveAudiovisualDirection(sessionId, cardId, directorChoice) {
     details: [
       ...(card.details || []).filter((item) => !/^(?:AI推荐导演|导演选项)｜/.test(String(item.label || ""))),
       { label: "导演参考选择", content: choice },
-      { label: "采用的可执行参数", content: choice === "不使用导演参考" ? "不额外套用导演参考；只遵循原剧证据与视听语言 Bible。" : option.content },
+      { label: "采用的可执行参数", content: parameters },
     ],
     status: "confirmed",
     confirmedAt: timestamp,
@@ -50,6 +49,6 @@ export function approveAudiovisualDirection(sessionId, cardId, directorChoice) {
   db.prepare("UPDATE creative_sessions SET stage='working',workspace_json=?,error_message=NULL,updated_at=? WHERE id=?").run(JSON.stringify(workspace), timestamp, sessionId);
   recordCreativeFeedback(sessionId, `确认视听方向；导演参考：${choice}`, { decision: "approved", stageOutputId: card.id, key: `session:${sessionId}:audiovisual-direction:approved:${timestamp}` });
   recordCreativeStage(sessionId, "audiovisual_direction", { cardId: card.id, directorReference: choice, details: confirmed.details }, { status: "confirmed", key: `session:${sessionId}:audiovisual-direction:${timestamp}` });
-  const instruction = `已确认视听方向卡 ${card.id}，导演参考选择为“${choice}”。严格沿用 workspace.confirmedCards 中最新的 audiovisual_direction Bible 和可执行参数，现在生成 3 个稳定编号 storyboard-A/B/C 的剧情与分镜候选；进入 storyboard_review，不提交图片或视频生成。`;
+  const instruction = `已确认视听方向卡 ${card.id}，用户从本地导演库选择“${choice}”。采用的可执行参数为：${parameters}。严格沿用 workspace.confirmedCards 中最新的 audiovisual_direction Bible 和上述参数，现在生成 3 个稳定编号 storyboard-A/B/C 的剧情与分镜候选；不得模仿具体作品或复制镜头，进入 storyboard_review，不提交图片或视频生成。`;
   import("./creative-agent.js").then(({ runCreativeTurn }) => runCreativeTurn(sessionId, instruction, false));
 }

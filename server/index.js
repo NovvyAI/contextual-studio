@@ -8,8 +8,8 @@ import { db, now, serializeAnalysis, serializeGameAnalysis, serializeCreativeSes
 import { analyzeDrama } from "./analyzer.js";
 import { analyzeGame } from "./game-analyzer.js";
 import { runCreativeTurn } from "./creative-agent.js";
-import { approveFinalCard, startFinalCardGeneration, startFinalCardRegeneration } from "./image-generator.js";
-import { approveCharacterReferences, startCharacterRegeneration, startCustomCharacterGeneration } from "./character-generator.js";
+import { approveFinalCard, approveFinalCardDirection, startFinalCardGeneration, startFinalCardRegeneration } from "./image-generator.js";
+import { approveCharacterReferences, prepareCharacterReferenceReview, startCharacterRegeneration, startCustomCharacterGeneration } from "./character-generator.js";
 import { approveAudiovisualDirection } from "./audiovisual-direction.js";
 import { startVideoGeneration } from "./video-generator.js";
 import { resumeImaRouterVideoGeneration, startImaRouterVideoGeneration } from "./imarouter-video-generator.js";
@@ -23,6 +23,7 @@ import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
 import { backfillCreativeTelemetry, flushTelemetryOutbox, recordCreativeFeedback, recordCreativeRunStart, recordCreativeStage, startTelemetryWorker, telemetryStatus } from "./creative-telemetry.js";
 import { mlflowTracingStatus } from "./mlflow-tracing.js";
 import { dramaAnalysisContract, dramaAnalysisView, isDramaAnalysisV3 } from "./drama-analysis-v3.js";
+import { listDirectorStyles } from "./director-library.js";
 
 const port = Number(process.env.PORT || 4180);
 const publicDir = path.resolve("public");
@@ -223,6 +224,10 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { items: rows.map(serializeCreativeSession) });
     }
 
+    if (req.method === "GET" && url.pathname === "/api/audiovisual/directors") {
+      return json(res, 200, { items: listDirectorStyles() });
+    }
+
     if (req.method === "POST" && url.pathname === "/api/creative/sessions") {
       const body = JSON.parse((await requestBody(req)).toString("utf8") || "{}");
       const dramaId = Number(body.dramaId);
@@ -297,7 +302,8 @@ const server = http.createServer(async (req, res) => {
         startAttachmentImageEdit(id, attachments, userMessage);
         return json(res, 202, { id, status: "working", action: "attachment_image_edit", attachmentCount: attachments.length });
       }
-      const conceptRevisionMatch = content.match(/(?:修改聊天候选卡\s*concept-|只(?:修改|重新生成)方案\s*)([A-D])\b/i);
+      const conceptRevisionMatch = content.match(/(?:修改聊天候选卡\s*concept-|只(?:修改|重新生成)方案\s*)([A-Z])\b/i);
+      const customConceptMatch = content.match(/新增自定义创意方案\s+([E-Z])\b/i);
       const finalCardRevisionMatch = content.match(/修改聊天候选卡\s*(final-card-[^\s（]+)/i);
       const storyboardTarget = content.match(/分镜(?:图|镜头)?\s*0*(\d+)/i);
       const storyboardEditIntent = /修改|调整|重绘|重新生成|改成|换成|替换|去掉|去除|移除|删除|增加|添加|希望|需要|不要|不一样|不同/i.test(content);
@@ -321,8 +327,9 @@ const server = http.createServer(async (req, res) => {
       db.prepare("UPDATE creative_sessions SET stage = 'working', updated_at = ? WHERE id = ?").run(timestamp, id);
       runCreativeTurn(id, userMessage, false, attachments, {
         ...(conceptRevisionMatch ? { conceptRevisionId: conceptRevisionMatch[1].toUpperCase() } : {}),
+        ...(customConceptMatch ? { customConceptId: customConceptMatch[1].toUpperCase() } : {}),
         ...(finalCardRevisionMatch ? { finalCardRevisionId: finalCardRevisionMatch[1] } : {}),
-        ...(/我选择并确认采用候选卡\s+concept-[A-D]/i.test(content) ? { prepareFinalCardCandidates: true } : {}),
+        ...(/我选择并确认采用候选卡\s+concept-[A-Z]/i.test(content) ? { prepareFinalCardCandidates: true } : {}),
       });
       return json(res, 202, { id, status: "working", attachmentCount: attachments.length });
     }
@@ -332,6 +339,14 @@ const server = http.createServer(async (req, res) => {
       const id = Number(creativeCardGenerateMatch[1]);
       const cardId = decodeURIComponent(creativeCardGenerateMatch[2]);
       startFinalCardGeneration(id, cardId);
+      return json(res, 202, { id, cardId, status: "working" });
+    }
+
+    const finalCardDirectionApproveMatch = url.pathname.match(/^\/api\/creative\/sessions\/(\d+)\/cards\/([^/]+)\/approve-final-card-direction$/);
+    if (req.method === "POST" && finalCardDirectionApproveMatch) {
+      const id = Number(finalCardDirectionApproveMatch[1]);
+      const cardId = decodeURIComponent(finalCardDirectionApproveMatch[2]);
+      approveFinalCardDirection(id, cardId);
       return json(res, 202, { id, cardId, status: "working" });
     }
 
@@ -656,23 +671,17 @@ function recoverInterruptedCreativeTurns() {
     }
 
     const selectedConceptIds = Array.isArray(workspace.selectedConceptIds) ? workspace.selectedConceptIds : [];
-    const hasFinalCardCandidate = db.prepare("SELECT 1 FROM creative_messages WHERE session_id=? AND cards_json LIKE '%\"kind\":\"final_card\"%' LIMIT 1").get(session.id);
-    if (selectedConceptIds.length && !hasFinalCardCandidate) {
+    const hasReferenceCandidate = db.prepare("SELECT 1 FROM creative_messages WHERE session_id=? AND cards_json LIKE '%\"kind\":\"character_image\"%' LIMIT 1").get(session.id);
+    if (selectedConceptIds.length && !hasReferenceCandidate) {
       const timestamp = now();
-      db.prepare("UPDATE creative_sessions SET stage='concept_selected',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, session.id);
+      db.prepare("UPDATE creative_sessions SET stage='reference_review',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, session.id);
       db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
-        .run(session.id, "检测到服务器重启中断了落版方案准备，正在同一 Novvy 会话中自动恢复；这一步只生成文字候选，不会提交图片生成任务。", timestamp);
-      setImmediate(() => runCreativeTurn(
-        session.id,
-        "恢复已确认创意之后被服务器重启中断的流程。请立即生成 2-4 个可审核的 final_card 落版方案文字候选卡；保留全部已确认成果，不要再次讨论创意方向，也不要提交图片或视频生成。",
-        false,
-        [],
-        { prepareFinalCardCandidates: true },
-      ));
+        .run(session.id, "检测到服务器重启中断了人物参考图准备，正在自动恢复；不会提前生成落版方向或图片。", timestamp);
+      setImmediate(() => prepareCharacterReferenceReview(session.id));
       continue;
     }
 
-    const fallbackStage = hasFinalCardCandidate ? "concept_selected" : (selectedConceptIds.length ? "concept_selected" : "concept_review");
+    const fallbackStage = hasReferenceCandidate ? "reference_review" : (selectedConceptIds.length ? "reference_review" : "concept_review");
     const timestamp = now();
     db.prepare("UPDATE creative_sessions SET stage=?,error_message=?,updated_at=? WHERE id=?")
       .run(fallbackStage, "上一轮 Novvy 任务因服务重启而中断，请重新执行当前操作。", timestamp, session.id);

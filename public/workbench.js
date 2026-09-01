@@ -11,6 +11,16 @@ const pendingChatFiles = [];
 let pendingChatPreviewUrls = [];
 const selectedCharacterIds = new Set();
 let currentSession = null;
+let directorLibrary = [];
+let directorLibraryPromise = null;
+
+function loadDirectorLibrary() {
+  directorLibraryPromise ||= api("/api/audiovisual/directors").then((result) => {
+    directorLibrary = Array.isArray(result.items) ? result.items : [];
+    return directorLibrary;
+  });
+  return directorLibraryPromise;
+}
 
 const workbenchSplitStorageKey = "contextual-studio:workbench-canvas-ratio";
 const defaultWorkbenchCanvasRatio = 2 / 3;
@@ -505,7 +515,7 @@ const cardKindLabels = {
   concept: "创意方案",
   final_card: "落版图",
   reference_panel: "人物与参考图",
-  audiovisual_direction: "视听方向",
+  audiovisual_direction: "视听语言 Bible",
   storyboard: "剧情与分镜",
   video_prompt: "视频提示词",
   video_shot: "视频镜头",
@@ -514,9 +524,14 @@ const cardKindLabels = {
 
 const chatCardKindLabels = {
   concept: "创意方案", final_card: "落版图", character_image: "人物图", prop_image: "道具图",
-  reference_image: "参考图", audiovisual_direction: "视听方向", storyboard: "剧情与分镜", storyboard_image: "分镜图片", video_prompt: "视频提示词", video_shot: "视频镜头",
+  reference_image: "参考图", audiovisual_direction: "视听语言 Bible", storyboard: "剧情与分镜", storyboard_image: "分镜图片", video_prompt: "视频提示词", video_shot: "视频镜头",
 };
 const characterCandidateNumbers = { "reference-male_front": "01", "reference-male_side": "02", "reference-female_front": "03", "reference-female_side": "04" };
+
+function cardDisplayTitle(card) {
+  if (card.kind !== "audiovisual_direction") return card.title;
+  return String(card.title || "视听语言 Bible V1").replace(/^视听方向(?:\s*V?1)?/i, "视听语言 Bible V1");
+}
 
 function legacyConfirmedCards(workspace) {
   if (workspace.confirmedCards?.length || !workspace.selectedConceptIds?.length) return workspace.confirmedCards || [];
@@ -530,6 +545,8 @@ function legacyConfirmedCards(workspace) {
       status: "confirmed",
       confirmedAt: "历史确认",
       details: [
+        { label: "创意依据", content: concept.creativeBasisType || "历史方案未标注" },
+        { label: "依据证据", content: concept.creativeBasisEvidence || concept.videoMatch },
         { label: "剧集匹配", content: concept.videoMatch },
         { label: "玩法卖点", content: concept.gameplaySellingPoint },
         { label: "目标受众", content: concept.audience },
@@ -554,7 +571,7 @@ function renderConfirmedCard(card, expanded) {
     const thumbnail = element("img", "artifact-summary-preview"); thumbnail.src = previewUrl; thumbnail.alt = ""; thumbnail.loading = "lazy";
     identity.append(thumbnail);
   }
-  identity.append(element("span", `artifact-kind kind-${card.kind}`, cardKindLabels[card.kind] || "已确认成果"), element("strong", "", card.title));
+  identity.append(element("span", `artifact-kind kind-${card.kind}`, cardKindLabels[card.kind] || "已确认成果"), element("strong", "", cardDisplayTitle(card)));
   summary.append(identity, element("span", "artifact-toggle", "查看详情"));
   const body = element("div", "artifact-body");
   if (previewUrls.length) {
@@ -662,6 +679,8 @@ async function regenerateConcept(concept, feedback, textarea) {
   }
   const original = [
     `标题：${concept.title}`,
+    `创意依据：${concept.creativeBasisType || "历史方案未标注"}`,
+    `依据证据：${concept.creativeBasisEvidence || concept.videoMatch}`,
     `片尾角度：${concept.tailAdAngle}`,
     `剧集匹配：${concept.videoMatch}`,
     `玩法卖点：${concept.gameplaySellingPoint}`,
@@ -675,6 +694,51 @@ async function regenerateConcept(concept, feedback, textarea) {
   return true;
 }
 
+function nextCustomConceptId(concepts = []) {
+  const used = new Set(concepts.map((concept) => String(concept.id || "").toUpperCase()));
+  for (let code = "E".charCodeAt(0); code <= "Z".charCodeAt(0); code += 1) {
+    const id = String.fromCharCode(code);
+    if (!used.has(id)) return id;
+  }
+  return "Z";
+}
+
+function renderCustomConceptCard(session, workspace) {
+  const id = nextCustomConceptId(workspace.concepts || []);
+  const card = element("article", "concept-card custom-concept-card");
+  card.append(element("div", "concept-id", "+"), element("strong", "", "自定义创意方案"), element("p", "", "四个候选都不满意？写下你的核心想法，让 Novvy 结合当前短剧与游戏补成一套可审核方案。"));
+  const label = element("label", "", `你的方案想法 · 将生成方案 ${id}`);
+  const input = element("textarea", "concept-feedback custom-concept-input");
+  input.rows = 5;
+  input.placeholder = "例如：不要从剧尾直接切游戏。我希望女主在葬礼后整理遗物时，把三件不同遗物放入盒子，对应游戏中的三种物品整理玩法；情绪保持克制，不要搞笑。";
+  input.disabled = session.stage === "working";
+  const generate = element("button", "concept-regenerate custom-concept-generate", `生成自定义方案 ${id}`);
+  generate.type = "button";
+  generate.disabled = session.stage === "working";
+  generate.addEventListener("click", async () => {
+    const idea = input.value.trim();
+    if (!idea) {
+      input.setCustomValidity("请先写下你的创意想法");
+      input.reportValidity();
+      input.setCustomValidity("");
+      return;
+    }
+    try {
+      generate.disabled = true;
+      generate.textContent = "正在生成…";
+      await sendMessage(`请根据下面的用户想法新增自定义创意方案 ${id}。只新增编号 ${id} 的完整候选，保留 A-D 和其他已有方案、已确认成果及制作状态不变；不要选择或确认该方案，不要生成落版图，继续停留在创意方案审核阶段。\n\n用户自定义想法：\n${idea}`);
+    } catch (error) {
+      generate.disabled = false;
+      generate.textContent = `生成自定义方案 ${id}`;
+      input.setCustomValidity(error.message);
+      input.reportValidity();
+      input.setCustomValidity("");
+    }
+  });
+  card.append(label, input, generate);
+  return card;
+}
+
 function conceptChatCards(workspace) {
   return (workspace?.concepts || []).map((concept) => ({
     id: `concept-${concept.id}`,
@@ -684,6 +748,14 @@ function conceptChatCards(workspace) {
     previewUrl: "",
     status: workspace.selectedConceptIds?.includes(concept.id) ? "selected" : "candidate",
     details: [
+      { label: "创意依据", content: concept.creativeBasisType || "历史方案未标注" },
+      { label: "依据证据", content: concept.creativeBasisEvidence || concept.videoMatch },
+      ...(concept.creativeBasisType === "剧尾" ? [
+        { label: "尾帧状态", content: concept.tailFrameState },
+        { label: "最后对白", content: concept.lastDialogue },
+        { label: "残留情绪", content: concept.residualEmotion },
+        { label: "未完成钩子", content: concept.unfinishedHook },
+      ] : []),
       { label: "剧集匹配", content: concept.videoMatch },
       { label: "玩法卖点", content: concept.gameplaySellingPoint },
       { label: "目标受众", content: concept.audience },
@@ -716,8 +788,11 @@ function renderChatCard(card, disabled) {
   const candidateNumber = characterCandidateNumbers[card.id] || card.candidateNumber;
   const kindLabel = card.kind === "character_image" && candidateNumber ? `人物候选 ${candidateNumber}` : chatCardKindLabels[card.kind] || "";
   if (kindLabel) header.append(element("span", "chat-card-kind", kindLabel));
+  const conceptBasis = card.kind === "concept" ? (card.details || []).find((item) => item.label === "创意依据")?.content : "";
+  if (conceptBasis) header.append(element("span", "concept-basis-badge", conceptBasis));
   header.append(element("span", "chat-card-status", ({ candidate: "候选", selected: "已选择", confirmed: "已确认", superseded: "已替代", generating: "生成中", completed: "已生成", failed: "生成失败" })[card.status] || card.status));
-  node.append(header, element("strong", "chat-card-title", card.title), element("p", `chat-card-summary ${["storyboard", "storyboard_image"].includes(card.kind) ? "storyboard-readable" : ""}`, ["storyboard", "storyboard_image"].includes(card.kind) ? readableStoryboardText(card.summary) : card.summary));
+  const visibleTitle = cardDisplayTitle(card);
+  node.append(header, element("strong", "chat-card-title", visibleTitle), element("p", `chat-card-summary ${["storyboard", "storyboard_image"].includes(card.kind) ? "storyboard-readable" : ""}`, ["storyboard", "storyboard_image"].includes(card.kind) ? readableStoryboardText(card.summary) : card.summary));
   if (card.previewUrl) {
     if (card.kind === "video_prompt" || card.kind === "video_shot" || /\.(mp4|mov|webm)(\?|$)/i.test(card.previewUrl)) {
       const video = element("video", "chat-card-preview chat-card-video"); video.src = card.previewUrl; video.controls = true; video.playsInline = true; video.preload = "metadata"; node.append(video);
@@ -847,6 +922,8 @@ function renderChatCard(card, disabled) {
     }
   });
   const isFinalCardDraft = card.kind === "final_card" && !card.previewUrl;
+  const finalCardStatus = currentSession?.workspace?.productionPlan?.finalCardStatus || "";
+  const isFinalCardDirection = isFinalCardDraft && finalCardStatus === "direction_review";
   const isFailedFinalCard = isFinalCardDraft && card.status === "failed";
   const isGeneratedFinalCard = card.kind === "final_card" && Boolean(card.previewUrl);
   const isVideoPromptDraft = card.kind === "video_prompt" && !card.previewUrl;
@@ -855,20 +932,19 @@ function renderChatCard(card, disabled) {
   let directorChoice;
   if (card.kind === "audiovisual_direction") {
     const picker = element("fieldset", "director-reference-picker");
-    picker.append(element("legend", "", "导演风格参考（可不选）"));
-    const options = (card.details || []).filter((item) => /^(?:AI推荐导演|导演选项)｜/.test(String(item.label || "")));
-    options.forEach((item, index) => {
-      const name = item.label.split("｜").slice(1).join("｜");
-      const label = element("label", "director-reference-option");
-      const radio = document.createElement("input"); radio.type = "radio"; radio.name = `director-${card.id}`; radio.value = name; radio.checked = index === 0; radio.disabled = disabled;
-      const copy = element("span"); copy.append(element("b", "", `${item.label.startsWith("AI推荐") ? "AI 推荐 · " : ""}${name}`), element("small", "", item.content));
-      label.append(radio, copy); picker.append(label);
+    picker.append(element("legend", "", `导演风格参考 · 本地 ${directorLibrary.length} 位`));
+    const select = document.createElement("select"); select.className = "director-reference-select"; select.disabled = disabled;
+    select.append(new Option("请选择导演…", ""), new Option("不使用导演参考", "不使用导演参考"));
+    directorLibrary.forEach((director) => select.append(new Option(`${director.name}${director.completeness === "部分" ? "（部分资料）" : ""}`, director.name)));
+    const description = element("small", "director-reference-description", "请选择一位导演；确认时系统会采用本地库中的可观察制作参数，不复制具体作品或镜头。" );
+    select.addEventListener("change", () => {
+      const selected = directorLibrary.find((director) => director.name === select.value);
+      description.textContent = select.value === "不使用导演参考"
+        ? "只遵循原短剧证据和本卡的视听语言 Bible。"
+        : selected?.parameters?.join("；") || "请选择一位导演。";
     });
-    const none = element("label", "director-reference-option");
-    const radio = document.createElement("input"); radio.type = "radio"; radio.name = `director-${card.id}`; radio.value = "不使用导演参考"; radio.disabled = disabled;
-    const copy = element("span"); copy.append(element("b", "", "不使用导演参考"), element("small", "", "只遵循原短剧证据和本卡的视听语言 Bible。"));
-    none.append(radio, copy); picker.append(none); node.append(picker);
-    directorChoice = () => picker.querySelector("input:checked")?.value || "";
+    picker.append(select, description); node.append(picker);
+    directorChoice = () => select.value;
   }
   let videoProvider;
   if (isVideoPromptDraft && !isShotBatchReady) {
@@ -880,7 +956,7 @@ function renderChatCard(card, disabled) {
     providerRow.append(videoProvider);
     actions.append(providerRow);
   }
-  const adoptLabel = card.kind === "concept" ? "选择这个方案" : card.kind === "audiovisual_direction" ? "确认视听方向并生成剧情与分镜" : card.kind === "storyboard" ? "选择并生成分镜图" : isFailedFinalCard ? "重新生成落版图" : isFinalCardDraft ? "确认并生成落版图" : isGeneratedFinalCard ? "确认使用" : isFinalVideo && card.status === "confirmed" ? "最终成片已确认" : isFinalVideo ? "确认最终成片" : isShotBatchReady ? "确认全部镜头并合成" : isVideoPromptDraft && card.status === "failed" ? "按所选方式重新生成" : isVideoPromptDraft ? "确认并生成逐镜视频" : "采用这个候选";
+  const adoptLabel = card.kind === "concept" ? "选择这个方案" : card.kind === "audiovisual_direction" ? "确认视听方向并生成剧情与分镜" : card.kind === "storyboard" ? "选择并生成分镜图" : isFinalCardDirection ? "确认这个落版方向" : isFailedFinalCard ? "重新生成落版图" : isFinalCardDraft ? "确认并生成落版图" : isGeneratedFinalCard ? "确认使用" : isFinalVideo && card.status === "confirmed" ? "最终成片已确认" : isFinalVideo ? "确认最终成片" : isShotBatchReady ? "确认全部镜头并合成" : isVideoPromptDraft && card.status === "failed" ? "按所选方式重新生成" : isVideoPromptDraft ? "确认并生成逐镜视频" : "采用这个候选";
   const adopt = element("button", "chat-card-adopt", adoptLabel); adopt.type = "button";
   const actionStages = card.kind === "concept" ? ["concept_review"]
     : card.kind === "audiovisual_direction" ? ["audiovisual_review"]
@@ -904,6 +980,15 @@ function renderChatCard(card, disabled) {
         await api(`/api/creative/sessions/${sessionId}/cards/${encodeURIComponent(card.id)}/approve-audiovisual-direction`, {
           method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ directorChoice: directorChoice?.() || "" }),
         });
+        return refreshSession();
+      } catch (error) {
+        adopt.disabled = false; adopt.textContent = adoptLabel; alert(error.message); return;
+      }
+    }
+    if (isFinalCardDirection) {
+      adopt.disabled = true; adopt.textContent = "正在确认落版方向…";
+      try {
+        await api(`/api/creative/sessions/${sessionId}/cards/${encodeURIComponent(card.id)}/approve-final-card-direction`, { method: "POST" });
         return refreshSession();
       } catch (error) {
         adopt.disabled = false; adopt.textContent = adoptLabel; alert(error.message); return;
@@ -968,7 +1053,7 @@ function renderChatCard(card, disabled) {
         return;
       }
     }
-    if (!isFinalCardDraft) return sendMessage(`我选择并确认采用候选卡 ${card.id}：${card.title}。请保留其他历史内容。现在立即根据已确认创意生成 2-4 个可审核的落版图方案候选卡：kind 必须为 final_card，previewUrl 保持为空，status 为 candidate；每张卡写清视觉构图、英文标题/副标题/CTA、字体层级、色彩、产品真实性边界和 GPT-image-2 英文生成提示词。此步骤只准备候选方案，不执行图片生成，也不要只告诉我下一步。`);
+    if (!isFinalCardDraft) return sendMessage(`我选择并确认采用候选卡 ${card.id}：${card.title}。请保留其他历史内容并只确认这个创意方案。下一步进入人物与参考图选择；现在不要生成落版方向、落版图片、视听方向或剧情分镜。`);
     adopt.disabled = true;
     adopt.textContent = "正在创建任务…";
     try {
@@ -1047,11 +1132,11 @@ function currentStagePresentation(session, workspace) {
   const hasGeneratedFinalCard = latestFinalCardSet.some((card) => Boolean(card.previewUrl));
   return ({
     concept_review: { stage, title: "创意方案候选", heading: "正在讨论的创意方向", kind: "concept", statusKey: "" },
-    concept_selected: { stage, title: "已选方案深化", heading: "已选创意与落版准备", kind: "concept", statusKey: "finalCardStatus" },
+    concept_selected: { stage, title: "已选方案深化", heading: "已选创意与人物准备", kind: "concept", statusKey: "referenceStatus" },
     final_card_review: {
       stage,
-      title: hasGeneratedFinalCard ? "确认落版图" : "确认落版方案",
-      heading: hasGeneratedFinalCard ? "落版图已生成" : "落版图方案待确认",
+      title: hasGeneratedFinalCard ? "确认落版图" : workspace.productionPlan?.finalCardStatus === "ready_to_generate" ? "生成真实落版图" : "确认落版方向",
+      heading: hasGeneratedFinalCard ? "落版图已生成" : workspace.productionPlan?.finalCardStatus === "ready_to_generate" ? "已结合末镜校准落版图" : "落版方向待确认",
       kind: "final_card",
       statusKey: "finalCardStatus",
     },
@@ -1266,7 +1351,7 @@ function renderCanvas(session) {
       const item = element("article", "current-focus-card");
       const focusNumber = characterCandidateNumbers[card.id] || card.candidateNumber;
       const focusLabel = card.kind === "character_image" && focusNumber ? `人物候选 ${focusNumber}` : chatCardKindLabels[card.kind] || "候选";
-      item.append(element("small", "", focusLabel), element("strong", "", card.title), element("p", "", card.summary));
+      item.append(element("small", "", focusLabel), element("strong", "", cardDisplayTitle(card)), element("p", "", card.summary));
       if (card.previewUrl) {
         const image = element("img", "current-focus-preview"); image.src = card.previewUrl; image.alt = card.title; image.loading = "lazy";
         item.append(image);
@@ -1307,11 +1392,13 @@ function renderCanvas(session) {
     const card = canvasDetails(element("details", `concept-card has-folding ${selected ? "selected" : ""}`), `concept:${concept.id}`, !hasSelectedConcept || selected);
     const summary = element("summary", "concept-summary");
     const summaryCopy = element("div", "concept-summary-copy");
-    summaryCopy.append(element("strong", "", concept.title), element("p", "", concept.tailAdAngle));
+    const conceptHeading = element("div", "concept-heading");
+    conceptHeading.append(element("strong", "", concept.title), element("span", "concept-basis-badge", concept.creativeBasisType || "历史方案"));
+    summaryCopy.append(conceptHeading, element("p", "", concept.tailAdAngle));
     summary.append(element("div", "concept-id", concept.id), summaryCopy, element("span", "concept-fold-label", selected ? "已选方案" : "查看详情"));
     const body = element("div", "concept-body");
     const facts = element("dl");
-    [["匹配点", concept.videoMatch], ["玩法卖点", concept.gameplaySellingPoint], ["受众", concept.audience], ["情绪桥", concept.emotionalBridge], ["节奏", concept.rhythm]].forEach(([name, value]) => {
+    [["创意依据", concept.creativeBasisType || "历史方案未标注"], ["依据证据", concept.creativeBasisEvidence || concept.videoMatch], ...(concept.creativeBasisType === "剧尾" ? [["尾帧状态", concept.tailFrameState], ["最后对白", concept.lastDialogue], ["残留情绪", concept.residualEmotion], ["未完成钩子", concept.unfinishedHook]] : []), ["匹配点", concept.videoMatch], ["玩法卖点", concept.gameplaySellingPoint], ["受众", concept.audience], ["情绪桥", concept.emotionalBridge], ["节奏", concept.rhythm]].forEach(([name, value]) => {
       const row = element("div");
       row.append(element("dt", "", name), element("dd", "", value));
       facts.append(row);
@@ -1371,6 +1458,7 @@ function renderCanvas(session) {
     card.append(summary, body);
     concepts.append(card);
   });
+  if (!hasSelectedConcept) concepts.append(renderCustomConceptCard(session, workspace));
   const conceptArchive = canvasDetails(element("details", "current-concept-archive"), "concept-archive", presentation.stage === "concept_review");
   conceptArchive.append(element("summary", "", presentation.stage === "concept_review" ? "创意方案候选" : `创意方案回看${workspace.selectedConceptIds?.length ? ` · 已选择 ${workspace.selectedConceptIds.join("、")}` : ""}`), concepts);
   liveCard.append(conceptArchive); live.append(liveCard); flow.append(live);
@@ -1573,7 +1661,7 @@ function renderError(error) {
 async function refreshSession() {
   if (!Number.isInteger(sessionId) || sessionId <= 0) return renderError(new Error("工作台地址无效，请从项目列表重新进入。"));
   try {
-    const session = await api(`/api/creative/sessions/${sessionId}`);
+    const [session] = await Promise.all([api(`/api/creative/sessions/${sessionId}`), loadDirectorLibrary()]);
     currentSession = session;
     renderCanvas(session);
     renderMessages(session);

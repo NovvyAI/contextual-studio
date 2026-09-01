@@ -3,7 +3,6 @@ import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
 import { publicInputUrl } from "./character-generator.js";
 import { preparePngEditSource, uploadPngEditInput, validatePngEditInputs } from "./image-mask.js";
 import { recordCreativeAsset, recordCreativeFeedback, recordCreativeStage } from "./creative-telemetry.js";
-import { dramaReferenceImageCandidates } from "./drama-analysis-v3.js";
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -14,8 +13,8 @@ function allCards(sessionId) {
     });
 }
 
-function cardPrompt(card) {
-  const detail = (card.details || []).find((item) => /(GPT-image-2.*(提示词|prompt)|英文.*提示词|English.*prompt)/i.test(item.label));
+export function finalCardPrompt(card) {
+  const detail = (card.details || []).find((item) => /(GPT-image-2.*(提示词|prompt)|英文.*提示词|English.*prompt|后续图片生成提示词|图片生成提示词)/i.test(String(item.label || "")));
   return String(detail?.content || "").trim();
 }
 
@@ -28,9 +27,11 @@ export function startFinalCardGeneration(sessionId, cardId) {
   const session = db.prepare("SELECT * FROM creative_sessions WHERE id = ?").get(sessionId);
   if (!session) throw new Error("创意工作台不存在");
   if (session.stage === "working") throw new Error("当前仍有任务正在处理");
+  const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
+  if (workspace.productionPlan?.finalCardStatus !== "ready_to_generate") throw new Error("真实落版图需在末镜分镜图确认后生成");
   const card = allCards(sessionId).find((item) => item.id === cardId && item.kind === "final_card");
   if (!card) throw new Error("找不到这张落版图候选卡");
-  const prompt = cardPrompt(card);
+  const prompt = finalCardPrompt(card);
   if (!prompt) throw new Error("这张候选卡缺少 GPT-image-2 英文提示词");
 
   const timestamp = now();
@@ -101,7 +102,7 @@ async function runFinalCardRegeneration(sessionId, sourceCard, generatingCard, f
     }
     const previewUrl = queried.previewUrl || findPreviewUrl(queried);
     if (!previewUrl) throw new Error("图片生成查询超时，尚未返回预览地址");
-    appendCardMessage(sessionId, `落版图 V${generatingCard.version} 已生成。请继续审核；确认使用前不会进入人物与参考图。`, {
+    appendCardMessage(sessionId, `落版图 V${generatingCard.version} 已生成。请继续审核；确认使用后才会生成正式视频提示词。`, {
       ...generatingCard, previewUrl, status: "candidate", details: [
         ...generatingCard.details,
         ...(edit.mask ? [{ label: "局部编辑蒙版", content: `${edit.mask.width}×${edit.mask.height} PNG alpha` }] : []),
@@ -122,27 +123,6 @@ export function approveFinalCard(sessionId, cardId) {
   if (!session) throw new Error("创意工作台不存在");
   const card = allCards(sessionId).find((item) => item.id === cardId && item.kind === "final_card" && item.previewUrl);
   if (!card) throw new Error("找不到已经生成的落版图预览");
-  const drama = db.prepare("SELECT analysis_json FROM drama_analyses WHERE id = ?").get(session.drama_id);
-  const analysis = drama?.analysis_json ? JSON.parse(drama.analysis_json) : {};
-  const candidates = dramaReferenceImageCandidates(analysis);
-  const slotMeta = {
-    maleFront: ["male_front", "男主人公正面"], maleSide: ["male_side", "男主人公侧面"],
-    femaleFront: ["female_front", "女主人公正面"], femaleSide: ["female_side", "女主人公侧面"],
-  };
-  const referenceCards = Object.entries(slotMeta).flatMap(([key, [slot, title]]) => {
-    const item = candidates[key];
-    if (!item?.available || !item.screenshotId) return [];
-    return [{
-      id: `reference-${slot}`, kind: "character_image", title, summary: item.selectionReason || item.visibleFeatures || "来自短剧分析的原始人物截图候选。",
-      previewUrl: `/api/screenshots/${item.screenshotId}`,
-      details: [
-        { label: "参考槽位", content: slot },
-        { label: "人物", content: item.character || title.replace(/[正侧]面$/, "") },
-        { label: "可见特征", content: item.visibleFeatures || "请查看截图" },
-        { label: "替代风险", content: item.risks || "请确认人物身份和角度是否适合作为生成参考" },
-      ], status: "candidate",
-    }];
-  });
   const timestamp = now();
   const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
   const priorCards = (workspace.confirmedCards || []).map((item) => item.kind === "final_card" && item.status === "confirmed" ? { ...item, status: "superseded" } : item);
@@ -151,28 +131,67 @@ export function approveFinalCard(sessionId, cardId) {
     summary: "真实生成结果已经用户视觉确认，可作为后续 final_card 参考素材。",
     details: [...(card.details || []), { label: "真实预览", content: card.previewUrl }], status: "confirmed", confirmedAt: timestamp,
   }];
-  workspace.productionPlan = { ...(workspace.productionPlan || {}), finalCardStatus: "approved", referenceStatus: "candidate_review" };
+  workspace.productionPlan = { ...(workspace.productionPlan || {}), finalCardStatus: "approved", videoPromptStatus: "pending" };
   db.prepare("INSERT INTO creative_messages (session_id, role, content, created_at) VALUES (?, 'user', ?, ?)")
     .run(sessionId, `确认使用已生成的落版图 ${cardId}`, timestamp);
-  appendCardMessage(sessionId, referenceCards.length
-    ? "这张落版图已经确认使用。接下来请检查男女主人公参考截图；你可以逐张确认，或在对应卡片里指出要更换的角度。"
-    : "这张落版图已经确认使用。当前短剧分析里没有完整的人物参考截图，需要先补齐男女主人公的正面和侧面素材。", { ...card, status: "confirmed" });
-  if (referenceCards.length) {
-    db.prepare("INSERT INTO creative_messages (session_id, role, content, cards_json, created_at) VALUES (?, 'assistant', ?, ?, ?)")
-      .run(sessionId, "这是从短剧分析结果中带入的主人公参考截图候选。", JSON.stringify(referenceCards), timestamp);
-  }
-  db.prepare("UPDATE creative_sessions SET stage = 'reference_review', workspace_json = ?, error_message = NULL, updated_at = ? WHERE id = ?")
+  appendCardMessage(sessionId, "真实落版图已经确认。现在基于已确认的文字分镜、逐镜图片和落版图自动生成正式视频提示词。", { ...card, status: "confirmed" });
+  db.prepare("UPDATE creative_sessions SET stage = 'working', workspace_json = ?, error_message = NULL, updated_at = ? WHERE id = ?")
     .run(JSON.stringify(workspace), timestamp, sessionId);
   recordCreativeFeedback(sessionId, `确认使用已生成的落版图 ${cardId}`, { decision: "approved", assetId: cardId, key: `session:${sessionId}:final-card:${cardId}:approved` });
   recordCreativeStage(sessionId, "final_card", { cardId, title: card.title, previewUrl: card.previewUrl }, { version: Number(card.version || 1), status: "confirmed", key: `session:${sessionId}:final-card:${cardId}:confirmed` });
+  import("./creative-agent.js").then(({ runCreativeTurn }) => runCreativeTurn(sessionId, "真实落版图已经确认。现在生成正式 video_prompt 审核卡；保留全部人物参考、落版方向、视听方向、文字分镜和逐镜图片，不提交视频生成。", false));
+}
+
+export function approveFinalCardDirection(sessionId, cardId) {
+  const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
+  if (!session) throw new Error("创意工作台不存在");
+  if (session.stage !== "final_card_review") throw new Error("当前不在落版方向确认阶段");
+  const currentWorkspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
+  if (currentWorkspace.productionPlan?.finalCardStatus !== "direction_review") throw new Error("当前落版方向已经确认或尚未准备完成");
+  const card = allCards(sessionId).find((item) => item.id === cardId && item.kind === "final_card" && !item.previewUrl);
+  if (!card) throw new Error("找不到落版方向候选");
+  const timestamp = now();
+  const workspace = currentWorkspace;
+  workspace.confirmedCards ||= [];
+  workspace.confirmedCards.push({ ...card, id: `confirmed-${card.id}-direction-${Date.now()}`, title: `已确认落版方向｜${card.title}`, status: "confirmed", confirmedAt: timestamp });
+  workspace.productionPlan = { ...(workspace.productionPlan || {}), finalCardStatus: "direction_approved", videoPromptStatus: "audiovisual_direction_pending" };
+  db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, `确认落版方向 ${card.id}`, timestamp);
+  db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)").run(sessionId, "落版方向已确认。现在自动生成视听方向卡；真实落版图会等末镜分镜图确认后再生成。", timestamp);
+  db.prepare("UPDATE creative_sessions SET stage='working',workspace_json=?,error_message=NULL,updated_at=? WHERE id=?").run(JSON.stringify(workspace), timestamp, sessionId);
+  recordCreativeFeedback(sessionId, `确认落版方向 ${card.id}`, { decision: "approved", stageOutputId: card.id, key: `session:${sessionId}:final-card-direction:${card.id}:approved` });
+  import("./creative-agent.js").then(({ runCreativeTurn }) => runCreativeTurn(sessionId, `已确认落版方向 ${card.id}。现在生成一张 audiovisual-direction-v1 视听方向卡，只总结可执行的视听语言 Bible，不推荐或列举导演；导演由用户在 UI 下拉框选择。进入 audiovisual_review，不生成 storyboard。`, false));
+}
+
+export function prepareFinalCardGeneration(sessionId, storyboardImages) {
+  const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
+  if (!session) throw new Error("创意工作台不存在");
+  const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
+  const direction = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "final_card" && !item.details?.some((detail) => detail.label === "真实预览"));
+  if (!direction) throw new Error("找不到已确认的落版方向");
+  const lastShot = [...storyboardImages].sort((a, b) => String(a.id).localeCompare(String(b.id))).at(-1);
+  if (!lastShot?.previewUrl) throw new Error("找不到已确认的末镜分镜图");
+  const card = {
+    ...direction,
+    id: String(direction.id).replace(/^confirmed-/, "").replace(/-direction-\d+$/, ""),
+    title: `落版图生成稿｜${direction.title.replace(/^已确认落版方向｜/, "")}`,
+    summary: "已结合末镜分镜图校准构图与衔接，等待确认后生成真实落版图。",
+    previewUrl: "", status: "candidate",
+    details: [...(direction.details || []), { label: "末镜衔接参考", content: lastShot.previewUrl }, { label: "末镜要求", content: "延续末镜主体位置、光色、动作终点和视觉重心，自然定格进入品牌与 CTA 落版。" }],
+  };
+  const timestamp = now();
+  workspace.productionPlan = { ...(workspace.productionPlan || {}), finalCardStatus: "ready_to_generate", videoPromptStatus: "waiting_for_final_card" };
+  appendCardMessage(sessionId, "逐镜分镜图已经确认。落版图生成稿已按末镜重新校准；点击“确认并生成落版图”后才会创建真实图片任务。", card);
+  db.prepare("UPDATE creative_sessions SET stage='final_card_review',workspace_json=?,error_message=NULL,updated_at=? WHERE id=?").run(JSON.stringify(workspace), timestamp, sessionId);
 }
 
 async function runFinalCardGeneration(sessionId, card, prompt) {
   try {
+    const lastShotUrl = card.details?.find((item) => item.label === "末镜衔接参考")?.content || "";
+    const referenceUrl = lastShotUrl ? await publicInputUrl(lastShotUrl) : "";
     const client = new NovvyMcpClient();
     await client.initialize();
     const created = unpackToolResult(await client.callTool("novvy_create_image_generation", {
-      model: "gpt-image-2", prompt, n: 1, outputFormat: "png", quality: "high", includeRaw: false,
+      model: "gpt-image-2", prompt: `${prompt}\nUse the supplied last-shot frame as the direct continuity reference. Preserve its subject placement, lighting, palette and visual momentum while resolving naturally into the approved advertising end card.`, ...(referenceUrl ? { imageUrls: [referenceUrl], inputFidelity: "high" } : {}), n: 1, outputFormat: "png", quality: "high", includeRaw: false,
     }));
     const taskId = findValue(created, ["taskId", "task_id", "id"]);
     const providerSessionId = findValue(created, ["sessionId", "session_id"]);

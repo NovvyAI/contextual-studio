@@ -9,10 +9,10 @@ Convert approved intent into a small, auditable shot plan. Use `$audiovisual-lan
 
 ## Contextual Studio stages
 
-1. After selected character references are confirmed, create three text candidates `storyboard-A/B/C` in the same Codex session.
+1. After selected character references are confirmed, create and approve a final-card direction, then approve the audiovisual direction before creating three text candidates `storyboard-A/B/C` in the same Codex session.
 2. Each candidate contains an overall story and at most three content shots.
 3. The user selects one candidate; GPT-image-2 generates one 9:16 static frame per shot.
-4. The user can revise individual frames. Only after unified image approval compile `video-prompt-v1`.
+4. The user can revise individual frames. After unified image approval, use the last frame to calibrate and generate the real final-card image; only after that image is approved compile `video-prompt-v1`.
 5. Each video shot uses its same-number approved storyboard image as the first composition/action reference and all selected character images as identity references.
 6. The user chooses Novvy MCP or ImaRouter. Shots are generated and reviewed independently, then combined. The approved final card is appended deterministically after content shots.
 

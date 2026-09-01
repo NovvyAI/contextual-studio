@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import path from "node:path";
-import { dramaReferenceImageCandidates } from "./drama-analysis-v3.js";
+import { dramaReferenceImageCandidates, isDramaAnalysisV3, migrateDramaAnalysisToV3 } from "./drama-analysis-v3.js";
 
 const dataDir = path.resolve("data");
 fs.mkdirSync(path.join(dataDir, "uploads"), { recursive: true });
@@ -159,6 +159,27 @@ if (!gameAnalysisColumns.has("source_json")) db.exec("ALTER TABLE game_analyses 
 
 export const now = () => new Date().toISOString();
 
+function migrateLegacyDramaAnalyses() {
+  const rows = db.prepare("SELECT id,analysis_json FROM drama_analyses WHERE status='completed' AND analysis_json IS NOT NULL").all();
+  const update = db.prepare("UPDATE drama_analyses SET analysis_json=? WHERE id=?");
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const row of rows) {
+      let analysis;
+      try { analysis = JSON.parse(row.analysis_json); } catch { continue; }
+      if (isDramaAnalysisV3(analysis)) continue;
+      const migrated = migrateDramaAnalysisToV3(analysis);
+      if (migrated) update.run(JSON.stringify(migrated), row.id);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+migrateLegacyDramaAnalyses();
+
 export function serializeAnalysis(row) {
   if (!row) return null;
   const screenshots = db.prepare(`
@@ -295,7 +316,7 @@ export function resolveAssetReferences(sessionId, text) {
 
 function conceptRevisionFeedback(content) {
   const text = String(content || "");
-  const target = text.match(/(?:concept-|方案\s*)([A-D])\b/i)?.[1]?.toUpperCase();
+  const target = text.match(/(?:concept-|方案\s*)([A-Z])\b/i)?.[1]?.toUpperCase();
   if (!target || !/(?:修改聊天候选卡|重新生成方案|修改方案)/.test(text)) return null;
   const feedback = text.match(/(?:我的)?修改意见[：:]\s*([\s\S]*?)(?:(?:\n\n|。)请(?:返回|直接)|$)/)?.[1]?.trim() || "按本轮要求修改方案";
   return { target, feedback };
@@ -312,7 +333,7 @@ function conceptRevisionHistory(messages) {
     }
     let cards = [];
     try { cards = JSON.parse(message.cards_json || "[]"); } catch { /* Ignore malformed historical cards. */ }
-    for (const card of cards.filter((item) => item.kind === "concept" && /^concept-[A-D]$/i.test(item.id || ""))) {
+    for (const card of cards.filter((item) => item.kind === "concept" && /^concept-[A-Z]$/i.test(item.id || ""))) {
       const conceptId = card.id.slice(-1).toUpperCase();
       history[conceptId] ||= [];
       const pending = pendingFeedback.get(conceptId);

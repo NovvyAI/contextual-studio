@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Novvy Creative Telemetry</title>
+  <link rel="stylesheet" href="/telemetry-dashboard.css">
+</head>
+<body>
+  <header class="topbar">
+    <div><span class="eyebrow">NOVVY · LOCAL OBSERVATORY</span><h1>创意过程监控</h1><p>本机采集任务、阶段、资产与反馈</p></div>
+    <div class="toolbar"><span id="connection" class="connection">正在连接</span><label><input id="auto-refresh" type="checkbox" checked> 自动刷新</label><button id="refresh">立即刷新</button></div>
+  </header>
+  <main>
+    <section id="metrics" class="metrics" aria-label="采集统计"></section>
+    <section class="workspace">
+      <aside class="run-panel">
+        <div class="panel-heading"><div><span class="eyebrow">RUNS</span><h2>任务列表</h2></div><input id="search" type="search" placeholder="搜索产品、任务或用户"></div>
+        <div id="run-list" class="run-list"></div>
+      </aside>
+      <section id="run-detail" class="detail-panel"><div class="empty"><strong>选择一个任务</strong><p>查看它的阶段时间线、生成资产和用户反馈。</p></div></section>
+    </section>
+  </main>
+  <script type="module" src="/telemetry-dashboard.js"></script>
+</body>
+</html>
