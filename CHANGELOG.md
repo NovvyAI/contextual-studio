@@ -4,6 +4,11 @@
 
 ## 未发布
 
+### README 补充 Telemetry 完整说明
+
+- README 新增 telemetry 工作原理、事件类型、双层 SQLite 存储、隐私边界、本地启动顺序、监控页功能、状态检查、失败重试、旧工作台回补和切换公司远端服务说明。
+- 项目结构补充本地 telemetry 数据库、dashboard 文件、采集服务、outbox、MLflow tracing 及对应启动脚本。
+
 ### 本地 Telemetry 监控网页
 
 - 本地采集服务新增 `/dashboard` 监控页，展示采集总量、任务列表、阶段时间线、公开资产和用户反馈，并支持搜索、标签切换、手动刷新和每 10 秒自动刷新。
