@@ -22,7 +22,7 @@ import { registerChatAttachmentsAsAssets, startAssetCreation, startAssetRegenera
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
 import { backfillCreativeTelemetry, flushTelemetryOutbox, recordCreativeFeedback, recordCreativeRunStart, recordCreativeStage, startTelemetryWorker, telemetryStatus } from "./creative-telemetry.js";
 import { mlflowTracingStatus } from "./mlflow-tracing.js";
-import { dramaAnalysisView, isDramaAnalysisV3 } from "./drama-analysis-v3.js";
+import { dramaAnalysisContract, dramaAnalysisView, isDramaAnalysisV3 } from "./drama-analysis-v3.js";
 
 const port = Number(process.env.PORT || 4180);
 const publicDir = path.resolve("public");
@@ -192,7 +192,15 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && url.pathname === "/api/creative/sessions") {
-      const rows = db.prepare("SELECT * FROM creative_sessions ORDER BY id DESC").all();
+      const rows = db.prepare(`
+        SELECT sessions.*
+        FROM creative_sessions AS sessions
+        INNER JOIN drama_analyses AS dramas ON dramas.id = sessions.drama_id
+        WHERE dramas.status = 'completed'
+          AND json_valid(dramas.analysis_json)
+          AND json_extract(dramas.analysis_json, '$.contract') = ?
+        ORDER BY sessions.id DESC
+      `).all(dramaAnalysisContract);
       return json(res, 200, { items: rows.map(serializeCreativeSession) });
     }
 

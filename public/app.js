@@ -403,13 +403,28 @@ function renderSessionList(items) {
 }
 
 async function loadCreativeHome() {
-  try {
-    const [sources, sessions] = await Promise.all([api("/api/creative/sources"), api("/api/creative/sessions")]);
+  const [sourcesResult, sessionsResult] = await Promise.allSettled([
+    api("/api/creative/sources"),
+    api("/api/creative/sessions"),
+  ]);
+  const messages = [];
+  if (sourcesResult.status === "fulfilled") {
+    const sources = sourcesResult.value;
     fillSelect(document.querySelector("#creative-drama-select"), sources.dramas, sources.dramas.length ? "请选择短剧" : "暂无已完成短剧");
     fillSelect(document.querySelector("#creative-game-select"), sources.games, sources.games.length ? "请选择游戏" : "暂无已完成游戏");
     document.querySelector("#creative-create-button").disabled = !sources.dramas.length || !sources.games.length;
-    renderSessionList(sessions.items);
-  } catch (error) { creativeEntryMessage.textContent = error.message; }
+  } else {
+    fillSelect(document.querySelector("#creative-drama-select"), [], "短剧加载失败");
+    fillSelect(document.querySelector("#creative-game-select"), [], "游戏加载失败");
+    document.querySelector("#creative-create-button").disabled = true;
+    messages.push(`创意来源加载失败：${sourcesResult.reason.message}`);
+  }
+  if (sessionsResult.status === "fulfilled") renderSessionList(sessionsResult.value.items);
+  else {
+    renderSessionList([]);
+    messages.push(`历史工作台加载失败：${sessionsResult.reason.message}`);
+  }
+  creativeEntryMessage.textContent = messages.join("；");
 }
 
 function openCreativeSession(id) {

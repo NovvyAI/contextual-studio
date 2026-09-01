@@ -4,6 +4,11 @@
 
 ## 未发布
 
+### 创意工作台 v3 来源加载修复
+
+- 创意工作台历史列表只加载绑定 `novvy.video-analysis.v3` 短剧的 Session，保留但不再序列化会触发严格 v3 校验失败的旧版 Session。
+- 短剧/游戏来源与历史工作台改为独立容错加载，历史记录异常不再阻断新分析短剧进入选择下拉框。
+
 ### 短剧分析输出契约去重
 
 - 新生成的短剧分析升级为 `novvy.video-analysis.v3`，详细剧情只保存在 `episodeAnalyses[].detailedAnalysis`，不再把时间线、人物、情绪、对白、母题和创意交接复制到根节点；单视频也不再机械生成重复的 `seriesAnalysis`。
