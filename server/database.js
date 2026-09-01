@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import path from "node:path";
-import { dramaReferenceImageCandidates } from "./drama-analysis-v3.js";
+import { dramaReferenceImageCandidates, isDramaAnalysisV3, migrateDramaAnalysisToV3 } from "./drama-analysis-v3.js";
 
 const dataDir = path.resolve("data");
 fs.mkdirSync(path.join(dataDir, "uploads"), { recursive: true });
@@ -158,6 +158,27 @@ const gameAnalysisColumns = new Set(db.prepare("PRAGMA table_info(game_analyses)
 if (!gameAnalysisColumns.has("source_json")) db.exec("ALTER TABLE game_analyses ADD COLUMN source_json TEXT");
 
 export const now = () => new Date().toISOString();
+
+function migrateLegacyDramaAnalyses() {
+  const rows = db.prepare("SELECT id,analysis_json FROM drama_analyses WHERE status='completed' AND analysis_json IS NOT NULL").all();
+  const update = db.prepare("UPDATE drama_analyses SET analysis_json=? WHERE id=?");
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const row of rows) {
+      let analysis;
+      try { analysis = JSON.parse(row.analysis_json); } catch { continue; }
+      if (isDramaAnalysisV3(analysis)) continue;
+      const migrated = migrateDramaAnalysisToV3(analysis);
+      if (migrated) update.run(JSON.stringify(migrated), row.id);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+migrateLegacyDramaAnalyses();
 
 export function serializeAnalysis(row) {
   if (!row) return null;
