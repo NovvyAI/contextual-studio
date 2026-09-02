@@ -127,7 +127,7 @@ function dramaAnalysisView(result = {}) {
     : {};
   return {
     unsupported: false,
-    oneSentenceThesis: detailed.oneSentenceThesis || episode.oneLineSummary || "",
+    oneSentenceThesis: result.remoteAnalysis?.aiPlot?.title_guess || detailed.oneSentenceThesis || episode.oneLineSummary || "",
     referenceImageCandidates: candidates,
   };
 }

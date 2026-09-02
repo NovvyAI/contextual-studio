@@ -56,15 +56,25 @@ function appendSection(root, section) {
 
 function dramaAnalysisView(result = {}) {
   result = result && typeof result === "object" ? result : {};
-  const episode = result.contract === "novvy.video-analysis.v3" && Array.isArray(result.episodeAnalyses) ? result.episodeAnalyses.at(-1) || {} : {};
+  const episodes = result.contract === "novvy.video-analysis.v3" && Array.isArray(result.episodeAnalyses) ? result.episodeAnalyses.filter((item) => item?.detailedAnalysis) : [];
+  const episode = episodes.at(-1) || {};
   const detailed = episode.detailedAnalysis || {};
   const notes = detailed.confidenceNotes || {};
+  const plot = result.remoteAnalysis?.aiPlot || {};
+  const prefixTimeRange = (item, episodeNumber) => ({ ...item, timeRange: /^第\s*\d+\s*集/.test(item?.timeRange || "") ? item.timeRange : `第 ${episodeNumber} 集${item?.timeRange ? ` · ${item.timeRange}` : ""}` });
+  const detailedEpisodes = episodes.map((item, index) => ({ detailed: item.detailedAnalysis, episodeNumber: Number(item.episodeNumber || index + 1) }));
+  const unique = (items, keyOf) => [...new Map(items.map((item) => [keyOf(item), item])).values()];
   return {
-    oneSentenceThesis: detailed.oneSentenceThesis || episode.oneLineSummary || "",
-    synopsis: detailed.synopsis || "",
-    chronology: detailed.chronology || [], characters: detailed.characters || [], emotionalCurve: detailed.emotionalCurve || [], keyDialogue: detailed.keyDialogue || [], motifs: detailed.motifs || [],
-    hookAndCliffhanger: detailed.hookAndCliffhanger || {}, creativeHandoff: detailed.creativeHandoff || { transitionOpportunities: [] }, characterLibrary: episode.characterLibrary || { characters: [] },
-    confidence: { overall: episode.confidence || "unknown", strongInferences: notes.strongInferences || [], limitations: notes.limitations || episode.risksAndUncertainties || [] },
+    oneSentenceThesis: plot.title_guess || detailedEpisodes[0]?.detailed.oneSentenceThesis || episode.oneLineSummary || "",
+    synopsis: plot.overall_synopsis || detailedEpisodes.map(({ detailed: item }) => item.synopsis).filter(Boolean).join("\n"),
+    chronology: detailedEpisodes.flatMap(({ detailed: item, episodeNumber }) => (item.chronology || []).map((entry) => prefixTimeRange(entry, episodeNumber))),
+    characters: unique(detailedEpisodes.flatMap(({ detailed: item }) => item.characters || []), (item) => item.role || JSON.stringify(item)),
+    emotionalCurve: detailedEpisodes.flatMap(({ detailed: item, episodeNumber }) => (item.emotionalCurve || []).map((entry) => prefixTimeRange(entry, episodeNumber))),
+    keyDialogue: detailedEpisodes.flatMap(({ detailed: item }) => item.keyDialogue || []),
+    motifs: unique(detailedEpisodes.flatMap(({ detailed: item }) => item.motifs || []), (item) => item.name || item.element || JSON.stringify(item)),
+    hookAndCliffhanger: { openingHook: plot.timeline?.[0] || detailedEpisodes[0]?.detailed.hookAndCliffhanger?.openingHook || "", retentionMechanism: "", endingState: plot.timeline?.at(-1) || detailed.hookAndCliffhanger?.endingState || "", cliffhangerMechanic: detailed.hookAndCliffhanger?.cliffhangerMechanic || "" },
+    creativeHandoff: detailed.creativeHandoff || { transitionOpportunities: [] }, characterLibrary: episode.characterLibrary || { characters: [] },
+    confidence: { overall: episode.confidence || "unknown", strongInferences: notes.strongInferences || [], limitations: unique(detailedEpisodes.flatMap(({ detailed: item }) => item.confidenceNotes?.limitations || []), String) },
   };
 }
 
@@ -97,7 +107,7 @@ function renderAnalysis(root, result) {
     (character.candidates || []).filter((candidate) => candidate.url).forEach((candidate) => { const figure = element("figure", "source-screenshot reference-selected"); const image = element("img"); image.src = candidate.url; image.alt = character.displayName || "人物代表帧"; image.loading = "lazy"; const caption = element("figcaption"); caption.append(element("span", "", candidate.view === "front" ? "代表帧" : candidate.view || "代表帧")); figure.append(image, caption); gallery.append(figure); });
     if (gallery.children.length) card.append(gallery); return card;
   }));
-  appendSection(root, analysisSection("观众情绪曲线", analysis.emotionalCurve, (item) => { const row = element("article", "emotion-item"); row.append(element("span", "timeline-time", item.timeRange || ""), element("strong", "", item.audienceEmotion || ""), element("p", "", `${item.stimulus || ""}${item.viewingImpulse ? ` → ${item.viewingImpulse}` : ""}`)); return row; }));
+  appendSection(root, analysisSection("人物与观众情绪曲线", analysis.emotionalCurve, (item) => { const row = element("article", "emotion-item"); row.append(element("span", "timeline-time", item.timeRange || ""), element("strong", "", item.audienceEmotion || item.characterEmotion || ""), element("p", "", `${item.stimulus || ""}${item.viewingImpulse ? ` → ${item.viewingImpulse}` : ""}`)); if (item.evidence) row.append(element("small", "", `视觉依据：${item.evidence}`)); return row; }));
   appendSection(root, analysisSection("关键对白", analysis.keyDialogue.filter((item) => item.verification !== "unavailable"), (item) => { const quote = element("blockquote", "dialogue"); quote.append(element("p", "", `“${item.line || ""}”`), element("footer", "", `${item.timeRange || ""}${item.dramaticMeaning ? ` · ${item.dramaticMeaning}` : ""}`)); return quote; }));
   appendSection(root, analysisSection("主题与标签", analysis.motifs, (item) => { const card = element("article", "motif-card"); card.append(element("strong", "", item.name || item.element || "主题"), element("p", "", item.appearance || item.dramaticMeaning || "")); return card; }));
   appendSection(root, analysisSection("片尾创意衔接机会", analysis.creativeHandoff.transitionOpportunities || [], (item) => { const card = element("article", "opportunity-card"); card.append(element("strong", "", item.name || "衔接机会"), element("p", "", item.sourceMoment || "")); return card; }));
