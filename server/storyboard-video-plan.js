@@ -7,6 +7,14 @@ function detail(card, pattern) {
   return String((card.details || []).find((item) => pattern.test(item.label))?.content || "").trim();
 }
 
+function firstText(...values) {
+  return values.map((value) => String(value || "").trim()).find(Boolean) || "";
+}
+
+function shotPrompt(shot) {
+  return firstText(shot?.promptEn, shot?.prompt_en, shot?.videoPromptEn, shot?.englishPrompt, shot?.prompt);
+}
+
 export function parseStoryboardVideoPlan(card) {
   const raw = detail(card, /分镜任务\s*JSON|storyboard.*json/i);
   let plan;
@@ -22,8 +30,9 @@ export function parseStoryboardVideoPlan(card) {
       schemaVersion: PLAN_VERSION,
       shots: plan.shots.map((shot, index) => {
         const sourceShotId = String(shot?.shotId || "").trim();
-        const promptEn = detail(card, new RegExp(`英文提交提示词\\s*[｜|]\\s*${sourceShotId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"));
-        const reviewZh = detail(card, new RegExp(`中文审核稿\\s*[｜|]\\s*${sourceShotId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\s*[｜|].*)?$`, "i"));
+        const escapedShotId = sourceShotId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const promptEn = firstText(shotPrompt(shot), detail(card, new RegExp(`英文提交提示词.*${escapedShotId}`, "i")));
+        const reviewZh = firstText(shot?.reviewZh, shot?.review_zh, shot?.summaryZh, detail(card, new RegExp(`中文审核稿.*${escapedShotId}`, "i")));
         return {
           shotId: `shot-${String(index + 1).padStart(2, "0")}`,
           order: index + 1,
@@ -43,7 +52,7 @@ export function parseStoryboardVideoPlan(card) {
     const durationSeconds = Number(shot?.durationSeconds);
     if (shot?.shotId !== expectedId || shot?.order !== index + 1) throw new Error(`分镜顺序无效：应为 ${expectedId}`);
     if (!Number.isInteger(durationSeconds) || durationSeconds < productionProfile.min_shot_duration_seconds || durationSeconds > productionProfile.max_shot_duration_seconds) throw new Error(`${expectedId} 时长必须是 ${productionProfile.min_shot_duration_seconds}-${productionProfile.max_shot_duration_seconds} 秒整数`);
-    const promptEn = String(shot?.promptEn || "").trim();
+    const promptEn = shotPrompt(shot);
     if (!promptEn) throw new Error(`${expectedId} 缺少英文提示词`);
     return { shotId: expectedId, order: index + 1, durationSeconds, reviewZh: String(shot.reviewZh || "").trim(), promptEn };
   });
