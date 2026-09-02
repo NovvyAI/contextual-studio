@@ -415,7 +415,7 @@ const server = http.createServer(async (req, res) => {
       const id = Number(videoGenerateMatch[1]);
       const cardId = decodeURIComponent(videoGenerateMatch[2]);
       const body = JSON.parse((await requestBody(req)).toString("utf8") || "{}");
-      const provider = body.provider === "imarouter" ? "imarouter" : "novvy";
+      const provider = body.provider === "novvy" ? "novvy" : "imarouter";
       if (!productionProfile.allowed_video_providers.includes(provider)) return json(res, 400, { error: `当前生产 Profile 不允许视频提供者：${provider}` });
       if (provider === "imarouter") startImaRouterVideoGeneration(id, cardId);
       else startVideoGeneration(id, cardId);

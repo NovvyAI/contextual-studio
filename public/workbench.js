@@ -976,7 +976,7 @@ function renderChatCard(card, disabled) {
     const providerRow = element("label", "video-provider-picker");
     providerRow.append(element("span", "", "视频生成方式"));
     videoProvider = document.createElement("select");
-    videoProvider.append(new Option("Novvy MCP（多人物参考）", "novvy"), new Option("ImaRouter（分镜图 + 多人物参考）", "imarouter"));
+    videoProvider.append(new Option("ImaRouter（六视图人物面板 + 分镜图）", "imarouter"), new Option("Novvy MCP（多人物参考）", "novvy"));
     videoProvider.disabled = disabled || card.status === "generating";
     providerRow.append(videoProvider);
     actions.append(providerRow);
@@ -1045,7 +1045,7 @@ function renderChatCard(card, disabled) {
         await api(`/api/creative/sessions/${sessionId}/cards/${encodeURIComponent(card.id)}/generate-video`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ provider: videoProvider?.value || "novvy" }),
+          body: JSON.stringify({ provider: videoProvider?.value || "imarouter" }),
         });
         return refreshSession();
       } catch (error) {
