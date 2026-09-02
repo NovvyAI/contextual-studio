@@ -939,6 +939,16 @@ function renderChatCard(card, disabled) {
           chatCardFeedbackDrafts.delete(card.id);
           submitted = true; await refreshSession();
         }
+      } else if (card.kind === "video_shot" && !card.previewUrl) {
+        const instruction = feedback.value.trim();
+        if (!instruction) { feedback.setCustomValidity("请先填写这次单镜重生成的要求"); feedback.reportValidity(); feedback.setCustomValidity(""); submitted = false; }
+        else {
+          await api(`/api/creative/sessions/${sessionId}/cards/${encodeURIComponent(card.id)}/regenerate-video-shot`, {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ provider: videoProvider?.value || "imarouter", model: videoModel?.value || "seedance-2.0-fast" }),
+          });
+          chatCardFeedbackDrafts.delete(card.id); submitted = true; await refreshSession();
+        }
       } else submitted = await sendChatCardFeedback(card, feedback.value, feedback);
       if (!submitted) { regenerate.disabled = false; regenerate.textContent = "按意见重新生成"; }
     } catch (error) {
@@ -973,7 +983,8 @@ function renderChatCard(card, disabled) {
   }
   let videoProvider;
   let videoModel;
-  if (isVideoPromptDraft && !isShotBatchReady) {
+  const isVideoShotRegeneration = card.kind === "video_shot" && !card.previewUrl;
+  if ((isVideoPromptDraft && !isShotBatchReady) || isVideoShotRegeneration) {
     const providerRow = element("label", "video-provider-picker");
     providerRow.append(element("span", "", "视频生成方式"));
     videoProvider = document.createElement("select");

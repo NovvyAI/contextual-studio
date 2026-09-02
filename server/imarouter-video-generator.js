@@ -205,26 +205,28 @@ async function ensurePublicReferenceUrl(source) {
   }
 }
 
-export function startImaRouterVideoGeneration(sessionId, cardId, requestedModel = DEFAULT_VIDEO_MODEL) {
+export function startImaRouterVideoGeneration(sessionId, cardId, requestedModel = DEFAULT_VIDEO_MODEL, targetShotId = "", promptOverride = "") {
   const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
   if (!session) throw new Error("创意工作台不存在");
   if (session.stage === "working") throw new Error("当前仍有任务正在处理");
   config();
   const card = allCards(sessionId).find((item) => item.id === cardId && item.kind === "video_prompt");
   if (!card) throw new Error("找不到视频提示词卡");
-  const plan = parseStoryboardVideoPlan(card);
+  const fullPlan = parseStoryboardVideoPlan(card);
+  const plan = targetShotId ? { ...fullPlan, shots: fullPlan.shots.filter((shot) => shot.shotId === targetShotId).map((shot) => promptOverride ? { ...shot, promptEn: promptOverride } : shot) } : fullPlan;
+  if (!plan.shots.length) throw new Error(`找不到要重新生成的视频镜头：${targetShotId}`);
   const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
   const model = resolveVideoModel(requestedModel);
   const reference = selectReferences(workspace, model.family !== "minimax");
   const timestamp = now();
-  db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, `使用 ImaRouter 生成视频：${cardId}`, timestamp);
+  db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, targetShotId ? `使用 ImaRouter 重新生成 ${targetShotId}` : `使用 ImaRouter 生成视频：${cardId}`, timestamp);
   const modelStrategy = model.family === "minimax" ? "每镜仅使用对应分镜图作为首帧" : "人物六视图在前，对应分镜图在最后";
   append(sessionId, `已选择 ImaRouter / ${model.label}。正在准备逐镜参考素材并生成视频。参考策略：${modelStrategy}。`, {
     ...card, previewUrl: "", status: "generating",
     details: [...(card.details || []).filter((item) => !["视频供应商", "参考策略"].includes(item.label)), { label: "视频供应商", content: `ImaRouter / ${model.label}` }, { label: "参考策略", content: modelStrategy }],
   });
   db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, sessionId);
-  generate(sessionId, card, plan, reference, model.key);
+  generate(sessionId, card, plan, reference, model.key, Boolean(targetShotId));
 }
 
 export function resumeImaRouterVideoGeneration(sessionId, cardId, requestedModel = DEFAULT_VIDEO_MODEL) {
@@ -240,7 +242,7 @@ export function resumeImaRouterVideoGeneration(sessionId, cardId, requestedModel
   generate(sessionId, card, plan, reference, model.key);
 }
 
-async function generate(sessionId, card, plan, reference, modelKey) {
+async function generate(sessionId, card, plan, reference, modelKey, forceNewVersion = false) {
   try {
     const { baseUrl, headers } = config();
     const model = resolveVideoModel(modelKey);
@@ -256,11 +258,12 @@ async function generate(sessionId, card, plan, reference, modelKey) {
       const createdAt = now();
       const existing = db.prepare("SELECT * FROM creative_video_shots WHERE session_id=? AND prompt_card_id=? AND shot_id=? AND COALESCE(model_key,?)=? ORDER BY version DESC LIMIT 1")
         .get(sessionId, card.id, shot.shotId, DEFAULT_VIDEO_MODEL, model.key);
-      if (existing?.status === "completed" && existing.result_url) continue;
-      const version = existing?.status === "generating" ? Number(existing.version) : Number(db.prepare("SELECT COALESCE(MAX(version),0)+1 version FROM creative_video_shots WHERE session_id=? AND prompt_card_id=? AND shot_id=?").get(sessionId, card.id, shot.shotId).version);
+      if (!forceNewVersion && existing?.status === "completed" && existing.result_url) continue;
+      const resumeExisting = !forceNewVersion && existing?.status === "generating";
+      const version = resumeExisting ? Number(existing.version) : Number(db.prepare("SELECT COALESCE(MAX(version),0)+1 version FROM creative_video_shots WHERE session_id=? AND prompt_card_id=? AND shot_id=?").get(sessionId, card.id, shot.shotId).version);
       const storyboardReference = storyboardReferences[shot.order - 1];
       if (!storyboardReference) throw new Error(`${shot.shotId}：缺少同序号的已确认分镜图`);
-      let taskId = existing?.status === "generating" ? existing.task_id : "";
+      let taskId = resumeExisting ? existing.task_id : "";
       const orderedReferences = orderImaRouterShotReferences(characterReferences, storyboardReference, shot.order);
       let activeImageReferences = [...orderedReferences.images];
       const referenceLabels = [...orderedReferences.labels];
@@ -326,7 +329,11 @@ async function generate(sessionId, card, plan, reference, modelKey) {
       const referenceSummary = model.family === "minimax" ? `对应分镜图 ${shot.order} 作为唯一首帧` : `${characterReferences.length} 张人物身份参考在前，对应分镜图 ${shot.order} 在最后`;
       append(sessionId, `${shot.shotId} V${version} 已生成，可以单独播放复审。`, shotCard(card, shot, { previewUrl, status: "completed", version, details: [...shotCard(card, shot).details, { label: "版本", content: `V${version}` }, { label: "视频供应商", content: `ImaRouter / ${model.label}` }, { label: "参考策略", content: removedPrivacyReference ? `已移除 ${removedPrivacyReference} 后自动重试成功` : referenceSummary }, { label: "音频", content: model.family === "seedance" || model.family === "kling" ? (audioDowngraded ? "该镜头因版权审核自动降级为无音频" : "生成同步音频") : "该模型不生成音频" }, { label: "视频任务", content: taskId }] }));
     }
-    append(sessionId, "全部内容镜头已经生成。请逐镜播放复审；确认后再按顺序拼接，并追加已确认的原始落版图。", { ...card, previewUrl: "", status: "completed", details: [...(card.details || []).filter((item) => item.label !== "失败原因"), { label: "逐镜状态", content: `${plan.shots.length} 个镜头已完成，等待统一确认拼接` }] });
+    if (forceNewVersion) {
+      append(sessionId, `${plan.shots[0].shotId} 已重新生成新版本。其他镜头保持不变，请播放复审后再统一确认。`, { ...card, previewUrl: "", status: "completed", details: [...(card.details || []).filter((item) => item.label !== "失败原因"), { label: "单镜重生成", content: `${plan.shots[0].shotId} 已完成新版本，其他镜头未重新生成` }] });
+    } else {
+      append(sessionId, "全部内容镜头已经生成。请逐镜播放复审；确认后再按顺序拼接，并追加已确认的原始落版图。", { ...card, previewUrl: "", status: "completed", details: [...(card.details || []).filter((item) => item.label !== "失败原因"), { label: "逐镜状态", content: `${plan.shots.length} 个镜头已完成，等待统一确认拼接` }] });
+    }
     db.prepare("UPDATE creative_sessions SET stage='video_review',error_message=NULL,updated_at=? WHERE id=?").run(now(), sessionId);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

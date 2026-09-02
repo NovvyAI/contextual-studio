@@ -422,6 +422,27 @@ const server = http.createServer(async (req, res) => {
       return json(res, 202, { id, cardId, provider, status: "working" });
     }
 
+    const videoShotRegenerateMatch = url.pathname.match(/^\/api\/creative\/sessions\/(\d+)\/cards\/([^/]+)\/regenerate-video-shot$/);
+    if (req.method === "POST" && videoShotRegenerateMatch) {
+      const id = Number(videoShotRegenerateMatch[1]);
+      const candidateCardId = decodeURIComponent(videoShotRegenerateMatch[2]);
+      const body = JSON.parse((await requestBody(req)).toString("utf8") || "{}");
+      const candidate = db.prepare("SELECT cards_json FROM creative_messages WHERE session_id=? AND cards_json IS NOT NULL ORDER BY id DESC").all(id)
+        .flatMap((row) => { try { return JSON.parse(row.cards_json || "[]"); } catch { return []; } })
+        .find((card) => card.id === candidateCardId && card.kind === "video_shot");
+      if (!candidate) return json(res, 404, { error: "找不到这张视频镜头候选卡" });
+      const shotId = String(candidate.id).match(/shot-0*(\d+)/i)?.[0]?.toLowerCase().replace(/shot-0*(\d+)/, (_, number) => `shot-${String(number).padStart(2, "0")}`)
+        || String((candidate.details || []).find((item) => item.label === "固定规格")?.content || "").match(/shotId=(shot-\d+)/i)?.[1]?.toLowerCase();
+      if (!shotId) return json(res, 400, { error: "这张卡片缺少可识别的镜头编号" });
+      const source = db.prepare("SELECT prompt_card_id,provider,model_key FROM creative_video_shots WHERE session_id=? AND shot_id=? ORDER BY version DESC LIMIT 1").get(id, shotId);
+      if (!source) return json(res, 404, { error: `找不到 ${shotId} 的历史视频任务` });
+      const provider = body.provider === "novvy" ? "novvy" : body.provider === "imarouter" ? "imarouter" : source.provider;
+      const promptOverride = String((candidate.details || []).find((item) => /英文.*提示词/.test(item.label))?.content || "").trim();
+      if (provider === "imarouter") startImaRouterVideoGeneration(id, source.prompt_card_id, body.model || source.model_key, shotId, promptOverride);
+      else startVideoGeneration(id, source.prompt_card_id, shotId, promptOverride);
+      return json(res, 202, { id, shotId, provider, status: "working", action: "video_shot_regeneration" });
+    }
+
     const videoShotsApproveMatch = url.pathname.match(/^\/api\/creative\/sessions\/(\d+)\/cards\/([^/]+)\/approve-video-shots$/);
     if (req.method === "POST" && videoShotsApproveMatch) {
       const id = Number(videoShotsApproveMatch[1]);

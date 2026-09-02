@@ -39,13 +39,15 @@ function append(sessionId, content, card) {
     .run(sessionId, content, JSON.stringify([card]), now());
 }
 
-export function startVideoGeneration(sessionId, cardId) {
+export function startVideoGeneration(sessionId, cardId, targetShotId = "", promptOverride = "") {
   const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
   if (!session) throw new Error("创意工作台不存在");
   if (session.stage === "working") throw new Error("当前仍有任务正在处理");
   const card = allCards(sessionId).find((item) => item.id === cardId && item.kind === "video_prompt");
   if (!card) throw new Error("找不到视频提示词卡");
-  const plan = parseStoryboardVideoPlan(card);
+  const fullPlan = parseStoryboardVideoPlan(card);
+  const plan = targetShotId ? { ...fullPlan, shots: fullPlan.shots.filter((shot) => shot.shotId === targetShotId).map((shot) => promptOverride ? { ...shot, promptEn: promptOverride } : shot) } : fullPlan;
+  if (!plan.shots.length) throw new Error(`找不到要重新生成的视频镜头：${targetShotId}`);
   const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
   const referenceGroup = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "reference_panel" && item.status === "confirmed");
   const referenceUrls = (referenceGroup?.characterReferenceUrls?.length ? referenceGroup.characterReferenceUrls : (referenceGroup?.details || []).map((item) => item.content)).map(referenceUrl).filter(Boolean);
@@ -60,7 +62,7 @@ export function startVideoGeneration(sessionId, cardId) {
     ? "视频提示词已经确认。我正在上传人物参考并生成视频，完成后会在这张卡片里显示成片。"
     : "视频提示词已经确认。上一次任务因生成音频触发版权策略，本次将关闭生成音频并重新生成视频。", { ...card, previewUrl: "", status: "generating" });
   db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, sessionId);
-  generate(sessionId, card, plan, referenceUrls, storyboardUrls, generateAudio);
+  generate(sessionId, card, plan, referenceUrls, storyboardUrls, generateAudio, Boolean(targetShotId));
 }
 
 export function resumeNovvyStoryboardVideoGeneration(sessionId, cardId) {
@@ -100,7 +102,7 @@ export function resumeVideoGeneration(sessionId, cardId, taskId, providerSession
   return monitorVideoTask(sessionId, card, taskId, providerSessionId);
 }
 
-async function generate(sessionId, card, plan, referenceUrls, storyboardUrls, generateAudio) {
+async function generate(sessionId, card, plan, referenceUrls, storyboardUrls, generateAudio, forceNewVersion = false) {
   try {
     const humanImageUrls = [];
     for (const url of referenceUrls) humanImageUrls.push(await publicInputUrl(url));
@@ -110,17 +112,18 @@ async function generate(sessionId, card, plan, referenceUrls, storyboardUrls, ge
     for (const shot of plan.shots) {
       const createdAt = now();
       const existing = db.prepare("SELECT * FROM creative_video_shots WHERE session_id=? AND prompt_card_id=? AND shot_id=? ORDER BY version DESC LIMIT 1").get(sessionId, card.id, shot.shotId);
-      if (existing?.status === "completed" && existing.result_url) continue;
-      const version = existing?.status === "generating" ? Number(existing.version) : Number(db.prepare("SELECT COALESCE(MAX(version),0)+1 version FROM creative_video_shots WHERE session_id=? AND prompt_card_id=? AND shot_id=?").get(sessionId, card.id, shot.shotId).version);
-      if (existing?.status !== "generating") {
+      if (!forceNewVersion && existing?.status === "completed" && existing.result_url) continue;
+      const resumeExisting = !forceNewVersion && existing?.status === "generating";
+      const version = resumeExisting ? Number(existing.version) : Number(db.prepare("SELECT COALESCE(MAX(version),0)+1 version FROM creative_video_shots WHERE session_id=? AND prompt_card_id=? AND shot_id=?").get(sessionId, card.id, shot.shotId).version);
+      if (!resumeExisting) {
         db.prepare("INSERT INTO creative_video_shots (session_id,prompt_card_id,shot_id,shot_order,version,provider,duration_seconds,prompt,status,created_at,updated_at) VALUES (?,?,?,?,?,'novvy',?,?,'generating',?,?)")
           .run(sessionId, card.id, shot.shotId, shot.order, version, shot.durationSeconds, shot.promptEn, createdAt, createdAt);
       }
       const storyboardImageUrl = storyboardImageUrls[shot.order - 1];
       if (!storyboardImageUrl) throw new Error(`${shot.shotId}：缺少同序号的已确认分镜图`);
       const prompt = `The single imageUrls reference is the approved storyboard frame for this exact shot. Use it as the primary constraint for composition, camera angle, scene layout, action, pose, and object placement. The humanImageUrls references control character identity, facial features, age, hairstyle, costume, and accessories. ${shot.promptEn}`;
-      let taskId = existing?.status === "generating" ? existing.task_id : "";
-      let providerSessionId = existing?.status === "generating" ? existing.provider_session_id : "";
+      let taskId = resumeExisting ? existing.task_id : "";
+      let providerSessionId = resumeExisting ? existing.provider_session_id : "";
       let result = null;
       if (!taskId && !providerSessionId) {
         result = unpackToolResult(await client.callTool("novvy_create_video_generation", {
@@ -145,7 +148,11 @@ async function generate(sessionId, card, plan, referenceUrls, storyboardUrls, ge
         .run(previewUrl, now(), sessionId, card.id, shot.shotId, version);
       append(sessionId, `${shot.shotId} V${version} 已生成，可以单独播放复审。`, shotCard(card, shot, { previewUrl, status: "completed", version, details: [...shotCard(card, shot).details, { label: "版本", content: `V${version}` }, { label: "视频供应商", content: "Novvy MCP / Seedance 2.0 Fast" }, { label: "参考绑定", content: `对应分镜图 ${shot.order} + ${humanImageUrls.length} 张人物参考图` }, { label: "视频任务", content: taskId || providerSessionId }] }));
     }
-    append(sessionId, "全部内容镜头已经生成。请逐镜播放复审；确认后再按顺序拼接，并追加已确认的原始落版图。", { ...card, previewUrl: "", status: "completed", details: [...(card.details || []).filter((item) => item.label !== "失败原因"), { label: "逐镜状态", content: `${plan.shots.length} 个镜头已完成，等待统一确认拼接` }] });
+    if (forceNewVersion) {
+      append(sessionId, `${plan.shots[0].shotId} 已重新生成新版本。其他镜头保持不变，请播放复审后再统一确认。`, { ...card, previewUrl: "", status: "completed", details: [...(card.details || []).filter((item) => item.label !== "失败原因"), { label: "单镜重生成", content: `${plan.shots[0].shotId} 已完成新版本，其他镜头未重新生成` }] });
+    } else {
+      append(sessionId, "全部内容镜头已经生成。请逐镜播放复审；确认后再按顺序拼接，并追加已确认的原始落版图。", { ...card, previewUrl: "", status: "completed", details: [...(card.details || []).filter((item) => item.label !== "失败原因"), { label: "逐镜状态", content: `${plan.shots.length} 个镜头已完成，等待统一确认拼接` }] });
+    }
     db.prepare("UPDATE creative_sessions SET stage='video_review',error_message=NULL,updated_at=? WHERE id=?").run(now(), sessionId);
   } catch (error) {
     failVideoTask(sessionId, card, error);
