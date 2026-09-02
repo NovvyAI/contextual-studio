@@ -15,71 +15,62 @@
       <section class="hero">
         <div class="eyebrow">NOVVY CREATIVE WORKSPACE</div>
         <h1>把剧情的下一秒，变成<br><em>自然发生的广告。</em></h1>
-        <p>上传短剧，提取关键画面与叙事证据，为后续产品匹配和片尾创意做好准备。</p>
+        <p>直接读取 Novvy AI Analysis API 中已经完成的短剧与 App 解析，为片尾创意选择可信来源。</p>
       </section>
 
       <nav class="tabs" aria-label="创作流程">
-        <button class="tab active" data-tab="drama"><span>01</span>短剧分析</button>
-        <button class="tab" data-tab="game"><span>02</span>游戏分析</button>
+        <button class="tab active" data-tab="drama"><span>01</span>短剧解析库</button>
+        <button class="tab" data-tab="game"><span>02</span>App 解析库</button>
         <button class="tab" data-tab="creative"><span>03</span>创意工作台</button>
         <button class="tab" disabled><span>04</span>素材生成</button>
       </nav>
 
       <section id="drama-panel" class="workspace tab-panel active">
         <div class="upload-column">
-          <div class="section-heading"><div><small>INPUT</small><h2>上传短剧视频</h2></div><div class="step-state">STEP 1 / 4</div></div>
-          <form id="upload-form">
-            <label id="dropzone" class="dropzone">
-              <input id="video-input" name="video" type="file" accept="video/*" hidden />
-              <div class="upload-icon">↑</div>
-              <strong>拖入视频，或点击选择文件</strong>
-              <span>支持 MP4、MOV、WebM，单个文件不超过 1GB</span>
-            </label>
-            <div id="file-card" class="file-card hidden">
-              <div class="file-glyph">▶</div>
-              <div><strong id="file-name"></strong><span id="file-size"></span></div>
-              <button type="button" id="remove-file" aria-label="移除">×</button>
-            </div>
-            <label class="field"><span>项目名称 <small>可选</small></span><input id="title-input" name="title" placeholder="例如：餐厅重逢 · Episode 03" /></label>
-            <button id="analyze-button" class="primary" type="submit" disabled><span>开始分析</span><b>→</b></button>
+          <div class="section-heading"><div><small>REMOTE SOURCE</small><h2>已完成的短剧解析</h2></div><div class="step-state">STEP 1 / 4</div></div>
+          <form id="drama-search-form" class="remote-filter-form">
+            <div class="source-note"><b>由 AI Analysis API 提供</b><span>这里只展示整剧解析状态为 DONE 的短剧。人物代表帧和分集拼图会在访问时自动获取新的签名地址。</span></div>
+            <div id="drama-stats" class="remote-stats"><strong>—</strong><span>正在读取远端目录</span></div>
+            <label class="field"><span>搜索剧名</span><input id="drama-search" type="search" placeholder="输入短剧名称" /></label>
+            <button id="refresh-button" class="primary" type="button"><span>刷新短剧目录</span><b>↻</b></button>
             <p id="form-message" class="form-message"></p>
           </form>
         </div>
 
         <div class="results-column">
-          <div class="section-heading"><div><small>ARCHIVE</small><h2>分析记录</h2></div><button id="refresh-button" class="ghost">刷新</button></div>
-          <div id="empty-state" class="empty-state"><div>◫</div><strong>还没有分析记录</strong><span>上传第一条短剧，关键截图和分析结果会保存在本地数据库。</span></div>
+          <div class="section-heading"><div><small>ANALYZED DRAMAS</small><h2>远端短剧目录</h2></div></div>
+          <div id="empty-state" class="empty-state"><div>◫</div><strong>没有可用的短剧解析</strong><span>请确认 API 鉴权，或等待短剧整剧解析完成后刷新。</span></div>
           <div id="drama-browser" class="archive-browser hidden"><div id="records" class="archive-list"></div><div id="drama-detail" class="archive-detail"></div></div>
         </div>
       </section>
 
       <section id="game-panel" class="workspace tab-panel">
         <div class="upload-column">
-          <div class="section-heading"><div><small>PRODUCT INPUT</small><h2>添加游戏商店页</h2></div><div class="step-state">STEP 2 / 4</div></div>
-          <form id="game-form">
-            <label class="field"><span>商店地址</span><input id="game-url" type="url" required placeholder="Google Play 或 Apple App Store URL" /></label>
-            <label class="field"><span>游戏名称 <small>可选，以商店页为准</small></span><input id="game-title" placeholder="例如：Royal Match" /></label>
-            <div class="source-note"><b>Novvy 将核验当前商店信息</b><span>分析真实玩法、卖点、目标受众、市场传达、评论信号和广告可视化潜力。</span></div>
-            <button id="game-analyze-button" class="primary" type="submit"><span>开始分析游戏</span><b>→</b></button>
+          <div class="section-heading"><div><small>REMOTE SOURCE</small><h2>筛选已解析 App</h2></div><div class="step-state">STEP 2 / 4</div></div>
+          <form id="game-filter-form" class="remote-filter-form">
+            <div class="source-note"><b>由 AI Analysis API 提供</b><span>可按操作系统和英文品类筛选已完成玩法解析的 App。</span></div>
+            <div id="game-stats" class="remote-stats"><strong>—</strong><span>正在读取远端目录</span></div>
+            <label class="field"><span>操作系统</span><select id="game-os-filter"><option value="">全部平台</option><option value="iOS">iOS</option><option value="Android">Android</option></select></label>
+            <label class="field"><span>品类</span><select id="game-category-filter"><option value="">全部品类</option><option>Games</option><option>Action</option><option>Adventure</option><option>Arcade</option><option>Board</option><option>Card</option><option>Casino</option><option>Casual</option><option>Family</option><option>Music</option><option>Puzzle</option><option>Racing</option><option>Role Playing</option><option>Simulation</option><option>Sports</option><option>Strategy</option><option>Trivia</option><option>Word</option></select></label>
+            <label class="field"><span>搜索 App 名称</span><input id="game-search" type="search" placeholder="例如：Royal Match" /></label>
+            <button id="game-refresh-button" class="primary" type="submit"><span>查询 App 目录</span><b>→</b></button>
             <p id="game-form-message" class="form-message"></p>
           </form>
         </div>
         <div class="results-column">
-          <div class="section-heading"><div><small>PRODUCT ARCHIVE</small><h2>游戏分析记录</h2></div><button id="game-refresh-button" class="ghost">刷新</button></div>
-          <div id="game-empty-state" class="empty-state"><div>◇</div><strong>还没有游戏分析</strong><span>提交商店地址后，产品事实和创意洞察会保存到本地数据库。</span></div>
+          <div class="section-heading"><div><small>ANALYZED APPS</small><h2>远端 App 目录</h2></div></div>
+          <div id="game-empty-state" class="empty-state"><div>◇</div><strong>没有匹配的 App 解析</strong><span>调整平台或品类筛选后重新查询。</span></div>
           <div id="game-browser" class="archive-browser hidden"><div id="game-records" class="archive-list"></div><div id="game-detail" class="archive-detail"></div></div>
         </div>
       </section>
 
       <section id="creative-panel" class="tab-panel creative-panel">
         <div id="creative-entry" class="creative-entry">
-          <div class="entry-copy"><small>CREATIVE VIDEO WORKBENCH</small><h2>先连接一条短剧和一个游戏</h2><p>工作台会继承两边已经确认的分析结果，建立独立的创意会话与画布。</p></div>
+          <div class="entry-copy"><small>CREATIVE VIDEO WORKBENCH</small><h2>先连接一条短剧和一个 App</h2><p>创建时会从 AI Analysis API 拉取两边的最新完整结果，并同步到当前工作台。</p></div>
           <form id="creative-create-form" class="source-picker">
             <label><span>已完成的短剧</span><select id="creative-drama-select" required><option value="">请选择短剧</option></select></label>
             <div class="connector">×</div>
-            <label><span>已完成的游戏</span><select id="creative-game-select" required><option value="">请选择游戏</option></select></label>
-            <button id="novvy-product-button" class="catalog-trigger" type="button">从 Novvy 产品库选择其他游戏</button>
-            <div id="novvy-product-catalog" class="product-catalog hidden" aria-live="polite"></div>
+            <label><span>已完成解析的 App</span><select id="creative-game-select" required><option value="">请选择 App</option></select></label>
             <button id="creative-create-button" class="primary" type="submit"><span>进入创意工作台</span><b>→</b></button>
             <p id="creative-entry-message" class="form-message"></p>
           </form>
@@ -91,14 +82,16 @@
     <template id="record-template">
       <article class="record">
         <div class="record-head"><div><div class="record-title"></div><div class="record-meta"></div></div><span class="status"></span></div>
-        <div class="record-intro"><video class="record-video" controls preload="metadata"></video><div><div class="thesis"></div><p class="synopsis"></p></div></div>
+        <div class="record-intro"><div class="record-cover-frame"><img class="record-cover" alt="短剧封面" /><div class="record-cover-placeholder">DRAMA</div></div><div><div class="thesis"></div><p class="synopsis"></p></div></div>
+        <div class="remote-media-section"></div>
         <div class="analysis-content"></div>
       </article>
     </template>
     <template id="game-record-template">
       <article class="record game-record">
         <div class="record-head"><div><div class="record-title"></div><div class="record-meta"></div></div><span class="status"></span></div>
-        <div class="game-intro"><div class="game-thesis"></div><p class="game-message"></p></div>
+        <div class="game-intro remote-game-intro"><div class="record-app-icon-frame"><img class="record-app-icon" alt="App 图标" /><div class="record-app-placeholder">APP</div></div><div><div class="game-thesis"></div><p class="game-message"></p></div></div>
+        <div class="remote-media-section"></div>
         <div class="game-analysis-content"></div>
       </article>
     </template>
