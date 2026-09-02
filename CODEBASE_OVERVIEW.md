@@ -42,8 +42,9 @@ flowchart LR
 | `public/styles.css` | 两个页面共用的全部样式 |
 | `server/index.js` | HTTP 服务入口、路由、上传与静态文件、后台任务触发、重启恢复 |
 | `server/database.js` | SQLite 初始化、轻量迁移、查询与 API 序列化、资产编号解析 |
-| `server/analyzer.js` | 短剧抽帧证据、Codex 纯视觉分析、缓存复用、v3 结果持久化 |
-| `server/game-analyzer.js` | App Store/Google Play 商品分析 |
+| `server/ai-analysis-api.js` | 查询远端短剧/App 解析、适配现有创意契约、刷新短期签名图片 |
+| `server/analyzer.js` | 历史本地短剧分析实现；当前首页流程不再调用 |
+| `server/game-analyzer.js` | 历史本地商店页分析实现；当前首页流程不再调用 |
 | `server/creative-agent.js` | 单一 Codex thread 的多轮创意状态、结构化卡片与防幻觉校验 |
 | `server/image-generator.js` | 落版图生成、修改、确认 |
 | `server/character-generator.js` | 人物参考图生成、修改、确认参考图组 |
@@ -77,36 +78,26 @@ flowchart LR
 5. 对已持久化的 ImaRouter 任务、部分图片任务和中断的创意阶段做恢复或安全回退。
 6. 启动 telemetry outbox 定时发送器。
 
-短剧分析、游戏分析、Codex 创意轮次、图片生成和视频生成目前主要通过“API 立即返回 202，进程内异步函数继续执行”的方式运行。它适合本地单进程，但不是可靠队列；进程崩溃时只有代码明确覆盖的任务能恢复。
+短剧与 App 解析是同步的远端只读查询；Codex 创意轮次、图片生成和视频生成主要通过“API 立即返回 202，进程内异步函数继续执行”的方式运行。后者适合本地单进程，但不是可靠队列；进程崩溃时只有代码明确覆盖的任务能恢复。
 
 ## 5. 核心业务流程
 
-### 5.1 短剧分析
+### 5.1 短剧解析
 
 ```text
-上传视频
-  -> 保存到 data/uploads
-  -> 创建 drama_analyses(uploaded)
-  -> prepare_video_evidence.py 均匀抽取 20 帧
-  -> 20 帧写入 drama_screenshots BLOB
-  -> 合成一张概览拼图，作为唯一视觉模型输入
-  -> Codex 按严格 JSON Schema 做纯视觉分析
-  -> 关联人物正/侧面槽位与真实 screenshotId
-  -> 保存 novvy.video-analysis.v3
+AI Analysis API 短剧目录
+  -> 用户选择已完成整剧解析的短剧 UUID
+  -> 查询短剧详情（aiPlot + episodes + 签名图片）
+  -> 保留远端原始分析
+  -> 确定性投影为 novvy.video-analysis.v3
+  -> 创建工作台时按 external_source_id 同步到本地 SQLite
 ```
 
-这里有两个重要约束：
+适配层不会再调用模型补齐远端没有返回的字段。原始 `aiPlot`、分集 `aiSummary` 和 GCS 对象路径保留在 `remoteAnalysis`；现有创意读取器需要的 v3 节点只做确定性投影。人物代表帧和分集拼图使用稳定的本地代理路径，实际访问时重新查询详情，以获得未过期的签名 URL。
 
-- 不把音频或原视频直接交给模型，只分析概览拼图里的画面和烧录字幕。
-- v3 的详细剧情唯一事实源是 `episodeAnalyses[].detailedAnalysis`，根节点不再复制旧版详细字段。
+### 5.2 App 解析
 
-分析前会按视频指纹查询本地分析记忆；命中时复用结果，但仍重新建立当前数据库截图与人物槽位的关联。失败信息中若包含可恢复的完整分析 JSON，也会尝试恢复并回写缓存。
-
-### 5.2 游戏分析
-
-用户提交 Google Play 或 Apple App Store URL，后端先校验域名和路径，并按 URL 复用已有未失败记录。分析任务以 Novvy 产品对象为输入，Codex 可联网打开商店页核验事实，最终按 `novvy.product-analysis.v1` 语义保存产品真相、核心玩法、受众、市场信息、风险和未知项。
-
-产品来源有两种：用户手输商店 URL，或从 Novvy MCP 产品列表中选择。产品库只负责提供候选，最终仍进入同一 `game_analyses` 流程。
+首页调用产品目录接口，可把 `os` 和 `category` 原样传给远端过滤。选择产品后查询完整 `aiGameplay`、商店截图和创意拼图。创建工作台时按 `external_source_id` 更新或插入 `game_analyses`，保留原始玩法 JSON，并投影出旧创意流程需要的产品真实性、卖点、受众和市场传达字段。
 
 ### 5.3 创意工作台
 
@@ -212,12 +203,10 @@ flowchart TD
 
 | 接口族 | 作用 |
 | --- | --- |
-| `GET/POST /api/dramas` | 查询历史、上传短剧 |
-| `POST /api/dramas/:id/analyze` | 异步启动短剧分析 |
-| `GET /api/dramas/:id`、`/video`、`/api/screenshots/:id` | 读取分析、原视频和截图 |
-| `GET/POST /api/games` | 查询或创建游戏分析记录 |
-| `POST /api/games/:id/analyze` | 异步启动游戏分析 |
-| `GET /api/novvy/products` | 查询 Novvy 产品列表 |
+| `GET /api/dramas`、`GET /api/dramas/:uuid` | 查询远端已解析短剧目录与详情 |
+| `GET /api/games`、`GET /api/games/:uuid` | 查询远端已解析 App 目录与详情；列表支持 `os`/`category` |
+| `GET /api/analysis-media/*` | 按稳定地址解析最新签名图片并重定向 |
+| `GET /api/dramas/:localId`、`/video`、`/api/screenshots/:id` | 兼容既有本地工作台的历史分析与媒体 |
 | `GET/POST /api/creative/sessions` | 查询或创建创意工作台 |
 | `POST /api/creative/sessions/:id/messages` | 文字/附件对话，也负责若干确定性意图路由 |
 | `/cards/:cardId/*` | 落版、视听方向、分镜、视频的生成/修改/确认 |
@@ -328,4 +317,3 @@ NPM 生产依赖只有 `@openai/codex-sdk` 和 `@mlflow/core`；大量基础能�
 7. `public/workbench.js`：后端状态如何呈现在用户界面。
 8. `.agents/skills/`：模型输出契约、质量规则和辅助脚本。
 9. `TODO.md`：当前架构向云端演进时尚未完成的事项。
-
