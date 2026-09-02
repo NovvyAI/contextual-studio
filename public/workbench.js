@@ -158,8 +158,8 @@ function elapsedLabel(milliseconds) {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 function initialProgressCopy(milliseconds) {
-  if (milliseconds < 20_000) return "正在读取已保存的短剧与游戏分析";
-  if (milliseconds < 60_000) return "正在建立剧情结尾与游戏玩法的连接";
+  if (milliseconds < 20_000) return "正在读取已保存的短剧与 App 分析";
+  if (milliseconds < 60_000) return "正在建立剧情结尾与 App 玩法的连接";
   if (milliseconds < 150_000) return "正在生成并比较第一组创意方向";
   if (milliseconds < 300_000) return "正在检查方案完整性与玩法真实性";
   return "仍在等待模型完成；页面轮询正常，可以保留此页面继续等待";
@@ -504,10 +504,26 @@ function renderDramaMedia(drama) {
   return section;
 }
 
+function renderGameMedia(game) {
+  const section = element("section", "source-media-section");
+  section.append(element("h3", "", "商店截图与创意拼图"));
+  const gallery = element("div", "source-screenshot-grid");
+  for (const item of game?.result?.sourceMedia || []) {
+    if (!item?.url) continue;
+    const figure = element("figure", "source-screenshot");
+    const image = element("img"); image.src = item.url; image.alt = item.title || "App 解析图片"; image.loading = "lazy";
+    const caption = element("figcaption"); caption.append(element("span", "", item.title || "解析图片"));
+    figure.append(image, caption); gallery.append(figure);
+  }
+  if (!gallery.children.length) gallery.append(element("p", "source-empty-value", "远端解析没有返回可展示的图片。"));
+  section.append(gallery);
+  return section;
+}
+
 function openSourceAnalysis(type, source) {
   if (!source) return;
   const dialog = document.querySelector("#source-analysis-dialog");
-  document.querySelector("#source-analysis-kind").textContent = type === "drama" ? "SHORT DRAMA ANALYSIS" : "GAME ANALYSIS";
+  document.querySelector("#source-analysis-kind").textContent = type === "drama" ? "SHORT DRAMA ANALYSIS" : "APP ANALYSIS";
   document.querySelector("#source-analysis-title").textContent = source.title || source.result?.storeFacts?.productName || "完整分析";
   const body = document.querySelector("#source-analysis-body"); body.replaceChildren();
   const intro = element("section", "source-analysis-intro");
@@ -518,11 +534,7 @@ function openSourceAnalysis(type, source) {
   }
   body.append(intro);
   if (type === "drama") body.append(renderDramaMedia(source));
-  else {
-    const note = element("section", "source-media-note");
-    note.append(element("strong", "", "游戏截图"), element("p", "", "当前游戏分析流程尚未把商店截图保存到数据库；这里展示全部已保存的文字分析和证据链接。"));
-    body.append(note);
-  }
+  else body.append(renderGameMedia(source));
   const analysis = element("section", "source-complete-analysis");
   analysis.append(element("h3", "", "完整模型分析"), renderAnalysisValue(source.result || {}));
   body.append(analysis);
@@ -731,7 +743,7 @@ function nextCustomConceptId(concepts = []) {
 function renderCustomConceptCard(session, workspace) {
   const id = nextCustomConceptId(workspace.concepts || []);
   const card = element("article", "concept-card custom-concept-card");
-  card.append(element("div", "concept-id", "+"), element("strong", "", "自定义创意方案"), element("p", "", "四个候选都不满意？写下你的核心想法，让 Novvy 结合当前短剧与游戏补成一套可审核方案。"));
+  card.append(element("div", "concept-id", "+"), element("strong", "", "自定义创意方案"), element("p", "", "四个候选都不满意？写下你的核心想法，让 Novvy 结合当前短剧与 App 补成一套可审核方案。"));
   const label = element("label", "", `你的方案想法 · 将生成方案 ${id}`);
   const input = element("textarea", "concept-feedback custom-concept-input");
   input.rows = 5;
@@ -1382,7 +1394,7 @@ function renderCanvas(session) {
   const sourceNodeHeading = element("div", "workflow-node-heading");
   sourceNodeHeading.append(element("div", "", "输入素材"), element("span", "", "已连接"));
   const sourceNodeItems = element("div", "source-node-items");
-  [["短剧", "drama", session.drama], ["游戏", "game", session.game]].forEach(([label, type, source]) => {
+  [["短剧", "drama", session.drama], ["App", "game", session.game]].forEach(([label, type, source]) => {
     const button = element("button", "source-node-item"); button.type = "button";
     button.append(element("small", "", label), element("strong", "", source?.title || "未知"));
     button.addEventListener("click", () => openSourceAnalysis(type, source)); sourceNodeItems.append(button);
