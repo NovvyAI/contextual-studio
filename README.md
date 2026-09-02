@@ -1,29 +1,27 @@
 # Contextual Studio
 
-Contextual Studio 是一个面向短剧与游戏广告创意制作的本地 Web 工作台。用户可以上传短剧、分析游戏商店页，将两类分析结果组合为广告创意，并在同一个工作台中完成人物参考图、落版图、剧情分镜、逐镜视频和最终成片的制作与复审。
+Contextual Studio 是一个面向短剧与 App 广告创意制作的本地 Web 工作台。用户从 Novvy AI Analysis API 选择已经完成的短剧与 App 解析，将两类结果组合为广告创意，并在同一个工作台中完成人物参考图、落版图、剧情分镜、逐镜视频和最终成片的制作与复审。
 
 项目当前以本地运行为主：页面、Node.js 服务、SQLite 数据库和 Codex SDK 工作流运行在同一台机器上；图片与视频生成可连接 Novvy MCP 或 ImaRouter 等云端服务。
 
 ## 主要功能
 
-### 短剧分析
+### 短剧解析库
 
-- 上传本地短剧视频并保存历史记录。
-- 使用 Codex SDK 和项目内 `$analyze-short-drama` Skill：全片均匀截取 20 帧并合成唯一概览拼图，一次纯视觉模型分析后持久化结果；不读取或转写音频。20 张独立截图仍保存到数据库，供人物候选和资产区使用。
-- 输出剧情梗概、完整时间线、人物关系、情绪曲线、关键台词、视听母题、开场钩子和结尾悬念。
-- 自动选择男女主人公正面与侧面候选截图。
-- 原视频保存在本地文件系统；关键截图和分析 JSON 保存在 SQLite。
+- 调用 `GET /api/drama-analysis/dramas` 读取远端已经完成整剧解析的短剧目录。
+- 选择短剧后调用详情接口，展示整剧剧情、主要人物、分集梗概和分集拼图。
+- 创建工作台时把远端原始结果与兼容 `novvy.video-analysis.v3` 投影一并保存到 SQLite；缺失的对白、时间码、情绪曲线和人物角度保持未知，不再次调用模型补写。
+- 一小时有效的签名图片通过本地稳定媒体地址按需刷新，旧工作台无需保存易过期的 URL。
 
-### 游戏分析
+### App 解析库
 
-- 输入 Google Play 或 Apple App Store 地址。
-- 使用 Codex SDK 和项目内 `$analyze-game-store-page` Skill 分析玩法、卖点、受众、商店素材、市场传达、评论信号、转化机会与风险。
-- 工作台默认使用用户已经分析并选中的游戏。
-- 只有没有分析记录或用户明确点击“从 Novvy 产品库选择其他游戏”时，才读取 Novvy 产品库。
+- 调用 `GET /api/product-analysis/products` 读取已完成玩法解析的 App，并支持按 iOS/Android 和英文品类过滤。
+- 选择 App 后展示玩法、卖点、目标受众、商店截图和创意拼图。
+- 创建工作台时保存远端原始 `aiGameplay`，同时生成现有创意流程可消费的 `novvy.product-analysis.v1` 兼容投影；不再提交商店 URL 或运行本地商品分析模型。
 
 ### 创意工作台
 
-- 用户先选择一条已分析短剧和一个已分析游戏，再进入独立工作台页面。
+- 用户先选择一条远端已解析短剧和一个远端已解析 App，再进入独立工作台页面。
 - 左侧是蛇形节点画布，保存每次确认的创意成果；节点之间用虚线表达创作顺序。
 - 右侧是持续的创意助手对话，同一工作台沿用同一个 Codex session。
 - 底部输入框支持文字同时附带图片或视频：图片直接作为多模态视觉输入，视频在本地均匀抽取关键帧后进入同一会话。
@@ -88,9 +86,10 @@ contextual-studio/
 │   └── styles.css                   页面样式
 ├── server/
 │   ├── index.js                     HTTP 服务与 API 路由
+│   ├── ai-analysis-api.js           远端解析查询、契约适配与签名图片刷新
 │   ├── database.js                  SQLite 表结构与序列化
-│   ├── analyzer.js                  短剧分析
-│   ├── game-analyzer.js             游戏分析
+│   ├── analyzer.js                  历史本地短剧分析实现（当前首页流程不再调用）
+│   ├── game-analyzer.js             历史本地 App 分析实现（当前首页流程不再调用）
 │   ├── creative-agent.js            Codex 创意会话
 │   ├── creative-telemetry.js        创意事件记录、outbox 与补发
 │   ├── local-telemetry-server.js    本地采集 API 与监控页服务
@@ -148,6 +147,10 @@ cp .env.example .env
 | --- | --- |
 | `PORT` | 本地服务端口，默认 `4180` |
 | `CODEX_ANALYSIS_MODEL` | 可选；留空时使用本机 Codex 默认模型 |
+| `AI_ANALYSIS_API_BASE_URL` | AI Analysis API 地址，默认 `https://developer.novvy.ai` |
+| `AI_ANALYSIS_API_KEY` | `adm_user.apikey`，后端以 Bearer 方式发送；未设置时兼容使用 `NOVVY_MCP_AUTHORIZATION` |
+| `AI_ANALYSIS_API_TIMEOUT_MS` | 查询超时，默认 30 秒 |
+| `AI_ANALYSIS_API_CACHE_TTL_MS` | 详情与签名图片解析缓存，默认 5 分钟 |
 | `NOVVY_MCP_URL` | Novvy MCP 地址 |
 | `NOVVY_MCP_AUTHORIZATION` | Novvy MCP 鉴权；本地也可读取已安装插件配置 |
 | `IMAROUTER_API_KEY` | ImaRouter API 密钥 |
@@ -340,7 +343,7 @@ npx codex login
 cp .env.example .env
 ```
 
-`@openai/codex-sdk` 会通过 npm 安装项目所需的 Codex CLI，因此不需要另外全局安装 Codex。`npx codex login` 仍然是必需的：短剧分析、游戏分析、创意助手对话、创意方案、剧情台词、文字分镜和视频提示词都会使用该登录状态。
+`@openai/codex-sdk` 会通过 npm 安装项目所需的 Codex CLI，因此不需要另外全局安装 Codex。`npx codex login` 仍然是必需的：创意助手对话、创意方案、剧情台词、文字分镜和视频提示词会使用该登录状态；短剧和 App 解析改由 AI Analysis API 提供，不使用本机 Codex 登录。
 
 推荐使用启动脚本：
 
