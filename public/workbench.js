@@ -10,6 +10,7 @@ const pendingImageMasks = new Map();
 const pendingChatFiles = [];
 let pendingChatPreviewUrls = [];
 const selectedCharacterIds = new Set();
+let selectedStoryboardGroupId = "";
 let currentSession = null;
 let directorLibrary = [];
 let directorLibraryPromise = null;
@@ -1547,20 +1548,55 @@ function renderCharacterGroupActions(session) {
 
 function renderStoryboardGroupActions(session, storyboardCards) {
   const panel = element("section", "character-group-actions storyboard-group-actions");
-  panel.append(element("strong", "", "逐镜分镜图操作"), element("p", "", "可以继续逐张修改；全部画面符合预期后，统一确认这组分镜图并自动生成视频提示词。"));
+  const storyboardTitleById = new Map((session.messages || []).flatMap((message) => message.cards || []).filter((card) => card.kind === "storyboard").map((card) => [card.id, card.title]));
+  const storyboardIdFor = (card) => String(card.details?.find((item) => item.label === "所属方案")?.content || "");
+  const groups = new Map();
+  storyboardCards.forEach((card) => {
+    const storyboardId = storyboardIdFor(card);
+    if (!storyboardId) return;
+    if (!groups.has(storyboardId)) groups.set(storyboardId, []);
+    groups.get(storyboardId).push(card);
+  });
+  const groupIds = [...groups.keys()];
+  if (!groups.has(selectedStoryboardGroupId)) selectedStoryboardGroupId = groupIds.length === 1 ? groupIds[0] : "";
+  panel.append(element("strong", "", "选择一套逐镜分镜图"), element("p", "", groupIds.length > 1 ? "当前有多套分镜图候选。请选择一整套方案确认，系统不会混合不同方案的镜头。" : "可以继续逐张修改；全部画面符合预期后，统一确认这组分镜图并自动生成视频提示词。"));
+  const picker = element("fieldset", "storyboard-group-picker");
+  picker.append(element("legend", "", "分镜方案（单选）"));
+  const choices = [];
+  groupIds.forEach((storyboardId, index) => {
+    const cards = groups.get(storyboardId);
+    const readyCount = cards.filter((card) => card.previewUrl && card.status !== "generating").length;
+    const label = element("label", "storyboard-group-choice");
+    const radio = document.createElement("input"); radio.type = "radio"; radio.name = "storyboard-group"; radio.value = storyboardId; radio.checked = selectedStoryboardGroupId === storyboardId; radio.disabled = session.stage === "working";
+    const copy = element("span", "");
+    copy.append(element("b", "", storyboardTitleById.get(storyboardId) || `分镜方案 ${String.fromCharCode(65 + index)}`), element("small", "", `${readyCount}/${cards.length} 张已完成 · ${storyboardId}`));
+    label.append(radio, copy); picker.append(label); choices.push({ radio, label, storyboardId });
+  });
+  if (groupIds.length) panel.append(picker);
   const approve = element("button", "character-group-approve", "统一确认这组分镜图");
   approve.type = "button";
   approve.classList.add("workflow-confirm-action"); approve.dataset.workflowStages = "storyboard_review"; approve.dataset.workflowLabel = "统一确认这组分镜图"; approve.dataset.workflowPriority = "100";
-  const failedCards = storyboardCards.filter((card) => !card.previewUrl && card.status !== "generating");
-  approve.disabled = session.stage === "working" || !storyboardCards.length || storyboardCards.some((card) => !card.previewUrl || card.status === "generating");
+  const selectedCards = () => groups.get(selectedStoryboardGroupId) || [];
+  const updateSelection = () => {
+    choices.forEach(({ label, storyboardId }) => label.classList.toggle("selected", storyboardId === selectedStoryboardGroupId));
+    const cards = selectedCards();
+    const complete = cards.length && cards.every((card) => card.previewUrl && card.status !== "generating");
+    approve.disabled = session.stage === "working" || !complete;
+    approve.textContent = selectedStoryboardGroupId ? `确认所选方案（${cards.length} 张）` : "请先选择一套分镜方案";
+  };
+  choices.forEach(({ radio, storyboardId }) => radio.addEventListener("change", () => { selectedStoryboardGroupId = storyboardId; updateSelection(); }));
+  updateSelection();
   approve.addEventListener("click", async () => {
+    const cards = selectedCards();
+    if (!selectedStoryboardGroupId || !cards.length) return alert("请先选择一套分镜方案。");
     try {
       approve.disabled = true; approve.textContent = "正在确认…";
-      await api(`/api/creative/sessions/${sessionId}/storyboards/approve`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cardIds: storyboardCards.map((card) => card.id) }) });
+      await api(`/api/creative/sessions/${sessionId}/storyboards/approve`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cardIds: cards.map((card) => card.id) }) });
       await refreshSession();
     } catch (error) { approve.disabled = false; approve.textContent = "统一确认这组分镜图"; alert(error.message); }
   });
   panel.append(approve);
+  const failedCards = selectedCards().filter((card) => !card.previewUrl && card.status !== "generating");
   if (failedCards.length) {
     const retry = element("button", "character-group-retry", `重试失败的分镜图（${failedCards.length} 张）`); retry.type = "button"; retry.disabled = session.stage === "working";
     retry.addEventListener("click", async () => {
