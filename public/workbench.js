@@ -1739,10 +1739,11 @@ function renderCurrentTask(session) {
     .filter((action) => !action.hidden && String(action.dataset.workflowStages || "").split(/\s+/).includes(session.stage))
     .sort((left, right) => Number(right.dataset.workflowPriority || 0) - Number(left.dataset.workflowPriority || 0));
   const currentAction = candidates[0] || null;
+  const workingTask = session.stage === "working" ? describeWorkingTask(session) : null;
   const copy = element("div", "chat-current-task-copy");
-  copy.append(element("small", "", "当前待处理"), element("strong", "", stageLabels[session.stage] || "继续当前创作"));
+  copy.append(element("small", "", session.stage === "working" ? "当前正在执行" : "当前待处理"), element("strong", "", workingTask?.title || stageLabels[session.stage] || "继续当前创作"));
   const description = session.stage === "working"
-    ? "正在处理，完成后会更新当前任务"
+    ? `${workingTask?.description || "正在处理，完成后会更新当前任务"} · 已用时 ${elapsedLabel(processingTime(session))}`
     : currentAction ? currentAction.dataset.workflowLabel : "当前没有需要确认才能继续的步骤";
   copy.append(element("p", "", description));
   const button = element("button", "", currentAction ? "定位到待确认步骤" : session.stage === "working" ? "处理中" : "暂无待确认");
@@ -1756,6 +1757,35 @@ function renderCurrentTask(session) {
     setTimeout(() => target.classList.remove("current-task-highlight"), 1800);
   });
   const row = element("div", "chat-current-task-row"); row.append(copy, button); panel.append(row);
+}
+
+function describeWorkingTask(session) {
+  const workspace = session.workspace || {};
+  const plan = workspace.productionPlan || {};
+  const messages = session.messages || [];
+  const recentMessages = messages.slice(-8);
+  const latestCards = new Map();
+  for (const message of messages) for (const card of message.cards || []) if (card?.id) latestCards.set(card.id, card);
+  const latestGenerating = [...latestCards.values()].filter((card) => card.status === "generating").at(-1);
+  if (latestGenerating?.kind === "character_image") {
+    const sixView = (latestGenerating.details || []).some((item) => item.label === "参考类型" && item.content === "人物六视图面板");
+    return sixView
+      ? { title: `正在生成${latestGenerating.title || "人物六视图面板"}`, description: "完成后需要逐张审核并确认每个人物的六视图面板" }
+      : { title: `正在生成人物候选`, description: latestGenerating.title || "正在保持人物身份并生成新版本" };
+  }
+  if (latestGenerating?.kind === "storyboard_image") return { title: "正在生成逐镜分镜图", description: latestGenerating.title || "完成后可以逐镜修改或统一确认" };
+  if (latestGenerating?.kind === "final_card") return { title: "正在生成真实落版图", description: "完成后需要审核画面、英文文字和 CTA" };
+  if (latestGenerating?.kind === "video_shot") return { title: "正在生成逐镜视频", description: latestGenerating.title || "完成后可以逐镜播放复审" };
+  if (["reference_image", "prop_image"].includes(latestGenerating?.kind)) return { title: "正在生成图片资产", description: latestGenerating.title || "完成后会加入资产区域" };
+  const recentText = recentMessages.map((message) => message.content || "").join("\n");
+  if (plan.sixViewStatus === "generating") return { title: "正在生成人物六视图面板", description: "系统正在按人物补齐六个固定角度" };
+  if (plan.videoGenerationStatus === "generating" || /生成逐镜视频|生成视频/.test(recentText)) return { title: "正在生成逐镜视频", description: "正在提交或查询当前镜头的视频任务" };
+  if (plan.videoPromptStatus === "pending" || /生成正式\s*video_prompt|生成正式视频提示词|自动生成正式视频提示词/.test(recentText)) return { title: "正在生成正式视频提示词", description: "正在汇总已确认分镜图、人物参考与落版图" };
+  if (plan.finalCardStatus === "direction_pending" || /生成.*落版方向/.test(recentText)) return { title: "正在生成落版方向候选", description: "正在准备末镜衔接、构图、英文文案与 CTA" };
+  if (/生成.*视听方向/.test(recentText)) return { title: "正在生成视听方向", description: "正在整理可执行的镜头、灯光、剪辑与声音参数" };
+  if (/生成.*(?:剧情与分镜|storyboard)/i.test(recentText)) return { title: "正在生成剧情与文字分镜", description: "正在编排剧情、镜头动作和玩法展示" };
+  if (/落版图/.test(recentText)) return { title: "正在处理落版图", description: "完成后会更新当前落版任务" };
+  return { title: "Novvy 正在处理当前任务", description: "完成后会自动显示下一项需要你确认的内容" };
 }
 
 function humanThinkingReply(message) {

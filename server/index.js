@@ -707,6 +707,17 @@ function recoverInterruptedCreativeTurns() {
     }
     let workspace = {};
     try { workspace = JSON.parse(session.workspace_json || "{}"); } catch { workspace = {}; }
+    if (workspace.productionPlan?.videoPromptStatus === "pending" && workspace.productionPlan?.finalCardStatus === "approved") {
+      const hasVideoPrompt = db.prepare("SELECT 1 FROM creative_messages WHERE session_id=? AND cards_json LIKE '%\"kind\":\"video_prompt\"%' LIMIT 1").get(session.id);
+      if (!hasVideoPrompt) {
+        const timestamp = now();
+        db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, session.id);
+        db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
+          .run(session.id, "检测到服务重启中断了正式视频提示词生成，现已从已确认落版图继续恢复，不会退回人物或分镜阶段。", timestamp);
+        setImmediate(() => runCreativeTurn(session.id, "服务重启中断了正式视频提示词生成。请基于已确认的创意、人物参考、落版方向、视听方向、文字分镜、逐镜图片和真实落版图，立即生成正式 video_prompt 审核卡；保留所有已确认成果，不要退回任何前置阶段，也不要提交视频生成。", false));
+        continue;
+      }
+    }
     if (workspace.productionPlan?.videoPromptStatus === "storyboard_pending") {
       const hasStoryboard = db.prepare("SELECT 1 FROM creative_messages WHERE session_id=? AND cards_json LIKE '%\"kind\":\"storyboard\"%' LIMIT 1").get(session.id);
       if (!hasStoryboard) {
