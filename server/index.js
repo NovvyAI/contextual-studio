@@ -11,7 +11,7 @@ import { runCreativeTurn } from "./creative-agent.js";
 import { approveFinalCard, approveFinalCardDirection, startFinalCardGeneration, startFinalCardRegeneration } from "./image-generator.js";
 import { approveCharacterReferences, prepareCharacterReferenceReview, startCharacterRegeneration, startCustomCharacterGeneration } from "./character-generator.js";
 import { approveAudiovisualDirection } from "./audiovisual-direction.js";
-import { startVideoGeneration } from "./video-generator.js";
+import { resumeNovvyStoryboardVideoGeneration, startVideoGeneration } from "./video-generator.js";
 import { resumeImaRouterVideoGeneration, startImaRouterVideoGeneration } from "./imarouter-video-generator.js";
 import { approveStoryboardImages, retryFailedStoryboardImages, startStoryboardImageGeneration, startStoryboardImageRegeneration, startStoryboardImageRegenerationByNumber } from "./storyboard-generator.js";
 import { approveAndFinalizeVideoShots, approveFinalVideo } from "./video-shot-review.js";
@@ -639,14 +639,41 @@ const server = http.createServer(async (req, res) => {
 });
 
 function recoverInterruptedCreativeTurns() {
-  const interrupted = db.prepare("SELECT * FROM creative_sessions WHERE stage='working'").all();
+  const interrupted = db.prepare(`
+    SELECT DISTINCT s.*
+    FROM creative_sessions s
+    LEFT JOIN creative_video_shots pending
+      ON pending.session_id=s.id AND pending.status='generating'
+    LEFT JOIN creative_video_shots completed
+      ON completed.session_id=s.id
+      AND completed.prompt_card_id=pending.prompt_card_id
+      AND completed.provider=pending.provider
+      AND completed.status IN ('completed','approved')
+      AND completed.result_url IS NOT NULL
+    WHERE s.stage='working' OR (pending.id IS NOT NULL AND completed.id IS NOT NULL)
+  `).all();
   for (const session of interrupted) {
-    const interruptedVideo = db.prepare("SELECT prompt_card_id FROM creative_video_shots WHERE session_id=? AND provider='imarouter' AND status='generating' AND task_id IS NOT NULL ORDER BY id DESC LIMIT 1").get(session.id);
-    if (interruptedVideo) {
+    const interruptedVideo = db.prepare("SELECT prompt_card_id,provider,status,task_id,updated_at FROM creative_video_shots WHERE session_id=? ORDER BY CASE WHEN status='generating' THEN 0 ELSE 1 END,id DESC LIMIT 1").get(session.id);
+    const hasPartialVideoBatch = interruptedVideo && db.prepare(`
+      SELECT 1
+      FROM creative_video_shots pending
+      JOIN creative_video_shots completed
+        ON completed.session_id=pending.session_id
+        AND completed.prompt_card_id=pending.prompt_card_id
+        AND completed.provider=pending.provider
+      WHERE pending.session_id=? AND pending.prompt_card_id=? AND pending.status='generating'
+        AND completed.status IN ('completed','approved') AND completed.result_url IS NOT NULL
+      LIMIT 1
+    `).get(session.id, interruptedVideo.prompt_card_id);
+    const videoWasActiveAtRestart = interruptedVideo && (hasPartialVideoBatch || (session.stage === "working" && Date.parse(interruptedVideo.updated_at || "") >= Date.parse(session.updated_at || "")));
+    if (videoWasActiveAtRestart) {
       const timestamp = now();
       db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
-        .run(session.id, "检测到 ImaRouter 视频轮询中断，正在从已保存的任务 ID 恢复；不会重新提交已创建的镜头。", timestamp);
-      setImmediate(() => resumeImaRouterVideoGeneration(session.id, interruptedVideo.prompt_card_id));
+        .run(session.id, `检测到${interruptedVideo.provider === "imarouter" ? " ImaRouter" : " Novvy MCP"} 逐镜视频任务被服务重启中断，正在恢复未完成镜头；已经成功的镜头会保留，不会重新生成，也不会退回导演或剧情阶段。`, timestamp);
+      setImmediate(() => {
+        if (interruptedVideo.provider === "imarouter") resumeImaRouterVideoGeneration(session.id, interruptedVideo.prompt_card_id);
+        else resumeNovvyStoryboardVideoGeneration(session.id, interruptedVideo.prompt_card_id);
+      });
       continue;
     }
     const latestCardRow = db.prepare("SELECT cards_json FROM creative_messages WHERE session_id=? AND cards_json IS NOT NULL ORDER BY id DESC LIMIT 1").get(session.id);

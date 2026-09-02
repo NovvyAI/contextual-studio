@@ -63,6 +63,24 @@ export function startVideoGeneration(sessionId, cardId) {
   generate(sessionId, card, plan, referenceUrls, storyboardUrls, generateAudio);
 }
 
+export function resumeNovvyStoryboardVideoGeneration(sessionId, cardId) {
+  const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
+  if (!session) throw new Error("创意工作台不存在");
+  const card = allCards(sessionId).find((item) => item.id === cardId && item.kind === "video_prompt");
+  if (!card) throw new Error("找不到待恢复的视频提示词卡");
+  const plan = parseStoryboardVideoPlan(card);
+  const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
+  const referenceGroup = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "reference_panel" && item.status === "confirmed");
+  const referenceUrls = (referenceGroup?.details || []).map((item) => referenceUrl(item.content)).filter(Boolean);
+  const confirmedStoryboard = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "storyboard" && item.status === "confirmed");
+  const storyboardUrls = (confirmedStoryboard?.details || []).map((item) => referenceUrl(item.content)).filter(Boolean);
+  if (!referenceUrls.length) throw new Error("已确认人物参考图组为空");
+  if (storyboardUrls.length < plan.shots.length) throw new Error(`已确认分镜图不足：需要 ${plan.shots.length} 张，当前只有 ${storyboardUrls.length} 张`);
+  const generateAudio = !/OutputAudioSensitiveContentDetected|output audio.*copyright/i.test(session.error_message || "");
+  db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(now(), sessionId);
+  generate(sessionId, card, plan, referenceUrls, storyboardUrls, generateAudio);
+}
+
 export function resumeVideoGeneration(sessionId, cardId, taskId, providerSessionId = "") {
   const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
   if (!session) throw new Error("创意工作台不存在");
@@ -91,26 +109,34 @@ async function generate(sessionId, card, plan, referenceUrls, storyboardUrls, ge
     const client = new NovvyMcpClient(); await client.initialize();
     for (const shot of plan.shots) {
       const createdAt = now();
-      const version = Number(db.prepare("SELECT COALESCE(MAX(version),0)+1 version FROM creative_video_shots WHERE session_id=? AND prompt_card_id=? AND shot_id=?").get(sessionId, card.id, shot.shotId).version);
-      db.prepare("INSERT INTO creative_video_shots (session_id,prompt_card_id,shot_id,shot_order,version,provider,duration_seconds,prompt,status,created_at,updated_at) VALUES (?,?,?,?,?,'novvy',?,?,'generating',?,?)")
-        .run(sessionId, card.id, shot.shotId, shot.order, version, shot.durationSeconds, shot.promptEn, createdAt, createdAt);
+      const existing = db.prepare("SELECT * FROM creative_video_shots WHERE session_id=? AND prompt_card_id=? AND shot_id=? ORDER BY version DESC LIMIT 1").get(sessionId, card.id, shot.shotId);
+      if (existing?.status === "completed" && existing.result_url) continue;
+      const version = existing?.status === "generating" ? Number(existing.version) : Number(db.prepare("SELECT COALESCE(MAX(version),0)+1 version FROM creative_video_shots WHERE session_id=? AND prompt_card_id=? AND shot_id=?").get(sessionId, card.id, shot.shotId).version);
+      if (existing?.status !== "generating") {
+        db.prepare("INSERT INTO creative_video_shots (session_id,prompt_card_id,shot_id,shot_order,version,provider,duration_seconds,prompt,status,created_at,updated_at) VALUES (?,?,?,?,?,'novvy',?,?,'generating',?,?)")
+          .run(sessionId, card.id, shot.shotId, shot.order, version, shot.durationSeconds, shot.promptEn, createdAt, createdAt);
+      }
       const storyboardImageUrl = storyboardImageUrls[shot.order - 1];
       if (!storyboardImageUrl) throw new Error(`${shot.shotId}：缺少同序号的已确认分镜图`);
       const prompt = `The single imageUrls reference is the approved storyboard frame for this exact shot. Use it as the primary constraint for composition, camera angle, scene layout, action, pose, and object placement. The humanImageUrls references control character identity, facial features, age, hairstyle, costume, and accessories. ${shot.promptEn}`;
-      const created = unpackToolResult(await client.callTool("novvy_create_video_generation", {
-        model: "seedance-2.0-fast", prompt, imageUrls: [storyboardImageUrl], humanImageUrls, ratio: "9:16", duration: shot.durationSeconds, resolution: "720p", generateAudio, includeRaw: false,
-      }));
-      const taskId = valueFor(created, ["taskId", "task_id", "id"]); const providerSessionId = valueFor(created, ["sessionId", "session_id"]);
-      if (!taskId && !providerSessionId) throw new Error(`${shot.shotId}：Novvy 未返回视频任务 ID`);
-      db.prepare("UPDATE creative_video_shots SET task_id=?,provider_session_id=?,updated_at=? WHERE session_id=? AND prompt_card_id=? AND shot_id=? AND version=?")
-        .run(taskId, providerSessionId, now(), sessionId, card.id, shot.shotId, version);
-      let result = created;
+      let taskId = existing?.status === "generating" ? existing.task_id : "";
+      let providerSessionId = existing?.status === "generating" ? existing.provider_session_id : "";
+      let result = null;
+      if (!taskId && !providerSessionId) {
+        result = unpackToolResult(await client.callTool("novvy_create_video_generation", {
+          model: "seedance-2.0-fast", prompt, imageUrls: [storyboardImageUrl], humanImageUrls, ratio: "9:16", duration: shot.durationSeconds, resolution: "720p", generateAudio, includeRaw: false,
+        }));
+        taskId = valueFor(result, ["taskId", "task_id", "id"]); providerSessionId = valueFor(result, ["sessionId", "session_id"]);
+        if (!taskId && !providerSessionId) throw new Error(`${shot.shotId}：Novvy 未返回视频任务 ID`);
+        db.prepare("UPDATE creative_video_shots SET task_id=?,provider_session_id=?,updated_at=? WHERE session_id=? AND prompt_card_id=? AND shot_id=? AND version=?")
+          .run(taskId, providerSessionId, now(), sessionId, card.id, shot.shotId, version);
+      }
       const deadline = Date.now() + 30 * 60 * 1000;
       let previewUrl = resultUrl(result);
       while (!previewUrl && Date.now() < deadline) {
         const status = valueFor(result, ["status", "state"]).toLowerCase();
         if (/fail|error|cancel/.test(status)) throw new Error(`${shot.shotId}：${valueFor(result, ["errorMessage", "message", "error"]) || "视频生成失败"}`);
-        await wait(8000);
+        if (result) await wait(8000);
         result = unpackToolResult(await client.callTool("novvy_query_generation", { ...(taskId ? { taskId } : {}), ...(providerSessionId ? { sessionId: providerSessionId } : {}), model: "seedance-2.0-fast", includeRaw: false }));
         previewUrl = resultUrl(result);
       }
