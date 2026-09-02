@@ -133,26 +133,50 @@ export function dramaReferenceImageCandidates(analysis) {
 // derived object is never persisted in the analysis artifact.
 export function dramaAnalysisView(analysis) {
   const episode = assertDramaAnalysisV3(analysis);
-  const detailed = episode.detailedAnalysis;
-  const confidenceNotes = detailed.confidenceNotes || {};
+  const episodes = analysis.episodeAnalyses.filter((item) => item?.detailedAnalysis);
+  const detailedEpisodes = episodes.map((item, index) => ({ item, detailed: item.detailedAnalysis, episodeNumber: Number(item.episodeNumber || index + 1) }));
+  const plot = analysis.remoteAnalysis?.aiPlot || {};
+  const prefixTimeRange = (episodeNumber, value) => {
+    const timeRange = typeof value === "string" ? value.trim() : "";
+    if (/^第\s*\d+\s*集/.test(timeRange)) return timeRange;
+    return `第 ${episodeNumber} 集${timeRange ? ` · ${timeRange}` : ""}`;
+  };
+  const unique = (items, keyOf) => [...new Map(items.map((item) => [keyOf(item), item])).values()];
+  const chronology = detailedEpisodes.flatMap(({ detailed, episodeNumber }) => (detailed.chronology || []).map((item) => ({ ...item, timeRange: prefixTimeRange(episodeNumber, item.timeRange) })));
+  const emotionalCurve = detailedEpisodes.flatMap(({ detailed, episodeNumber }) => (detailed.emotionalCurve || []).map((item) => ({ ...item, timeRange: prefixTimeRange(episodeNumber, item.timeRange) })));
+  const characters = unique(detailedEpisodes.flatMap(({ detailed }) => detailed.characters || []), (item) => item.role || JSON.stringify(item));
+  const episodeMotifs = detailedEpisodes.flatMap(({ detailed }) => detailed.motifs || []);
+  const plotMotifs = [...(Array.isArray(plot.themes) ? plot.themes : []), ...(Array.isArray(plot.tags) ? plot.tags : [])]
+    .map((value) => ({ name: String(value || ""), appearance: String(value || ""), dramaticMeaning: String(value || ""), reusableBridge: "" }));
+  const motifs = unique([...plotMotifs, ...episodeMotifs], (item) => item.name || item.element || JSON.stringify(item));
+  const firstDetailed = detailedEpisodes[0]?.detailed || {};
+  const lastDetailed = detailedEpisodes.at(-1)?.detailed || episode.detailedAnalysis;
+  const confidenceNotes = lastDetailed.confidenceNotes || {};
+  const limitations = unique(detailedEpisodes.flatMap(({ detailed, item }) => detailed.confidenceNotes?.limitations || item.risksAndUncertainties || []), (item) => String(item));
   return {
     contract: dramaAnalysisContract,
-    oneSentenceThesis: detailed.oneSentenceThesis || episode.oneLineSummary || "",
-    synopsis: detailed.synopsis || "",
-    chronology: detailed.chronology || [],
-    characters: detailed.characters || [],
-    emotionalCurve: detailed.emotionalCurve || [],
-    keyDialogue: detailed.keyDialogue || [],
-    motifs: detailed.motifs || [],
-    hookAndCliffhanger: detailed.hookAndCliffhanger || {},
-    creativeHandoff: detailed.creativeHandoff || { safeToReuse: [], continuityRisks: [], transitionOpportunities: [] },
+    oneSentenceThesis: plot.title_guess || firstDetailed.oneSentenceThesis || episode.oneLineSummary || "",
+    synopsis: plot.overall_synopsis || detailedEpisodes.map(({ detailed }) => detailed.synopsis).filter(Boolean).join("\n"),
+    chronology,
+    characters,
+    emotionalCurve,
+    keyDialogue: detailedEpisodes.flatMap(({ detailed }) => detailed.keyDialogue || []),
+    motifs,
+    hookAndCliffhanger: {
+      openingHook: Array.isArray(plot.timeline) ? plot.timeline[0] || "" : firstDetailed.hookAndCliffhanger?.openingHook || "",
+      retentionMechanism: firstDetailed.hookAndCliffhanger?.retentionMechanism || "",
+      endingState: Array.isArray(plot.timeline) ? plot.timeline.at(-1) || "" : lastDetailed.hookAndCliffhanger?.endingState || "",
+      cliffhangerMechanic: lastDetailed.hookAndCliffhanger?.cliffhangerMechanic || "",
+    },
+    creativeHandoff: lastDetailed.creativeHandoff || { safeToReuse: [], continuityRisks: [], transitionOpportunities: [] },
     visualStyle: episode.visualStyle || {},
     referenceImageCandidates: dramaReferenceImageCandidates(analysis),
+    episodeAnalyses: detailedEpisodes.map(({ item, episodeNumber }) => ({ episodeNumber, aiStatus: item.aiStatus || "", oneLineSummary: item.oneLineSummary || "", detailedAnalysis: item.detailedAnalysis })),
     confidence: {
       overall: episode.confidence || "low",
       observed: confidenceNotes.observed || [],
       strongInferences: confidenceNotes.strongInferences || [],
-      limitations: confidenceNotes.limitations || episode.risksAndUncertainties || [],
+      limitations,
     },
     narrativeContinuity: episode.narrativeContinuity || {},
   };

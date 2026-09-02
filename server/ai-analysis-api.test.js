@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { adaptDramaAnalysis, adaptProductAnalysis, dramaDetailView, productDetailView } from "./ai-analysis-api.js";
+import { dramaAnalysisView } from "./drama-analysis-v3.js";
 
 const dramaId = "5f3c9b2a-1e4d-4a7b-8c2f-9d6e0a1b2c3d";
 const productId = "9a1f2b3c-4d5e-4f60-9182-3a4b5c6d7e8f";
@@ -22,15 +23,46 @@ test("adapts AI Analysis API drama results without discarding remote evidence", 
       },
       aiAnalyzedAt: "2026-08-31T04:12:30.000Z",
     },
-    episodes: [{ episodeNumber: 1, aiStatus: "DONE", aiSummary: { synopsis: "代嫁开始" }, sheetImages: [{ object: "episodes/1/sheet.jpg", url: "https://example.com/sheet.jpg" }] }],
+    episodes: [
+      { episodeNumber: 2, aiStatus: "DONE", aiSummary: { synopsis: "身份被揭穿" } },
+      {
+        videoAssetId: "episode-one",
+        episodeNumber: 1,
+        aiStatus: "DONE",
+        aiSummary: {
+          synopsis: "代嫁开始",
+          scenes: ["酒店餐厅"],
+          characters: [{
+            label: "穿白色连衣裙的年轻女性",
+            prominence: "主要人物",
+            emotion_arc: "从紧张转为震惊",
+            emotions: [{ emotion: "震惊", intensity: "高", trigger: "听到契约条件", evidence: "睁大双眼并后仰", ts: "00:00:43" }],
+          }],
+        },
+        sheetImages: [{ object: "episodes/1/sheet.jpg", url: "https://example.com/sheet.jpg" }],
+      },
+    ],
   };
   const result = adaptDramaAnalysis(payload);
   assert.equal(result.contract, "novvy.video-analysis.v3");
   assert.equal(result.externalSource.id, dramaId);
-  assert.equal(result.episodeAnalyses[0].detailedAnalysis.synopsis, "女主被迫代嫁后争取自己的生活。");
+  assert.equal(result.episodeAnalyses.length, 2);
+  assert.equal(result.episodeAnalyses[0].episodeNumber, 1);
+  assert.equal(result.episodeAnalyses[0].videoAssetId, "episode-one");
+  assert.equal(result.episodeAnalyses[0].detailedAnalysis.synopsis, "代嫁开始");
+  assert.equal(result.episodeAnalyses[0].detailedAnalysis.emotionalCurve[0].characterEmotion, "震惊");
+  assert.equal(result.episodeAnalyses[0].detailedAnalysis.emotionalCurve[0].evidence, "睁大双眼并后仰");
+  assert.equal(result.episodeAnalyses[1].episodeNumber, 2);
+  assert.equal(result.episodeAnalyses[1].detailedAnalysis.synopsis, "身份被揭穿");
   assert.equal(result.episodeAnalyses[0].characterLibrary.characters[0].candidates[0].url, `/api/analysis-media/dramas/${dramaId}/character-0`);
   assert.equal(result.sourceMedia[1].url, `/api/analysis-media/dramas/${dramaId}/episode-1-sheet-0`);
   assert.equal(result.remoteAnalysis.aiPlot.main_characters[0].image_gcs, "characters/lin-yue.jpg");
+  assert.deepEqual(result.remoteAnalysis.episodes.map((item) => item.episodeNumber), [1, 2]);
+  const analysisView = dramaAnalysisView(result);
+  assert.equal(analysisView.synopsis, "女主被迫代嫁后争取自己的生活。");
+  assert.equal(analysisView.episodeAnalyses.length, 2);
+  assert.match(analysisView.chronology[0].timeRange, /^第 1 集/);
+  assert.equal(analysisView.emotionalCurve[0].characterEmotion, "震惊");
   const detail = dramaDetailView(payload);
   assert.equal(detail.status, "completed");
   assert.equal(detail.screenshots.length, 1);

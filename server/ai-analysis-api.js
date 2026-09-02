@@ -155,15 +155,90 @@ function timelineItem(value, index) {
 }
 
 function characterItem(character) {
-  const role = text(character?.role, text(character?.name, "主要人物"));
+  const name = text(character?.name, text(character?.label));
+  const role = text(character?.role, text(character?.prominence, name || "主要人物"));
   return {
-    role: text(character?.name) ? `${character.name} · ${role}` : role,
-    appearance: "",
+    role: name && name !== role ? `${name} · ${role}` : role,
+    appearance: text(character?.label),
     desire: "unknown",
     vulnerability: "unknown",
-    keyChoice: text(character?.arc, "unknown"),
+    keyChoice: text(character?.arc, text(character?.emotion_arc, "unknown")),
     relationshipMovement: text(character?.arc, "unknown"),
     confidence: "observed",
+  };
+}
+
+function episodeLabel(episodeNumber) {
+  return episodeNumber > 0 ? `第 ${episodeNumber} 集` : "分集";
+}
+
+function episodeEmotionCurve(summary, episodeNumber) {
+  const output = [];
+  asArray(summary.characters).forEach((character, characterIndex) => {
+    const characterName = text(character?.label, `人物 ${characterIndex + 1}`);
+    const emotions = asArray(character?.emotions).slice().sort((left, right) => text(left?.ts).localeCompare(text(right?.ts)));
+    emotions.forEach((emotion) => {
+      const emotionName = text(emotion?.emotion, "情绪未标注");
+      const intensity = text(emotion?.intensity);
+      const timestamp = text(emotion?.ts);
+      output.push({
+        timeRange: `${episodeLabel(episodeNumber)}${timestamp ? ` · ${timestamp}` : ""}`,
+        stimulus: text(emotion?.trigger),
+        audienceEmotion: `${characterName}：${emotionName}${intensity ? `（${intensity}）` : ""}`,
+        viewingImpulse: "",
+        evidence: text(emotion?.evidence),
+        character: characterName,
+        characterEmotion: emotionName,
+        intensity,
+      });
+    });
+    if (!emotions.length && text(character?.emotion_arc)) {
+      output.push({
+        timeRange: episodeLabel(episodeNumber),
+        stimulus: text(character.emotion_arc),
+        audienceEmotion: `${characterName}：情绪变化`,
+        viewingImpulse: "",
+        evidence: text(character.emotion_arc),
+        character: characterName,
+        characterEmotion: text(character.emotion_arc),
+        intensity: "",
+      });
+    }
+  });
+  return output;
+}
+
+function episodeMotifs(summary) {
+  return asArray(summary.objects).map((item) => {
+    const name = typeof item === "string" ? text(item) : text(item?.name);
+    const brand = typeof item === "string" ? "" : text(item?.brand);
+    return { name, appearance: brand ? `${name} · ${brand}` : name, dramaticMeaning: "", reusableBridge: "" };
+  }).filter((item) => item.name);
+}
+
+function episodeDetailedAnalysis(episode, episodeNumber) {
+  const summary = asObject(episode?.aiSummary);
+  const synopsis = text(summary.synopsis);
+  const characters = asArray(summary.characters);
+  const emotionalCurve = episodeEmotionCurve(summary, episodeNumber);
+  const limitations = [];
+  if (!Object.keys(summary).length) limitations.push(`${episodeLabel(episodeNumber)}尚未返回 AI 分集解析。`);
+  else if (!emotionalCurve.length) limitations.push(`${episodeLabel(episodeNumber)}的远端解析未提供人物情绪节点。`);
+  return {
+    oneSentenceThesis: synopsis || episodeLabel(episodeNumber),
+    synopsis,
+    chronology: synopsis ? [{ timeRange: episodeLabel(episodeNumber), beat: synopsis, action: synopsis, decisionOrShift: "", audienceEmotion: "" }] : [],
+    characters: characters.map(characterItem),
+    emotionalCurve,
+    keyDialogue: [],
+    motifs: episodeMotifs(summary),
+    hookAndCliffhanger: { openingHook: "", retentionMechanism: "", endingState: "", cliffhangerMechanic: "" },
+    creativeHandoff: { safeToReuse: [], continuityRisks: [], transitionOpportunities: [] },
+    confidenceNotes: {
+      observed: Object.keys(summary).length ? [`${episodeLabel(episodeNumber)}内容来自 AI Analysis API 的分集解析。`] : [],
+      strongInferences: [],
+      limitations,
+    },
   };
 }
 
@@ -173,7 +248,7 @@ export function adaptDramaAnalysis(payload) {
   const sourceId = text(drama.dramaFolderId);
   const characters = asArray(plot.main_characters);
   const timeline = asArray(plot.timeline);
-  const episodes = asArray(payload?.episodes);
+  const episodes = asArray(payload?.episodes).slice().sort((left, right) => Number(left?.episodeNumber || 0) - Number(right?.episodeNumber || 0));
   const synopsis = text(plot.overall_synopsis) || episodes.map((episode) => text(episode?.aiSummary?.synopsis)).filter(Boolean).join("\n");
   const media = dramaMedia(payload).map((item) => ({ ...item, url: analysisMediaUrl("dramas", sourceId, item.key) }));
   const mediaByKey = new Map(media.map((item) => [item.key, item]));
@@ -197,45 +272,51 @@ export function adaptDramaAnalysis(payload) {
     unassignedCandidateIds: [],
     limitations: characters.length ? ["人物图片是远端整剧分析选取的代表帧，未提供精确时间码和多角度分类。"] : ["远端分析未提供主要人物代表帧。"],
   };
-  const detailedAnalysis = {
+  const fallbackDetailedAnalysis = {
     oneSentenceThesis: text(plot.title_guess) || text(drama.dramaTitle, "短剧整剧分析"),
     synopsis,
     chronology: timeline.map(timelineItem),
     characters: characters.map(characterItem),
-    emotionalCurve: [],
-    keyDialogue: [],
+    emotionalCurve: [], keyDialogue: [],
     motifs: [...asArray(plot.themes), ...asArray(plot.tags)].map((value) => ({ name: text(value), appearance: text(value), dramaticMeaning: text(value), reusableBridge: "" })).filter((item) => item.name),
-    hookAndCliffhanger: {
-      openingHook: text(timeline[0]),
-      retentionMechanism: "",
-      endingState: text(timeline.at(-1)) || text(episodes.at(-1)?.aiSummary?.synopsis),
-      cliffhangerMechanic: "",
-    },
+    hookAndCliffhanger: { openingHook: text(timeline[0]), retentionMechanism: "", endingState: text(timeline.at(-1)), cliffhangerMechanic: "" },
     creativeHandoff: { safeToReuse: [], continuityRisks: [], transitionOpportunities: [] },
-    confidenceNotes: {
-      observed: ["内容来自 AI Analysis API 返回的整剧与分集解析结果。"],
-      strongInferences: [],
-      limitations: ["接口未提供关键对白、精确时间码、情绪曲线和人物多角度标注；这些字段保持为空。"],
-    },
+    confidenceNotes: { observed: ["内容来自 AI Analysis API 返回的整剧解析结果。"], strongInferences: [], limitations: ["接口没有返回分集解析，暂时保留整剧投影。"] },
   };
+  const episodeAnalyses = episodes.length ? episodes.map((episode, index) => {
+    const episodeNumber = Number(episode?.episodeNumber || index + 1);
+    const detailedAnalysis = episodeDetailedAnalysis(episode, episodeNumber);
+    return {
+      episodeNumber,
+      videoAssetId: text(episode?.videoAssetId),
+      aiStatus: text(episode?.aiStatus),
+      confidence: Object.keys(asObject(episode?.aiSummary)).length ? "observed" : "low",
+      oneLineSummary: detailedAnalysis.oneSentenceThesis,
+      visualStyle: { scenes: asArray(episode?.aiSummary?.scenes), onScreenText: asArray(episode?.aiSummary?.on_screen_text) },
+      narrativeContinuity: { lastFrameState: "" },
+      referenceImageCandidates: { slots: [], characterConsistencyRules: [], missingOrWeakSlots: ["male_front", "male_side", "female_front", "female_side"] },
+      characterLibrary,
+      risksAndUncertainties: detailedAnalysis.confidenceNotes.limitations,
+      detailedAnalysis,
+    };
+  }) : [{
+    episodeNumber: 1,
+    aiStatus: text(drama.aiStatus),
+    confidence: "observed",
+    oneLineSummary: fallbackDetailedAnalysis.oneSentenceThesis,
+    visualStyle: {}, narrativeContinuity: { lastFrameState: fallbackDetailedAnalysis.hookAndCliffhanger.endingState },
+    referenceImageCandidates: { slots: [], characterConsistencyRules: [], missingOrWeakSlots: ["male_front", "male_side", "female_front", "female_side"] },
+    characterLibrary, risksAndUncertainties: fallbackDetailedAnalysis.confidenceNotes.limitations, detailedAnalysis: fallbackDetailedAnalysis,
+  }];
   return {
     contract: "novvy.video-analysis.v3",
     engine: "novvy-ai-analysis-api",
     analyzedAt: drama.aiAnalyzedAt || null,
     episodeCount: Number(drama.episodeCount || episodes.length || 0),
-    episodeAnalyses: [{
-      confidence: "observed",
-      oneLineSummary: detailedAnalysis.oneSentenceThesis,
-      visualStyle: {},
-      narrativeContinuity: { lastFrameState: detailedAnalysis.hookAndCliffhanger.endingState },
-      referenceImageCandidates: { slots: [], characterConsistencyRules: [], missingOrWeakSlots: ["male_front", "male_side", "female_front", "female_side"] },
-      characterLibrary,
-      risksAndUncertainties: detailedAnalysis.confidenceNotes.limitations,
-      detailedAnalysis,
-    }],
+    episodeAnalyses,
     externalSource: { type: "novvy-ai-analysis-api", resource: "drama", id: sourceId, publisherId: text(drama.publisherId), aiStatus: text(drama.aiStatus), aiLastJobId: text(drama.aiLastJobId) },
     sourceMedia: media,
-    remoteAnalysis: { aiPlot: plot, episodes: episodes.map((episode) => ({ episodeNumber: episode.episodeNumber, fileName: episode.fileName, aiStatus: episode.aiStatus, aiSummary: episode.aiSummary, aiError: episode.aiError, aiAnalyzedAt: episode.aiAnalyzedAt })) },
+    remoteAnalysis: { aiPlot: plot, episodes: episodes.map((episode) => ({ videoAssetId: episode.videoAssetId, episodeNumber: episode.episodeNumber, fileName: episode.fileName, aiStatus: episode.aiStatus, aiSummary: episode.aiSummary, aiError: episode.aiError, aiAnalyzedAt: episode.aiAnalyzedAt })) },
   };
 }
 
