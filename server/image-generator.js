@@ -18,6 +18,18 @@ export function finalCardPrompt(card) {
   return String(detail?.content || "").trim();
 }
 
+function mergeCardDetails(...groups) {
+  const merged = new Map();
+  for (const details of groups) for (const item of details || []) if (item?.label) merged.set(item.label, item);
+  return [...merged.values()];
+}
+
+function richestFinalCard(sessionId, cardId) {
+  return allCards(sessionId)
+    .filter((item) => item.id === cardId && item.kind === "final_card")
+    .sort((left, right) => Number(Boolean(finalCardPrompt(right))) - Number(Boolean(finalCardPrompt(left))) || (right.details?.length || 0) - (left.details?.length || 0))[0];
+}
+
 function appendCardMessage(sessionId, content, card) {
   db.prepare("INSERT INTO creative_messages (session_id, role, content, cards_json, created_at) VALUES (?, 'assistant', ?, ?, ?)")
     .run(sessionId, content, JSON.stringify([card]), now());
@@ -29,8 +41,10 @@ export function startFinalCardGeneration(sessionId, cardId) {
   if (session.stage === "working") throw new Error("当前仍有任务正在处理");
   const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
   if (workspace.productionPlan?.finalCardStatus !== "ready_to_generate") throw new Error("真实落版图需在末镜分镜图确认后生成");
-  const card = allCards(sessionId).find((item) => item.id === cardId && item.kind === "final_card");
-  if (!card) throw new Error("找不到这张落版图候选卡");
+  const currentCard = allCards(sessionId).find((item) => item.id === cardId && item.kind === "final_card");
+  const sourceCard = richestFinalCard(sessionId, cardId);
+  if (!currentCard || !sourceCard) throw new Error("找不到这张落版图候选卡");
+  const card = { ...sourceCard, ...currentCard, details: mergeCardDetails(sourceCard.details, currentCard.details) };
   const prompt = finalCardPrompt(card);
   if (!prompt) throw new Error("这张候选卡缺少 GPT-image-2 英文提示词");
 
@@ -148,7 +162,7 @@ export function approveFinalCardDirection(sessionId, cardId) {
   if (session.stage !== "final_card_review") throw new Error("当前不在落版方向确认阶段");
   const currentWorkspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
   if (currentWorkspace.productionPlan?.finalCardStatus !== "direction_review") throw new Error("当前落版方向已经确认或尚未准备完成");
-  const card = allCards(sessionId).find((item) => item.id === cardId && item.kind === "final_card" && !item.previewUrl);
+  const card = richestFinalCard(sessionId, cardId);
   if (!card) throw new Error("找不到落版方向候选");
   const timestamp = now();
   const workspace = currentWorkspace;
@@ -168,15 +182,19 @@ export function prepareFinalCardGeneration(sessionId, storyboardImages) {
   const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
   const direction = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "final_card" && !item.details?.some((detail) => detail.label === "真实预览"));
   if (!direction) throw new Error("找不到已确认的落版方向");
+  const baseCardId = String(direction.id).replace(/^confirmed-/, "").replace(/-direction-\d+$/, "");
+  const historicalDirection = richestFinalCard(sessionId, baseCardId);
   const lastShot = [...storyboardImages].sort((a, b) => String(a.id).localeCompare(String(b.id))).at(-1);
   if (!lastShot?.previewUrl) throw new Error("找不到已确认的末镜分镜图");
   const card = {
     ...direction,
-    id: String(direction.id).replace(/^confirmed-/, "").replace(/-direction-\d+$/, ""),
+    ...(historicalDirection || {}),
+    ...direction,
+    id: baseCardId,
     title: `落版图生成稿｜${direction.title.replace(/^已确认落版方向｜/, "")}`,
     summary: "已结合末镜分镜图校准构图与衔接，等待确认后生成真实落版图。",
     previewUrl: "", status: "candidate",
-    details: [...(direction.details || []), { label: "末镜衔接参考", content: lastShot.previewUrl }, { label: "末镜要求", content: "延续末镜主体位置、光色、动作终点和视觉重心，自然定格进入品牌与 CTA 落版。" }],
+    details: mergeCardDetails(historicalDirection?.details, direction.details, [{ label: "末镜衔接参考", content: lastShot.previewUrl }, { label: "末镜要求", content: "延续末镜主体位置、光色、动作终点和视觉重心，自然定格进入品牌与 CTA 落版。" }]),
   };
   const timestamp = now();
   workspace.productionPlan = { ...(workspace.productionPlan || {}), finalCardStatus: "ready_to_generate", videoPromptStatus: "waiting_for_final_card" };
