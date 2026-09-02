@@ -93,7 +93,7 @@ AI Analysis API 短剧目录
   -> 创建工作台时按 external_source_id 同步到本地 SQLite
 ```
 
-适配层不会再调用模型补齐远端没有返回的字段。原始 `aiPlot`、分集 `aiSummary` 和 GCS 对象路径保留在 `remoteAnalysis`；现有创意读取器需要的 v3 节点只做确定性投影。人物代表帧和分集拼图使用稳定的本地代理路径，实际访问时重新查询详情，以获得未过期的签名 URL。
+适配层不会再调用模型补齐远端没有返回的字段。原始 `aiPlot`、分集 `aiSummary` 和 GCS 对象路径保留在 `remoteAnalysis`；每个远端分集按集号排序后独立投影为一个 v3 `episodeAnalyses[]` 节点，人物情绪节点写入对应分集的 `detailedAnalysis.emotionalCurve`。整剧页面和紧凑创意上下文只在读取时临时聚合这些分集，不把重复剧情副本持久化。人物代表帧和分集拼图使用稳定的本地代理路径，实际访问时重新查询详情，以获得未过期的签名 URL。
 
 ### 5.2 App 解析
 
