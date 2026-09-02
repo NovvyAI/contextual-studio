@@ -9,7 +9,7 @@ import { analyzeDrama } from "./analyzer.js";
 import { analyzeGame } from "./game-analyzer.js";
 import { runCreativeTurn } from "./creative-agent.js";
 import { approveFinalCard, approveFinalCardDirection, startFinalCardGeneration, startFinalCardRegeneration } from "./image-generator.js";
-import { approveCharacterReferences, prepareCharacterReferenceReview, startCharacterRegeneration, startCustomCharacterGeneration } from "./character-generator.js";
+import { approveCharacterReferences, prepareCharacterReferenceReview, resumeSixViewPanelGeneration, startCharacterRegeneration, startCustomCharacterGeneration } from "./character-generator.js";
 import { approveAudiovisualDirection } from "./audiovisual-direction.js";
 import { resumeNovvyStoryboardVideoGeneration, startVideoGeneration } from "./video-generator.js";
 import { resumeImaRouterVideoGeneration, startImaRouterVideoGeneration } from "./imarouter-video-generator.js";
@@ -699,7 +699,8 @@ function recoverInterruptedCreativeTurns() {
       db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
         .run(session.id, "检测到服务器重启中断了人物图片生成，正在自动恢复同一张候选卡，不需要重新发送修改意见。", timestamp);
       setImmediate(() => {
-        if (/^reference-custom-/.test(interruptedCharacter.id)) startCustomCharacterGeneration(session.id, detail, interruptedCharacter.id);
+        if (/^six-view-/.test(interruptedCharacter.id)) resumeSixViewPanelGeneration(session.id);
+        else if (/^reference-custom-/.test(interruptedCharacter.id)) startCustomCharacterGeneration(session.id, detail, interruptedCharacter.id);
         else startCharacterRegeneration(session.id, interruptedCharacter.id, detail);
       });
       continue;

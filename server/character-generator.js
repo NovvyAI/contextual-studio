@@ -165,6 +165,105 @@ function imageUrl(data) {
   return "";
 }
 
+const SIX_VIEW_LABELS = ["正脸", "侧脸", "侧 3/4", "全身正面", "全身侧面", "全身侧 3/4"];
+
+function detailValue(card, label) {
+  return String((card.details || []).find((item) => item.label === label)?.content || "").trim();
+}
+
+function isSixViewPanel(card) {
+  return detailValue(card, "参考类型") === "人物六视图面板";
+}
+
+function characterIdentity(card) {
+  const characterId = detailValue(card, "人物编号") || detailValue(card, "人物");
+  const displayName = characterId || String(card.title || "人物").split("｜")[0].trim() || card.id;
+  return { id: characterId || card.id, name: displayName };
+}
+
+async function createSixViewPanel(sessionId, character, sourceCards, candidateNumber) {
+  const inputUrls = [];
+  for (const card of sourceCards) inputUrls.push(await publicInputUrl(card.previewUrl));
+  const card = {
+    id: `six-view-${character.id}-${Date.now()}`,
+    kind: "character_image",
+    title: `${character.name}｜六视图面板`,
+    summary: `同一人物的 ${SIX_VIEW_LABELS.join("、")}，请完整审核人物身份、服装和六个角度。`,
+    previewUrl: "",
+    candidateNumber,
+    status: "generating",
+    details: [
+      { label: "人物编号", content: character.id },
+      { label: "参考类型", content: "人物六视图面板" },
+      { label: "固定槽位", content: SIX_VIEW_LABELS.join("｜") },
+      { label: "身份来源", content: sourceCards.map((item) => item.title).join("、") },
+    ],
+  };
+  append(sessionId, `正在为「${character.name}」补齐缺失角度并生成六视图面板。`, card);
+  const client = new NovvyMcpClient(); await client.initialize();
+  const prompt = `Create one clean 2-by-3 character turnaround reference panel for the exact same person shown in all supplied identity references. The six cells, in reading order, must be: (1) face front, (2) face side profile, (3) face three-quarter view, (4) full-body front, (5) full-body side profile, (6) full-body three-quarter view. Preserve the same facial identity, age, body proportions, skin tone, hairstyle, hair color, costume, costume colors, hat, footwear, jewelry, and accessories in every cell. Use a plain neutral light-gray studio background, consistent lighting and scale, one person only in each cell. Show the complete body including feet in all full-body cells. No captions, subtitles, text, labels, logos, watermarks, props, extra people, or cropped limbs. This is a production identity reference panel, not a dramatic scene.`;
+  const created = unpackToolResult(await client.callTool("novvy_create_image_generation", { model: "gpt-image-2", prompt, imageUrls: inputUrls, inputFidelity: "high", n: 1, outputFormat: "png", quality: "high", includeRaw: false }));
+  const taskId = valueFor(created, ["taskId", "task_id", "id"]); const providerSessionId = valueFor(created, ["sessionId", "session_id"]);
+  if (!taskId && !providerSessionId) throw new Error(`Novvy 未返回「${character.name}」六视图任务 ID`);
+  let result = created; const deadline = Date.now() + 20 * 60_000;
+  while (Date.now() < deadline && !imageUrl(result)) {
+    const status = valueFor(result, ["status", "state"]).toLowerCase();
+    if (/fail|error|cancel/.test(status)) throw new Error(valueFor(result, ["errorMessage", "message", "error"]) || `「${character.name}」六视图生成失败`);
+    await wait(5000);
+    result = unpackToolResult(await client.callTool("novvy_query_generation", { ...(taskId ? { taskId } : {}), ...(providerSessionId ? { sessionId: providerSessionId } : {}), model: "gpt-image-2", includeRaw: false }));
+  }
+  const previewUrl = imageUrl(result);
+  if (!previewUrl) throw new Error(`「${character.name}」六视图生成查询超时`);
+  const completed = { ...card, previewUrl, status: "candidate", details: [...card.details, { label: "生成任务", content: taskId || providerSessionId }] };
+  append(sessionId, `「${character.name}」六视图面板已经生成。请检查六个角度是否为同一人物、服装是否一致；可以在卡片内修改后再确认。`, completed);
+  recordCreativeAsset(sessionId, "reference_panel", previewUrl, { stageOutputId: card.id, metadata: { title: card.title, characterId: character.id, type: "six_view_panel" } });
+  return completed;
+}
+
+async function generateSixViewPanels(sessionId, groups) {
+  try {
+    let number = 1;
+    for (const group of groups) await createSixViewPanel(sessionId, group.character, group.cards, number++);
+    const session = db.prepare("SELECT workspace_json FROM creative_sessions WHERE id=?").get(sessionId);
+    const workspace = session?.workspace_json ? JSON.parse(session.workspace_json) : {};
+    workspace.productionPlan = { ...(workspace.productionPlan || {}), sixViewStatus: "candidate_review", referenceStatus: "six_view_review" };
+    db.prepare("UPDATE creative_sessions SET stage='reference_review',workspace_json=?,error_message=NULL,updated_at=? WHERE id=?")
+      .run(JSON.stringify(workspace), now(), sessionId);
+    db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
+      .run(sessionId, `已为 ${groups.length} 个人物生成六视图面板。请勾选每个人物的一张合格面板，再点击“确认六视图面板并继续”。`, now());
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    db.prepare("UPDATE creative_sessions SET stage='reference_review',error_message=?,updated_at=? WHERE id=?").run(message, now(), sessionId);
+    db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
+      .run(sessionId, `六视图面板没有全部生成成功：${message}。已生成的候选会保留，可以修改或重新确认人物身份后重试。`, now());
+  }
+}
+
+export function resumeSixViewPanelGeneration(sessionId) {
+  const session = db.prepare("SELECT workspace_json FROM creative_sessions WHERE id=?").get(sessionId);
+  if (!session) throw new Error("创意工作台不存在");
+  const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
+  const pending = workspace.pendingCharacterReferences || [];
+  const latest = new Map();
+  cards(sessionId).forEach((card) => { if (!latest.has(card.id)) latest.set(card.id, card); });
+  const completedCharacters = new Set([...latest.values()].filter((card) => isSixViewPanel(card) && card.previewUrl && card.status === "candidate").map((card) => characterIdentity(card).id));
+  const grouped = new Map();
+  for (const item of pending) {
+    const card = latest.get(item.id) || { ...item, details: [{ label: "人物编号", content: item.characterId || item.id }] };
+    const character = { id: item.characterId || characterIdentity(card).id, name: String(item.title || "人物").split("｜")[0] };
+    if (completedCharacters.has(character.id)) continue;
+    const group = grouped.get(character.id) || { character, cards: [] };
+    group.cards.push(card); grouped.set(character.id, group);
+  }
+  if (!grouped.size) {
+    workspace.productionPlan = { ...(workspace.productionPlan || {}), sixViewStatus: "candidate_review", referenceStatus: "six_view_review" };
+    db.prepare("UPDATE creative_sessions SET stage='reference_review',workspace_json=?,error_message=NULL,updated_at=? WHERE id=?").run(JSON.stringify(workspace), now(), sessionId);
+    return;
+  }
+  db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(now(), sessionId);
+  generateSixViewPanels(sessionId, [...grouped.values()]);
+}
+
 export function startCharacterRegeneration(sessionId, cardId, feedback, editInput = null) {
   const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
   if (!session) throw new Error("创意工作台不存在");
@@ -218,18 +317,42 @@ export function approveCharacterReferences(sessionId, cardIds) {
   if (selected.length !== selectedIds.length) throw new Error("部分人物候选已作废、仍在生成或缺少真实图片，请刷新后重新勾选");
   const timestamp = now();
   const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
+  const sixViewReview = workspace.productionPlan?.sixViewStatus === "candidate_review";
+  if (!sixViewReview) {
+    const grouped = new Map();
+    for (const card of selected) {
+      const character = characterIdentity(card);
+      const group = grouped.get(character.id) || { character, cards: [] };
+      group.cards.push(card); grouped.set(character.id, group);
+    }
+    workspace.pendingCharacterReferences = selected.map((card) => ({ id: card.id, title: card.title, previewUrl: card.previewUrl, characterId: characterIdentity(card).id }));
+    workspace.productionPlan = { ...(workspace.productionPlan || {}), sixViewStatus: "generating", referenceStatus: "six_view_generating", finalCardStatus: "waiting_for_characters" };
+    db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, `确认人物身份参考：${selectedIds.join("、")}`, timestamp);
+    db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
+      .run(sessionId, `已确认 ${grouped.size} 个人物身份。现在自动补齐每个人物缺少的正脸、侧脸、侧 3/4、全身正面、全身侧面和全身侧 3/4，并生成待审核的六视图面板；不会直接进入下一阶段。`, timestamp);
+    db.prepare("UPDATE creative_sessions SET stage='working',workspace_json=?,error_message=NULL,updated_at=? WHERE id=?").run(JSON.stringify(workspace), timestamp, sessionId);
+    generateSixViewPanels(sessionId, [...grouped.values()]);
+    return;
+  }
+  if (selected.some((card) => !isSixViewPanel(card))) throw new Error("六视图审核阶段只能勾选每个人物的六视图面板，请取消散装人物图后重试");
+  const expectedCharacters = new Set((workspace.pendingCharacterReferences || []).map((item) => item.characterId || characterIdentity(latest.get(item.id) || item).id));
+  const selectedCharacters = new Set(selected.map((card) => characterIdentity(card).id));
+  if (selectedCharacters.size !== selected.length) throw new Error("同一个人物只能确认一张六视图面板");
+  if (expectedCharacters.size && [...expectedCharacters].some((id) => !selectedCharacters.has(id))) throw new Error("每个已确认人物都需要勾选一张六视图面板");
   workspace.confirmedCards ||= [];
   workspace.confirmedCards.push({
     id: `confirmed-reference-group-${Date.now()}`, kind: "reference_panel", title: "已确认人物参考图组",
-    summary: `已采用 ${selected.length} 张人物参考图，供后续剧情分镜和视频人物一致性使用。`,
+    summary: `已确认 ${selected.length} 个人物六视图面板，供 ImaRouter 锁定人物身份；原始人物参考继续供分镜与 Novvy MCP 使用。`,
     details: selected.map((card) => ({ label: card.title, content: card.previewUrl })), status: "confirmed", confirmedAt: timestamp,
+    characterPanelUrls: selected.map((card) => card.previewUrl),
+    characterReferenceUrls: (workspace.pendingCharacterReferences || []).map((item) => item.previewUrl).filter(Boolean),
   });
-  workspace.productionPlan = { ...(workspace.productionPlan || {}), referenceStatus: "approved", finalCardStatus: "direction_pending", videoPromptStatus: "final_card_direction_pending" };
-  db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, `统一采用人物候选：${selectedIds.join("、")}`, timestamp);
-  const autoMessage = `人物参考图组已确认，共采用 ${selected.length} 张真实图片。现在生成 2-4 张 final_card 落版方向候选卡：只确定末镜衔接意图、主视觉、9:16 构图、英文标题/副标题/CTA、字体层级、色彩、产品真实性边界和后续图片生成提示词；previewUrl 为空，不执行图片生成。stage 使用 final_card_review，等待用户确认一个落版方向，不要生成 audiovisual_direction 或 storyboard。`;
-  db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)").run(sessionId, `已采用你勾选的 ${selected.length} 张人物图。现在自动生成落版方向候选；这里只确认结尾设计与末镜衔接，不会提前生成真实落版图。`, timestamp);
+  workspace.productionPlan = { ...(workspace.productionPlan || {}), sixViewStatus: "approved", referenceStatus: "approved", finalCardStatus: "direction_pending", videoPromptStatus: "final_card_direction_pending" };
+  db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, `确认人物六视图面板：${selectedIds.join("、")}`, timestamp);
+  const autoMessage = `人物六视图面板已经确认，共 ${selected.length} 个人物。现在生成 2-4 张 final_card 落版方向候选卡：只确定末镜衔接意图、主视觉、9:16 构图、英文标题/副标题/CTA、字体层级、色彩、产品真实性边界和后续图片生成提示词；previewUrl 为空，不执行图片生成。stage 使用 final_card_review，等待用户确认一个落版方向，不要生成 audiovisual_direction 或 storyboard。`;
+  db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)").run(sessionId, `已确认 ${selected.length} 张人物六视图面板。现在自动生成落版方向候选。`, timestamp);
   db.prepare("UPDATE creative_sessions SET stage='working',workspace_json=?,error_message=NULL,updated_at=? WHERE id=?").run(JSON.stringify(workspace), timestamp, sessionId);
-  recordCreativeFeedback(sessionId, `统一采用人物候选：${selectedIds.join("、")}`, { decision: "approved", stageOutputId: "reference-panel", key: `session:${sessionId}:reference-panel:approved:${timestamp}` });
+  recordCreativeFeedback(sessionId, `确认人物六视图面板：${selectedIds.join("、")}`, { decision: "approved", stageOutputId: "reference-panel", key: `session:${sessionId}:reference-panel:approved:${timestamp}` });
   recordCreativeStage(sessionId, "reference_panel", { cards: selected.map((card) => ({ id: card.id, title: card.title, previewUrl: card.previewUrl })) }, { status: "confirmed", key: `session:${sessionId}:reference-panel:${timestamp}` });
   selected.forEach((card) => recordCreativeAsset(sessionId, "reference_panel", card.previewUrl, { stageOutputId: card.id, metadata: { title: card.title } }));
   import("./creative-agent.js").then(({ runCreativeTurn }) => runCreativeTurn(sessionId, autoMessage, false));

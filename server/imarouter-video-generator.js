@@ -69,6 +69,26 @@ function isOutputAudioCopyrightFailure(message) {
   return /OutputAudioSensitiveContentDetected|output audio.*copyright|output audio may be related to copyright restrictions/i.test(message || "");
 }
 
+export function orderImaRouterShotReferences(characterReferences, storyboardReference, shotOrder) {
+  return {
+    images: [...characterReferences, storyboardReference],
+    labels: [
+      ...characterReferences.map((_, index) => `人物身份参考 ${index + 1}`),
+      `分镜图 ${shotOrder}`,
+    ],
+  };
+}
+
+function imaRouterReferenceInstruction(characterCount, storyboardAvailable = true) {
+  const identityInstruction = characterCount > 0
+    ? `Reference images 1 through ${characterCount} are approved six-view character panels, one panel per character. Use them only to preserve each character's identity, facial features, body proportions, hairstyle, costume, and accessories. `
+    : "No character identity panel remains after provider review. Preserve character identity from the written shot description. ";
+  const compositionInstruction = storyboardAvailable
+    ? "The final reference image is the approved storyboard frame for this exact shot and is the authority for composition, camera angle, scene layout, action, pose, and object placement. "
+    : "The storyboard reference was excluded by the provider privacy check, so follow the written shot description for composition, camera, action, pose, and object placement. ";
+  return `${identityInstruction}${compositionInstruction}Do not reproduce a six-view grid, contact sheet, split screen, labels, or reference-panel layout in the generated video. `;
+}
+
 async function createAssetReference(baseUrl, headers, imageUrl) {
   const group = await request(`${baseUrl}/v1/assets/group/create`, {
     method: "POST", headers, body: JSON.stringify({ name: "contextual-studio", group_type: "AIGC", project_name: "default", model: "seedance-upload" }),
@@ -93,7 +113,9 @@ function selectReferences(workspace) {
   const confirmedStoryboard = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "storyboard" && item.status === "confirmed");
   const referenceGroup = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "reference_panel" && item.status === "confirmed");
   const storyboardUrls = (confirmedStoryboard?.details || []).map((item) => referenceUrl(item.content)).filter(Boolean);
-  const characterUrls = [referenceGroup?.previewUrl, ...(referenceGroup?.details || []).map((item) => item.content)]
+  const characterUrls = (referenceGroup?.characterPanelUrls?.length
+    ? referenceGroup.characterPanelUrls
+    : [referenceGroup?.previewUrl, ...(referenceGroup?.details || []).map((item) => item.content)])
     .map(referenceUrl).filter(Boolean);
   if (!storyboardUrls.length) throw new Error("ImaRouter 没有可用的已确认分镜图");
   if (!characterUrls.length) throw new Error("ImaRouter 没有可用的已确认人物参考图");
@@ -184,9 +206,9 @@ async function generate(sessionId, card, plan, reference) {
       const storyboardReference = storyboardReferences[shot.order - 1];
       if (!storyboardReference) throw new Error(`${shot.shotId}：缺少同序号的已确认分镜图`);
       let taskId = existing?.status === "generating" ? existing.task_id : "";
-      const allImageReferences = [storyboardReference, ...characterReferences];
-      const referenceLabels = [`分镜图 ${shot.order}`, ...characterReferences.map((_, index) => `人物参考图 ${index + 1}`)];
-      let activeImageReferences = [...allImageReferences];
+      const orderedReferences = orderImaRouterShotReferences(characterReferences, storyboardReference, shot.order);
+      let activeImageReferences = [...orderedReferences.images];
+      const referenceLabels = [...orderedReferences.labels];
       let removedPrivacyReference = "";
       let generateAudio = true;
       let audioDowngraded = false;
@@ -198,7 +220,7 @@ async function generate(sessionId, card, plan, reference) {
       if (!taskId) {
         db.prepare("INSERT INTO creative_video_shots (session_id,prompt_card_id,shot_id,shot_order,version,provider,duration_seconds,prompt,status,created_at,updated_at) VALUES (?,?,?,?,?,'imarouter',?,?,'generating',?,?)")
           .run(sessionId, card.id, shot.shotId, shot.order, version, shot.durationSeconds, shot.promptEn, createdAt, createdAt);
-        const referenceInstruction = `The first reference image is the approved storyboard frame for this exact shot and controls composition, camera angle, scene layout, action, pose, and object placement. The following ${characterReferences.length} images control character identity, facial features, age, hairstyle, costume, and accessories. Keep the same identities throughout. `;
+        const referenceInstruction = imaRouterReferenceInstruction(characterReferences.length);
         const created = await submitShot(`${referenceInstruction}${shot.promptEn}`);
         taskId = created?.id || created?.task_id;
         if (!taskId) throw new Error(`${shot.shotId}：ImaRouter 未返回视频任务 ID`);
@@ -225,10 +247,9 @@ async function generate(sessionId, card, plan, reference) {
           removedPrivacyReference = referenceLabels[removeIndex] || `参考图 ${removeIndex + 1}`;
           activeImageReferences.splice(removeIndex, 1);
           referenceLabels.splice(removeIndex, 1);
-          const firstIsStoryboard = activeImageReferences[0] === storyboardReference;
-          retryInstruction = firstIsStoryboard
-            ? `The first reference image is the approved storyboard frame for this exact shot. Use the remaining references only for character identity. `
-            : `The storyboard reference was excluded by the provider privacy check. Use the remaining fictional character references only for identity consistency and follow the written shot description for composition. `;
+          const storyboardAvailable = activeImageReferences.at(-1) === storyboardReference;
+          const activeCharacterCount = storyboardAvailable ? activeImageReferences.length - 1 : activeImageReferences.length;
+          retryInstruction = imaRouterReferenceInstruction(activeCharacterCount, storyboardAvailable);
           db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
             .run(sessionId, `${shot.shotId} 的 ${removedPrivacyReference} 触发真人隐私检测，Novvy 已自动移除该图并重试一次。`, now());
         } else if (!audioDowngraded && isOutputAudioCopyrightFailure(failureMessage)) {
@@ -247,7 +268,7 @@ async function generate(sessionId, card, plan, reference) {
       }
       if (!previewUrl) throw new Error(`${shot.shotId} 查询超时或未返回视频地址`);
       db.prepare("UPDATE creative_video_shots SET status='completed',result_url=?,updated_at=? WHERE session_id=? AND prompt_card_id=? AND shot_id=? AND version=?").run(previewUrl, now(), sessionId, card.id, shot.shotId, version);
-      append(sessionId, `${shot.shotId} V${version} 已生成，可以单独播放复审。`, shotCard(card, shot, { previewUrl, status: "completed", version, details: [...shotCard(card, shot).details, { label: "版本", content: `V${version}` }, { label: "视频供应商", content: `ImaRouter / ${VIDEO_MODEL_LABEL}` }, { label: "参考策略", content: removedPrivacyReference ? `已移除 ${removedPrivacyReference} 后自动重试成功` : `对应分镜图 ${shot.order} + ${characterReferences.length} 张人物参考图` }, { label: "音频", content: audioDowngraded ? "该镜头因版权审核自动降级为无音频" : "生成同步音频" }, { label: "视频任务", content: taskId }] }));
+      append(sessionId, `${shot.shotId} V${version} 已生成，可以单独播放复审。`, shotCard(card, shot, { previewUrl, status: "completed", version, details: [...shotCard(card, shot).details, { label: "版本", content: `V${version}` }, { label: "视频供应商", content: `ImaRouter / ${VIDEO_MODEL_LABEL}` }, { label: "参考策略", content: removedPrivacyReference ? `已移除 ${removedPrivacyReference} 后自动重试成功` : `${characterReferences.length} 张人物身份参考在前，对应分镜图 ${shot.order} 在最后` }, { label: "音频", content: audioDowngraded ? "该镜头因版权审核自动降级为无音频" : "生成同步音频" }, { label: "视频任务", content: taskId }] }));
     }
     append(sessionId, "全部内容镜头已经生成。请逐镜播放复审；确认后再按顺序拼接，并追加已确认的原始落版图。", { ...card, previewUrl: "", status: "completed", details: [...(card.details || []).filter((item) => item.label !== "失败原因"), { label: "逐镜状态", content: `${plan.shots.length} 个镜头已完成，等待统一确认拼接` }] });
     db.prepare("UPDATE creative_sessions SET stage='video_review',error_message=NULL,updated_at=? WHERE id=?").run(now(), sessionId);

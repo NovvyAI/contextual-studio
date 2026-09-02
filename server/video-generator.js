@@ -48,7 +48,7 @@ export function startVideoGeneration(sessionId, cardId) {
   const plan = parseStoryboardVideoPlan(card);
   const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
   const referenceGroup = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "reference_panel" && item.status === "confirmed");
-  const referenceUrls = (referenceGroup?.details || []).map((item) => referenceUrl(item.content)).filter(Boolean);
+  const referenceUrls = (referenceGroup?.characterReferenceUrls?.length ? referenceGroup.characterReferenceUrls : (referenceGroup?.details || []).map((item) => item.content)).map(referenceUrl).filter(Boolean);
   if (!referenceUrls.length) throw new Error("已确认人物参考图组为空");
   const confirmedStoryboard = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "storyboard" && item.status === "confirmed");
   const storyboardUrls = (confirmedStoryboard?.details || []).map((item) => referenceUrl(item.content)).filter(Boolean);
@@ -71,7 +71,7 @@ export function resumeNovvyStoryboardVideoGeneration(sessionId, cardId) {
   const plan = parseStoryboardVideoPlan(card);
   const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
   const referenceGroup = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "reference_panel" && item.status === "confirmed");
-  const referenceUrls = (referenceGroup?.details || []).map((item) => referenceUrl(item.content)).filter(Boolean);
+  const referenceUrls = (referenceGroup?.characterReferenceUrls?.length ? referenceGroup.characterReferenceUrls : (referenceGroup?.details || []).map((item) => item.content)).map(referenceUrl).filter(Boolean);
   const confirmedStoryboard = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "storyboard" && item.status === "confirmed");
   const storyboardUrls = (confirmedStoryboard?.details || []).map((item) => referenceUrl(item.content)).filter(Boolean);
   if (!referenceUrls.length) throw new Error("已确认人物参考图组为空");

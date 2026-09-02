@@ -91,7 +91,8 @@ function referenceUrls(session) {
   const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
   const group = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "reference_panel" && item.status === "confirmed");
   const finalCard = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "final_card" && item.status === "confirmed");
-  return [...(group?.details || []), ...(finalCard?.details || [])].map((item) => item.content)
+  const characterReferences = group?.characterReferenceUrls?.length ? group.characterReferenceUrls : (group?.details || []).map((item) => item.content);
+  return [...characterReferences, ...(finalCard?.details || []).map((item) => item.content)]
     .filter((value) => typeof value === "string" && (/^https?:\/\//.test(value) || /^\/api\/screenshots\/\d+$/.test(value)));
 }
 

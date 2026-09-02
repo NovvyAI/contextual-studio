@@ -131,7 +131,8 @@ NOVVY_PYTHON_BIN="$("$SKILL_DIR/scripts/novvy_python.sh")" && "$NOVVY_PYTHON_BIN
 
 8. 生成、提交和复审视频。
    - 参考图组通过后，生成用户可见的中文视频审核稿；确认后把同义内容翻译成英文写入 `novvy_create_video_generation.prompt`。
-   - 视频生成前允许用户在工作台选择 `Novvy MCP` 或 `ImaRouter`。两种方式都必须逐镜绑定参考输入：当前镜头同序号的已确认分镜图作为第一主参考，约束构图、机位、场景、动作、姿势和物件位置；随后附加全部已确认人物图，约束身份、五官、年龄、发型、服装和配饰一致性。Novvy MCP 使用 `seedance-2.0-fast`，当前分镜图放入该镜头唯一的 `imageUrls` 项，人物图放入 `humanImageUrls`；ImaRouter 使用 `seedance-2.0`，参考数组为当前分镜图在前、全部人物图在后。不得把整组分镜图无差别传给每个镜头。
+   - 视频生成前允许用户在工作台选择 `Novvy MCP` 或 `ImaRouter`。两种方式都必须逐镜绑定参考输入，但字段与顺序按供应商区分。Novvy MCP 使用 `seedance-2.0-fast`：当前镜头同序号的已确认分镜图放入该镜头唯一的 `imageUrls` 项，已确认人物参考放入 `humanImageUrls`，由独立字段分别约束构图和身份。ImaRouter 使用 `seedance-2.0-fast`：每个出镜人物各使用一张已确认的独立六视图面板，按人物 A、人物 B……依次放在数组前部；当前镜头同序号的已确认分镜图必须作为数组最后一张。英文提示词必须声明前 N 张六视图只约束人物身份、五官、身材比例、发型、服装和配饰，最后一张分镜图是构图、机位、场景、动作、姿势和物件位置的权威参考，并禁止把六视图网格、拼贴、标签或分屏复现在视频里。不得把整组分镜图无差别传给每个镜头，也不得把多个人物混进同一张六视图面板。
+   - 六视图面板固定包含同一人物的正脸、侧脸、侧 3/4、全身正面、全身侧面和全身侧 3/4。第一次确认人物图只锁定人物身份；系统随后以该人物全部已确认原图为高保真输入，自动补齐缺失角度并生成一张 2×3 六视图面板候选。用户必须在面板卡完整审核六个槽位的人物身份、服装、配饰、角度和全身完整性；修改可生成新版面板。每个人物各确认一张面板后才能继续，自动生成完成不得视为用户确认。
    - 两种方式默认 `ratio/aspectRatio: "9:16"`、单镜 `duration: 4-15`、`resolution: "720p"`。逐镜任务最多 3 个；Novvy MCP 可显式控制 `generateAudio`，ImaRouter 当前不主动请求生成音频。
    - 参考图必须使用上传 subagent 返回的完整多图数组。普通上传用 `imageUrls`；Seedance 真人上传只把实际上传的人像槽位放入 `humanImageUrls`，不得混入 `final_card` 或其他非真人图；`product_icon` 不进入任何参考图字段。不要同时重复放两个字段。
    - 用户确认并选择 Novvy MCP 后，调用 `novvy_create_video_generation`，再用 `novvy_query_generation` 查询结果。选择 ImaRouter 后，先通过 `/v1/assets/create` 审核公网分镜图，再调用 `/v1/videos` 并查询 `/v1/videos/{taskId}`。

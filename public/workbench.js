@@ -1545,16 +1545,19 @@ function renderCanvas(session) {
 
 function renderCharacterGroupActions(session) {
   const panel = element("section", "character-group-actions");
-  panel.append(element("strong", "", "人物参考图组操作"), element("p", "", "请在每张人物图片下方勾选需要采用的参考图；也可以继续添加新的角度或人物候选。"));
-  const approve = element("button", "character-group-approve", `确认选中的人物参考图（${selectedCharacterIds.size} 张）`); approve.type = "button"; approve.dataset.characterApprove = "true"; approve.disabled = session.stage === "working";
-  approve.classList.add("workflow-confirm-action"); approve.dataset.workflowStages = "reference_review"; approve.dataset.workflowLabel = "确认选中的人物参考图"; approve.dataset.workflowPriority = "100";
+  const sixViewReview = session.workspace?.productionPlan?.sixViewStatus === "candidate_review";
+  const actionLabel = sixViewReview ? "确认六视图面板并继续" : "确认人物身份并生成六视图";
+  panel.append(element("strong", "", sixViewReview ? "人物六视图审核" : "人物身份参考操作"), element("p", "", sixViewReview ? "请为每个已确认人物勾选一张合格六视图面板；如有问题，可直接在面板卡片中填写意见重新生成。" : "先勾选需要保留的人物身份参考。确认后系统会自动补齐缺失角度并生成六视图面板，不会直接进入下一阶段。"));
+  const approve = element("button", "character-group-approve", `${actionLabel}（${selectedCharacterIds.size} 张）`); approve.type = "button"; approve.dataset.characterApprove = "true"; approve.disabled = session.stage === "working";
+  approve.classList.add("workflow-confirm-action"); approve.dataset.workflowStages = "reference_review"; approve.dataset.workflowLabel = actionLabel; approve.dataset.workflowPriority = "100";
   approve.addEventListener("click", async () => {
     if (!selectedCharacterIds.size) return alert("请先至少勾选一张人物参考图。");
     try {
       approve.disabled = true; approve.textContent = "正在确认…";
       await api(`/api/creative/sessions/${sessionId}/characters/approve`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cardIds: [...selectedCharacterIds] }) });
+      selectedCharacterIds.clear();
       await refreshSession();
-    } catch (error) { approve.disabled = false; approve.textContent = `确认选中的人物参考图（${selectedCharacterIds.size} 张）`; alert(error.message); }
+    } catch (error) { approve.disabled = false; approve.textContent = `${actionLabel}（${selectedCharacterIds.size} 张）`; alert(error.message); }
   });
   const add = element("details", "character-add-option");
   add.append(element("summary", "", "+ 添加人物图"));

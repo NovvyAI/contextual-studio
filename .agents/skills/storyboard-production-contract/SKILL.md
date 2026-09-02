@@ -13,8 +13,9 @@ Convert approved intent into a small, auditable shot plan. Use `$audiovisual-lan
 2. Each candidate contains an overall story and at most three content shots.
 3. The user selects one candidate; GPT-image-2 generates one 9:16 static frame per shot.
 4. The user can revise individual frames. After unified image approval, use the last frame to calibrate and generate the real final-card image; only after that image is approved compile `video-prompt-v1`.
-5. Each video shot uses its same-number approved storyboard image as the first composition/action reference and all selected character images as identity references.
-6. The user chooses Novvy MCP or ImaRouter. Shots are generated and reviewed independently, then combined. The approved final card is appended deterministically after content shots.
+5. Reference binding is provider-specific. Novvy MCP keeps the same-number approved storyboard image in `imageUrls` and approved character identities in `humanImageUrls`. ImaRouter receives one approved six-view panel per on-screen character first, in stable character order, and the same-number approved storyboard frame last. Its prompt treats the preceding panels as identity-only references and the final image as the composition/action authority; it must forbid rendering the panel grid, labels, or split-screen layout. Never combine different characters in one six-view panel.
+6. A six-view panel contains face front, face side, face three-quarter, full-body front, full-body side, and full-body three-quarter views of one character. The system may fill missing views from all approved identity references and produce a 2-by-3 panel candidate, but the user must review all six cells and approve exactly one panel per character before video submission.
+7. The user chooses Novvy MCP or ImaRouter. Shots are generated and reviewed independently, then combined. The approved final card is appended deterministically after content shots.
 
 ## Candidate contract
 
