@@ -175,12 +175,73 @@ if (!creativeMessageColumns.has("visibility")) db.exec("ALTER TABLE creative_mes
 if (!creativeMessageColumns.has("attachments_json")) db.exec("ALTER TABLE creative_messages ADD COLUMN attachments_json TEXT");
 const gameAnalysisColumns = new Set(db.prepare("PRAGMA table_info(game_analyses)").all().map((column) => column.name));
 if (!gameAnalysisColumns.has("source_json")) db.exec("ALTER TABLE game_analyses ADD COLUMN source_json TEXT");
+if (!gameAnalysisColumns.has("external_source_id")) db.exec("ALTER TABLE game_analyses ADD COLUMN external_source_id TEXT");
+const dramaAnalysisColumns = new Set(db.prepare("PRAGMA table_info(drama_analyses)").all().map((column) => column.name));
+if (!dramaAnalysisColumns.has("external_source_id")) db.exec("ALTER TABLE drama_analyses ADD COLUMN external_source_id TEXT");
+db.exec(`
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_drama_analyses_external_source ON drama_analyses(external_source_id) WHERE external_source_id IS NOT NULL;
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_game_analyses_external_source ON game_analyses(external_source_id) WHERE external_source_id IS NOT NULL;
+`);
 const faceCandidateColumns = new Set(db.prepare("PRAGMA table_info(drama_face_candidates)").all().map((column) => column.name));
 if (!faceCandidateColumns.has("overlay_score")) db.exec("ALTER TABLE drama_face_candidates ADD COLUMN overlay_score REAL NOT NULL DEFAULT 0");
 if (!faceCandidateColumns.has("overlay_regions_json")) db.exec("ALTER TABLE drama_face_candidates ADD COLUMN overlay_regions_json TEXT");
 if (!faceCandidateColumns.has("needs_cleanup")) db.exec("ALTER TABLE drama_face_candidates ADD COLUMN needs_cleanup INTEGER NOT NULL DEFAULT 0");
 
 export const now = () => new Date().toISOString();
+
+export function upsertExternalDrama(detail) {
+  const sourceId = String(detail?.sourceId || "").trim();
+  if (!sourceId || !detail?.result) throw new Error("远端短剧分析缺少来源 ID 或结果");
+  const timestamp = now();
+  const existing = db.prepare("SELECT id FROM drama_analyses WHERE external_source_id=?").get(sourceId);
+  if (existing) {
+    db.prepare(`
+      UPDATE drama_analyses
+      SET title=?,status='completed',analysis_json=?,error_message=NULL,updated_at=?
+      WHERE id=?
+    `).run(detail.title || "未命名短剧", JSON.stringify(detail.result), timestamp, existing.id);
+    return db.prepare("SELECT * FROM drama_analyses WHERE id=?").get(existing.id);
+  }
+  const createdAt = detail.createdAt || detail.analyzedAt || timestamp;
+  const inserted = db.prepare(`
+    INSERT INTO drama_analyses
+      (title,original_name,video_path,mime_type,file_size,status,analysis_json,error_message,created_at,updated_at,external_source_id)
+    VALUES (?,?,?,'',0,'completed',?,NULL,?,?,?)
+  `).run(detail.title || "未命名短剧", `remote:${sourceId}`, "", JSON.stringify(detail.result), createdAt, timestamp, sourceId);
+  return db.prepare("SELECT * FROM drama_analyses WHERE id=?").get(Number(inserted.lastInsertRowid));
+}
+
+export function upsertExternalProduct(detail) {
+  const sourceId = String(detail?.sourceId || "").trim();
+  if (!sourceId || !detail?.result) throw new Error("远端 App 分析缺少来源 ID 或结果");
+  const timestamp = now();
+  const storeUrl = detail.storeUrl || `novvy-product:${sourceId}`;
+  const platform = detail.platform === "Android" ? "google_play" : detail.platform === "iOS" ? "apple_app_store" : String(detail.platform || "unknown");
+  const source = {
+    productId: sourceId,
+    productName: detail.productName || detail.title || "未命名 App",
+    category: detail.category || "",
+    os: detail.platform || "",
+    iconUrl: detail.iconUrl || "",
+    landingUrl: detail.storeUrl || "",
+  };
+  const existing = db.prepare("SELECT id FROM game_analyses WHERE external_source_id=?").get(sourceId);
+  if (existing) {
+    db.prepare(`
+      UPDATE game_analyses
+      SET title=?,store_url=?,platform=?,status='completed',analysis_json=?,source_json=?,error_message=NULL,updated_at=?
+      WHERE id=?
+    `).run(source.productName, storeUrl, platform, JSON.stringify(detail.result), JSON.stringify(source), timestamp, existing.id);
+    return db.prepare("SELECT * FROM game_analyses WHERE id=?").get(existing.id);
+  }
+  const createdAt = detail.createdAt || detail.analyzedAt || timestamp;
+  const inserted = db.prepare(`
+    INSERT INTO game_analyses
+      (title,store_url,platform,status,analysis_json,error_message,codex_thread_id,created_at,updated_at,source_json,external_source_id)
+    VALUES (?,?,?,'completed',?,NULL,NULL,?,?,?,?)
+  `).run(source.productName, storeUrl, platform, JSON.stringify(detail.result), createdAt, timestamp, JSON.stringify(source), sourceId);
+  return db.prepare("SELECT * FROM game_analyses WHERE id=?").get(Number(inserted.lastInsertRowid));
+}
 
 function migrateLegacyDramaAnalyses() {
   const rows = db.prepare("SELECT id,analysis_json FROM drama_analyses WHERE status='completed' AND analysis_json IS NOT NULL").all();
@@ -205,6 +266,7 @@ migrateLegacyDramaAnalyses();
 
 export function serializeAnalysis(row) {
   if (!row) return null;
+  const result = row.analysis_json ? JSON.parse(row.analysis_json) : null;
   const screenshots = db.prepare(`
     SELECT id, timestamp_seconds, width, height
     FROM drama_screenshots WHERE analysis_id = ? ORDER BY timestamp_seconds
@@ -224,18 +286,25 @@ export function serializeAnalysis(row) {
     width: row.width,
     height: row.height,
     orientation: row.orientation,
-    result: row.analysis_json ? JSON.parse(row.analysis_json) : null,
+    result,
     errorMessage: row.error_message,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    videoUrl: `/api/dramas/${row.id}/video`,
-    screenshots: screenshots.map((item) => ({
+    videoUrl: row.video_path && fs.existsSync(row.video_path) ? `/api/dramas/${row.id}/video` : "",
+    sourceId: row.external_source_id || "",
+    screenshots: (screenshots.length ? screenshots.map((item) => ({
       id: item.id,
       timestampSeconds: item.timestamp_seconds,
       width: item.width,
       height: item.height,
       url: `/api/screenshots/${item.id}`,
-    })),
+    })) : (result?.sourceMedia || []).filter((item) => item?.kind === "episode_sheet" && item.url).map((item, index) => ({
+      id: item.key || `remote-sheet-${index + 1}`,
+      timestampSeconds: 0,
+      width: null,
+      height: null,
+      url: item.url,
+    }))),
     faceCandidates: faceCandidates.map((item) => ({
       id: item.id,
       candidateId: item.candidate_id,
@@ -264,6 +333,7 @@ export function serializeGameAnalysis(row) {
     errorMessage: row.error_message,
     codexThreadId: row.codex_thread_id,
     source: row.source_json ? JSON.parse(row.source_json) : null,
+    sourceId: row.external_source_id || "",
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -325,7 +395,7 @@ export function creativeScreenshotAssets(sessionId) {
   for (const [key, candidate] of Object.entries(sourceCandidates)) {
     if (candidate?.screenshotId) roleByScreenshotId.set(Number(candidate.screenshotId), roleLabels[key] || candidate.character || "人物参考");
   }
-  return db.prepare("SELECT id,timestamp_seconds,width,height FROM drama_screenshots WHERE analysis_id=? ORDER BY timestamp_seconds,id").all(session.drama_id)
+  const localScreenshots = db.prepare("SELECT id,timestamp_seconds,width,height FROM drama_screenshots WHERE analysis_id=? ORDER BY timestamp_seconds,id").all(session.drama_id)
     .map((shot, index) => ({
       number: index + 1,
       reference: `截图 ${String(index + 1).padStart(2, "0")}`,
@@ -337,6 +407,18 @@ export function creativeScreenshotAssets(sessionId) {
       timestampSeconds: shot.timestamp_seconds,
       version: 1,
     }));
+  if (localScreenshots.length) return localScreenshots;
+  return (analysis.sourceMedia || []).filter((item) => item?.kind === "episode_sheet" && item.url).map((item, index) => ({
+    number: index + 1,
+    reference: `截图 ${String(index + 1).padStart(2, "0")}`,
+    kind: "video_screenshot",
+    title: item.title || `分集拼图 ${index + 1}`,
+    description: "来自 AI Analysis API 的分集解析拼图；按需刷新签名图片地址。",
+    url: item.url,
+    screenshotId: 0,
+    timestampSeconds: 0,
+    version: 1,
+  }));
 }
 
 export function creativeCharacterReferenceAssets(sessionId) {
@@ -357,7 +439,7 @@ export function creativeCharacterReferenceAssets(sessionId) {
     }
     for (const view of viewOrder) {
       const candidate = bestByView.get(view);
-      if (!candidate?.screenshotId) continue;
+      if (!candidate?.screenshotId && !candidate?.url) continue;
       selected.push({ character, candidate, view });
     }
   }
@@ -366,7 +448,9 @@ export function creativeCharacterReferenceAssets(sessionId) {
     reference: `人物图 ${String(index + 1).padStart(2, "0")}`,
     kind: "character_reference",
     title: `${character.displayName || character.characterId}｜${viewLabels[view] || view}`,
-    description: `${character.narrativeRole || "unknown"}；来自短剧原视频 ${Number(candidate.timestampSeconds || 0).toFixed(2)} 秒；本地质量分 ${Number(candidate.qualityScore || 0).toFixed(2)}。`,
+    description: candidate.screenshotId
+      ? `${character.narrativeRole || "unknown"}；来自短剧原视频 ${Number(candidate.timestampSeconds || 0).toFixed(2)} 秒；本地质量分 ${Number(candidate.qualityScore || 0).toFixed(2)}。`
+      : `${character.narrativeRole || "unknown"}；来自 AI Analysis API 的主要人物代表帧。`,
     url: candidate.url || `/api/face-candidates/${candidate.screenshotId}`,
     characterId: character.characterId,
     candidateId: candidate.candidateId,

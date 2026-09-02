@@ -4,9 +4,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
-import { db, now, serializeAnalysis, serializeGameAnalysis, serializeCreativeSession, deleteCreativeAsset } from "./database.js";
-import { analyzeDrama } from "./analyzer.js";
-import { analyzeGame } from "./game-analyzer.js";
+import { db, now, serializeAnalysis, serializeGameAnalysis, serializeCreativeSession, deleteCreativeAsset, upsertExternalDrama, upsertExternalProduct } from "./database.js";
 import { runCreativeTurn } from "./creative-agent.js";
 import { approveFinalCard, approveFinalCardDirection, startFinalCardGeneration, startFinalCardRegeneration } from "./image-generator.js";
 import { approveCharacterReferences, prepareCharacterReferenceReview, startCharacterRegeneration, startCustomCharacterGeneration } from "./character-generator.js";
@@ -19,15 +17,14 @@ import { generatedVideoPath } from "./video-finalizer.js";
 import { productionProfile } from "./production-profile.js";
 import { landingPackagePath, packageLandingPage } from "./landing-page-packager.js";
 import { registerChatAttachmentsAsAssets, startAssetCreation, startAssetRegeneration, startAttachmentImageEdit, startCharacterReferenceRegeneration } from "./asset-generator.js";
-import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
 import { backfillCreativeTelemetry, flushTelemetryOutbox, recordCreativeFeedback, recordCreativeRunStart, recordCreativeStage, startTelemetryWorker, telemetryStatus } from "./creative-telemetry.js";
 import { mlflowTracingStatus } from "./mlflow-tracing.js";
 import { dramaAnalysisContract, dramaAnalysisView, isDramaAnalysisV3 } from "./drama-analysis-v3.js";
 import { listDirectorStyles } from "./director-library.js";
+import { dramaDetailView, getAnalyzedDrama, getAnalyzedProduct, listAnalyzedDramas, listAnalyzedProducts, productDetailView, resolveAnalysisMediaUrl } from "./ai-analysis-api.js";
 
 const port = Number(process.env.PORT || 4180);
 const publicDir = path.resolve("public");
-const uploadsDir = path.resolve("data/uploads");
 const chatUploadsDir = path.resolve("data/chat-uploads");
 const maxUploadBytes = 1024 * 1024 * 1024;
 let gcloudAuth = { status: "idle", message: "", startedAt: "", completedAt: "" };
@@ -148,31 +145,24 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/api/integrations/gcloud/login") {
       return json(res, 200, gcloudAuth);
     }
-    if (req.method === "GET" && url.pathname === "/api/dramas") {
-      const rows = db.prepare("SELECT * FROM drama_analyses ORDER BY id DESC").all();
-      return json(res, 200, { items: rows.map(serializeAnalysis) });
-    }
+    if (req.method === "GET" && url.pathname === "/api/dramas") return json(res, 200, await listAnalyzedDramas());
 
     if (req.method === "GET" && url.pathname === "/api/games") {
-      const rows = db.prepare("SELECT * FROM game_analyses ORDER BY id DESC").all();
-      return json(res, 200, { items: rows.map(serializeGameAnalysis) });
+      return json(res, 200, await listAnalyzedProducts({ os: url.searchParams.get("os") || "", category: url.searchParams.get("category") || "" }));
     }
 
-    if (req.method === "GET" && url.pathname === "/api/novvy/products") {
-      const client = new NovvyMcpClient();
-      await client.initialize();
-      const result = unpackToolResult(await client.callTool("novvy_list_products", {}));
-      const candidates = Array.isArray(result) ? result : [result?.products, result?.items, result?.data].find(Array.isArray) || [];
-      const products = candidates.map((item, index) => ({
-        id: String(item.id || item.productId || `${index + 1}`),
-        productName: String(item.productName || item.name || "未命名游戏"),
-        description: String(item.description || ""),
-        categoryZh: String(item.categoryZh || item.category || "未分类"),
-        os: String(item.os || ""),
-        iconUrl: String(item.iconUrl || ""),
-        landingUrl: String(item.landingUrl || item.storeUrl || ""),
-      })).filter((item) => item.landingUrl);
-      return json(res, 200, { items: products });
+    const remoteDramaDetailMatch = url.pathname.match(/^\/api\/dramas\/([0-9a-f-]{36})$/i);
+    if (req.method === "GET" && remoteDramaDetailMatch) return json(res, 200, dramaDetailView(await getAnalyzedDrama(remoteDramaDetailMatch[1])));
+
+    const remoteProductDetailMatch = url.pathname.match(/^\/api\/games\/([0-9a-f-]{36})$/i);
+    if (req.method === "GET" && remoteProductDetailMatch) return json(res, 200, productDetailView(await getAnalyzedProduct(remoteProductDetailMatch[1])));
+
+    const analysisMediaMatch = url.pathname.match(/^\/api\/analysis-media\/(dramas|products)\/([0-9a-f-]{36})\/([^/]+)$/i);
+    if (req.method === "GET" && analysisMediaMatch) {
+      const mediaUrl = await resolveAnalysisMediaUrl(analysisMediaMatch[1].toLowerCase(), analysisMediaMatch[2], decodeURIComponent(analysisMediaMatch[3]));
+      if (!mediaUrl) return json(res, 404, { error: "分析图片不存在" });
+      res.writeHead(302, { location: mediaUrl, "cache-control": "private, max-age=240" });
+      return res.end();
     }
 
     const generatedVideoMatch = url.pathname.match(/^\/api\/generated\/videos\/([^/]+)$/);
@@ -200,14 +190,10 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && url.pathname === "/api/creative/sources") {
-      const dramas = db.prepare("SELECT id, title, analysis_json, created_at FROM drama_analyses WHERE status = 'completed' ORDER BY id DESC").all();
-      const games = db.prepare("SELECT id, title, analysis_json, platform, created_at FROM game_analyses WHERE status = 'completed' ORDER BY id DESC").all();
+      const [dramas, games] = await Promise.all([listAnalyzedDramas(), listAnalyzedProducts()]);
       return json(res, 200, {
-        dramas: dramas.flatMap((item) => {
-          const analysis = item.analysis_json ? JSON.parse(item.analysis_json) : null;
-          return isDramaAnalysisV3(analysis) ? [{ id: item.id, title: item.title, summary: dramaAnalysisView(analysis).oneSentenceThesis, createdAt: item.created_at }] : [];
-        }),
-        games: games.map((item) => { const analysis = item.analysis_json ? JSON.parse(item.analysis_json) : {}; return { id: item.id, title: item.title, platform: item.platform, summary: analysis.products?.[0]?.descriptionSummary || analysis.productThesis || "", createdAt: item.created_at }; }),
+        dramas: dramas.items.map((item) => ({ id: item.id, title: item.title, summary: `${item.episodeCount} 集`, createdAt: item.analyzedAt })),
+        games: games.items.map((item) => ({ id: item.id, title: item.title, platform: item.platform, summary: item.category, createdAt: item.analyzedAt })),
       });
     }
 
@@ -230,15 +216,26 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname === "/api/creative/sessions") {
       const body = JSON.parse((await requestBody(req)).toString("utf8") || "{}");
-      const dramaId = Number(body.dramaId);
-      const gameId = Number(body.gameId);
-      const drama = db.prepare("SELECT * FROM drama_analyses WHERE id = ? AND status = 'completed'").get(dramaId);
-      const game = db.prepare("SELECT * FROM game_analyses WHERE id = ? AND status = 'completed'").get(gameId);
-      if (!drama || !game) return json(res, 400, { error: "请选择已完成分析的短剧和游戏" });
+      let drama;
+      let game;
+      if (body.dramaSourceId && body.gameSourceId) {
+        const [dramaPayload, productPayload] = await Promise.all([
+          getAnalyzedDrama(String(body.dramaSourceId), { fresh: true }),
+          getAnalyzedProduct(String(body.gameSourceId), { fresh: true }),
+        ]);
+        drama = upsertExternalDrama(dramaDetailView(dramaPayload));
+        game = upsertExternalProduct(productDetailView(productPayload));
+      } else {
+        drama = db.prepare("SELECT * FROM drama_analyses WHERE id = ? AND status = 'completed'").get(Number(body.dramaId));
+        game = db.prepare("SELECT * FROM game_analyses WHERE id = ? AND status = 'completed'").get(Number(body.gameId));
+      }
+      if (!drama || !game) return json(res, 400, { error: "请选择已完成分析的短剧和 App" });
+      const dramaId = drama.id;
+      const gameId = game.id;
       const dramaResult = drama.analysis_json ? JSON.parse(drama.analysis_json) : {};
       if (!isDramaAnalysisV3(dramaResult)) return json(res, 400, { error: "所选短剧不是 novvy.video-analysis.v3，请重新分析短剧" });
       const timestamp = now();
-      const title = `${drama.title} × ${game.title || "游戏创意"}`;
+      const title = `${drama.title} × ${game.title || "App 创意"}`;
       const inserted = db.prepare("INSERT INTO creative_sessions (drama_id, game_id, title, stage, created_at, updated_at) VALUES (?, ?, ?, 'working', ?, ?)")
         .run(dramaId, gameId, title, timestamp, timestamp);
       const id = Number(inserted.lastInsertRowid);
@@ -257,7 +254,7 @@ const server = http.createServer(async (req, res) => {
         title: game.title || "",
         storeUrl: game.store_url,
         thesis: gameResult.productThesis || gameResult.products?.[0]?.descriptionSummary || "",
-        coreLoop: gameResult.coreLoop || gameResult.gameplay || {},
+        coreLoop: gameResult.coreLoop || gameResult.gameplay || gameResult.products?.[0]?.rawGameplay?.core_loop || gameResult.products?.[0]?.productTruth?.firstCoreExperience || {},
       }, { key: `session:${id}:stage:product_analysis:source:${game.id}` });
       runCreativeTurn(id, "生成首次片尾创意方向", true);
       return json(res, 201, serializeCreativeSession(db.prepare("SELECT * FROM creative_sessions WHERE id = ?").get(id)));
@@ -533,35 +530,8 @@ const server = http.createServer(async (req, res) => {
       return row ? json(res, 200, serializeCreativeSession(row)) : json(res, 404, { error: "工作台不存在" });
     }
 
-    if (req.method === "POST" && url.pathname === "/api/games") {
-      const body = JSON.parse((await requestBody(req)).toString("utf8") || "{}");
-      const storeUrl = String(body.storeUrl || "").trim();
-      const title = String(body.title || "").trim();
-      const product = body.product && typeof body.product === "object" ? body.product : null;
-      let parsed;
-      try { parsed = new URL(storeUrl); } catch { return json(res, 400, { error: "请输入有效的商店地址" }); }
-      const isGoogle = parsed.hostname === "play.google.com" && parsed.pathname.startsWith("/store/apps/details");
-      const isApple = parsed.hostname === "apps.apple.com" && /\/app\//.test(parsed.pathname);
-      if (!isGoogle && !isApple) return json(res, 400, { error: "目前只支持 Google Play 或 Apple App Store 地址" });
-      const existing = db.prepare("SELECT * FROM game_analyses WHERE store_url=? AND status IN ('uploaded','analyzing','completed') ORDER BY id DESC LIMIT 1").get(storeUrl);
-      if (existing) return json(res, 200, { ...serializeGameAnalysis(existing), reused: true });
-      const platform = isGoogle ? "google_play" : "apple_app_store";
-      const timestamp = now();
-      const source = product || { productName: title, description: "", category: "", categoryZh: "", os: isGoogle ? "Android" : "iOS", landingUrl: storeUrl };
-      const result = db.prepare("INSERT INTO game_analyses (title, store_url, platform, source_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'uploaded', ?, ?)")
-        .run(title, storeUrl, platform, JSON.stringify(source), timestamp, timestamp);
-      const row = db.prepare("SELECT * FROM game_analyses WHERE id = ?").get(Number(result.lastInsertRowid));
-      return json(res, 201, serializeGameAnalysis(row));
-    }
-
-    const gameAnalyzeMatch = url.pathname.match(/^\/api\/games\/(\d+)\/analyze$/);
-    if (req.method === "POST" && gameAnalyzeMatch) {
-      const id = Number(gameAnalyzeMatch[1]);
-      const row = db.prepare("SELECT * FROM game_analyses WHERE id = ?").get(id);
-      if (!row) return json(res, 404, { error: "游戏分析记录不存在" });
-      if (row.status === "analyzing") return json(res, 409, { error: "正在分析中" });
-      analyzeGame(id);
-      return json(res, 202, { id, status: "analyzing" });
+    if (req.method === "POST" && (url.pathname === "/api/games" || /^\/api\/games\/\d+\/analyze$/.test(url.pathname))) {
+      return json(res, 410, { error: "App 分析已改为读取 AI Analysis API，请从远端已解析列表选择。" });
     }
 
     const gameDetailMatch = url.pathname.match(/^\/api\/games\/(\d+)$/);
@@ -570,34 +540,8 @@ const server = http.createServer(async (req, res) => {
       return row ? json(res, 200, serializeGameAnalysis(row)) : json(res, 404, { error: "记录不存在" });
     }
 
-    if (req.method === "POST" && url.pathname === "/api/dramas") {
-      const form = await parseMultipart(req);
-      const file = form.get("video");
-      const titleValue = String(form.get("title") || "").trim();
-      if (!(file instanceof File) || !file.size) return json(res, 400, { error: "请选择短剧视频" });
-      if (!file.type.startsWith("video/")) return json(res, 400, { error: "只支持视频文件" });
-      const extension = path.extname(file.name).toLowerCase() || ".mp4";
-      const storedName = `${Date.now()}-${crypto.randomUUID()}${extension}`;
-      const storedPath = path.join(uploadsDir, storedName);
-      await fsp.writeFile(storedPath, Buffer.from(await file.arrayBuffer()));
-      const timestamp = now();
-      const result = db.prepare(`
-        INSERT INTO drama_analyses
-        (title, original_name, video_path, mime_type, file_size, status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, 'uploaded', ?, ?)
-      `).run(titleValue || path.parse(file.name).name, file.name, storedPath, file.type, file.size, timestamp, timestamp);
-      const row = db.prepare("SELECT * FROM drama_analyses WHERE id = ?").get(Number(result.lastInsertRowid));
-      return json(res, 201, serializeAnalysis(row));
-    }
-
-    const analyzeMatch = url.pathname.match(/^\/api\/dramas\/(\d+)\/analyze$/);
-    if (req.method === "POST" && analyzeMatch) {
-      const id = Number(analyzeMatch[1]);
-      const row = db.prepare("SELECT * FROM drama_analyses WHERE id = ?").get(id);
-      if (!row) return json(res, 404, { error: "分析记录不存在" });
-      if (row.status === "analyzing") return json(res, 409, { error: "正在分析中" });
-      analyzeDrama(id);
-      return json(res, 202, { id, status: "analyzing" });
+    if (req.method === "POST" && (url.pathname === "/api/dramas" || /^\/api\/dramas\/\d+\/analyze$/.test(url.pathname))) {
+      return json(res, 410, { error: "短剧分析已改为读取 AI Analysis API，请从远端已解析列表选择。" });
     }
 
     const detailMatch = url.pathname.match(/^\/api\/dramas\/(\d+)$/);
@@ -634,7 +578,8 @@ const server = http.createServer(async (req, res) => {
     const contentTypes = { ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8" };
     return sendFile(res, filePath, contentTypes[path.extname(filePath)] || "application/octet-stream");
   } catch (error) {
-    return json(res, 500, { error: error instanceof Error ? error.message : String(error) });
+    const status = Number(error?.statusCode);
+    return json(res, status >= 400 && status < 600 ? status : 500, { error: error instanceof Error ? error.message : String(error) });
   }
 });
 
