@@ -1,6 +1,7 @@
 import { productionProfile } from "./production-profile.js";
 
 const PLAN_VERSION = "contextual.storyboard-video.v1";
+const CREATIVE_PLAN_VERSION = "contextual.video-shot-plan.v1";
 
 function detail(card, pattern) {
   return String((card.details || []).find((item) => pattern.test(item.label))?.content || "").trim();
@@ -16,7 +17,27 @@ export function parseStoryboardVideoPlan(card) {
     if (!prompt) throw new Error("视频提示词卡缺少分镜任务 JSON 和英文提交提示词");
     plan = { schemaVersion: PLAN_VERSION, shots: [{ shotId: "shot-01", order: 1, durationSeconds: productionProfile.default_shot_duration_seconds, reviewZh: detail(card, /中文.*审核/i) || card.summary, promptEn: prompt }] };
   }
-  if (plan?.schemaVersion !== PLAN_VERSION || !Array.isArray(plan.shots) || !plan.shots.length || plan.shots.length > productionProfile.max_shots_per_final) throw new Error(`分镜任务 JSON 契约无效：最多 ${productionProfile.max_shots_per_final} 镜`);
+  if (plan?.schemaVersion === CREATIVE_PLAN_VERSION && Array.isArray(plan.shots)) {
+    plan = {
+      schemaVersion: PLAN_VERSION,
+      shots: plan.shots.map((shot, index) => {
+        const sourceShotId = String(shot?.shotId || "").trim();
+        const promptEn = detail(card, new RegExp(`英文提交提示词\\s*[｜|]\\s*${sourceShotId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"));
+        const reviewZh = detail(card, new RegExp(`中文审核稿\\s*[｜|]\\s*${sourceShotId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\s*[｜|].*)?$`, "i"));
+        return {
+          shotId: `shot-${String(index + 1).padStart(2, "0")}`,
+          order: index + 1,
+          durationSeconds: Number(shot?.durationSeconds),
+          reviewZh,
+          promptEn,
+          sourceShotId,
+        };
+      }),
+    };
+  }
+  if (plan?.schemaVersion !== PLAN_VERSION) throw new Error(`分镜任务 JSON 契约版本不支持：${plan?.schemaVersion || "missing"}`);
+  if (!Array.isArray(plan.shots) || !plan.shots.length) throw new Error("分镜任务 JSON 没有可执行镜头");
+  if (plan.shots.length > productionProfile.max_shots_per_final) throw new Error(`分镜任务 JSON 契约无效：最多 ${productionProfile.max_shots_per_final} 镜，当前 ${plan.shots.length} 镜`);
   const shots = plan.shots.map((shot, index) => {
     const expectedId = `shot-${String(index + 1).padStart(2, "0")}`;
     const durationSeconds = Number(shot?.durationSeconds);
