@@ -999,7 +999,7 @@ function renderChatCard(card, disabled) {
     videoModel.append(
       new Option("Seedance 2.0 Fast（人物六视图 + 分镜图）", "seedance-2.0-fast"),
       new Option("Kling v3 Omni（人物六视图 + 分镜图）", "kling-v3-omni-video"),
-      new Option("MiniMax Hailuo 2.3（仅用分镜图作为首帧）", "MiniMax-Hailuo-2.3"),
+      new Option("MiniMax-H3（人物六视图 + 分镜图）", "MiniMax-H3"),
       new Option("Vidu Q3 Turbo（人物六视图 + 分镜图）", "viduq3-turbo"),
     );
     videoModel.disabled = disabled || card.status === "generating";

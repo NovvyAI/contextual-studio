@@ -5,14 +5,20 @@ import { buildImaRouterVideoRequest } from "./imarouter-video-generator.js";
 const shot = { durationSeconds: 9, prompt: "Move naturally." };
 const references = { ordered: ["character-a", "character-b", "storyboard"], storyboard: "storyboard" };
 
-test("MiniMax only receives the storyboard as first frame", () => {
-  assert.deepEqual(buildImaRouterVideoRequest("MiniMax-Hailuo-2.3", shot, references), {
-    model: "MiniMax-Hailuo-2.3",
+test("MiniMax-H3 receives character references first and storyboard last", () => {
+  assert.deepEqual(buildImaRouterVideoRequest("MiniMax-H3", shot, references), {
+    model: "MiniMax-H3",
     prompt: "Move naturally.",
-    duration: 10,
-    size: "768p",
-    metadata: { first_frame_image: "storyboard" },
+    duration: 9,
+    resolution: "768P",
+    ratio: "9:16",
+    images: ["character-a", "character-b", "storyboard"],
+    role_mode: "reference",
   });
+});
+
+test("MiniMax-H3 enforces the official nine-image limit", () => {
+  assert.throws(() => buildImaRouterVideoRequest("MiniMax-H3", shot, { ordered: Array(10).fill("image"), storyboard: "image" }), /最多支持 9 张参考图/);
 });
 
 test("Kling uses its own image_list request contract", () => {

@@ -13,7 +13,7 @@ const DEFAULT_VIDEO_MODEL = "seedance-2.0-fast";
 const VIDEO_MODELS = Object.freeze({
   "seedance-2.0-fast": { label: "Seedance 2.0 Fast", family: "seedance" },
   "kling-v3-omni-video": { label: "Kling v3 Omni", family: "kling" },
-  "MiniMax-Hailuo-2.3": { label: "MiniMax Hailuo 2.3", family: "minimax" },
+  "MiniMax-H3": { label: "MiniMax-H3", family: "minimax-h3" },
   "viduq3-turbo": { label: "Vidu Q3 Turbo", family: "vidu" },
 });
 const OK = new Set(["succeeded", "completed", "success"]);
@@ -97,13 +97,17 @@ function nearestDuration(value, allowed) {
 export function buildImaRouterVideoRequest(modelKey, shot, references, generateAudio = true) {
   const model = resolveVideoModel(modelKey);
   const prompt = String(shot.prompt || "");
-  if (model.family === "minimax") {
+  if (model.family === "minimax-h3") {
+    if (!references.ordered.length) throw new Error("MiniMax-H3 至少需要一张参考图");
+    if (references.ordered.length > 9) throw new Error(`MiniMax-H3 最多支持 9 张参考图，当前为 ${references.ordered.length} 张`);
     return {
       model: model.key,
       prompt,
-      duration: nearestDuration(shot.durationSeconds, [6, 10]),
-      size: "768p",
-      metadata: { first_frame_image: references.storyboard },
+      duration: Math.min(15, Math.max(4, Math.round(Number(shot.durationSeconds) || 5))),
+      resolution: "768P",
+      ratio: "9:16",
+      images: references.ordered,
+      role_mode: "reference",
     };
   }
   if (model.family === "kling") {
@@ -217,10 +221,10 @@ export function startImaRouterVideoGeneration(sessionId, cardId, requestedModel 
   if (!plan.shots.length) throw new Error(`找不到要重新生成的视频镜头：${targetShotId}`);
   const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
   const model = resolveVideoModel(requestedModel);
-  const reference = selectReferences(workspace, model.family !== "minimax");
+  const reference = selectReferences(workspace);
   const timestamp = now();
   db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, targetShotId ? `使用 ImaRouter 重新生成 ${targetShotId}` : `使用 ImaRouter 生成视频：${cardId}`, timestamp);
-  const modelStrategy = model.family === "minimax" ? "每镜仅使用对应分镜图作为首帧" : "人物六视图在前，对应分镜图在最后";
+  const modelStrategy = "人物六视图在前，对应分镜图在最后";
   append(sessionId, `已选择 ImaRouter / ${model.label}。正在准备逐镜参考素材并生成视频。参考策略：${modelStrategy}。`, {
     ...card, previewUrl: "", status: "generating",
     details: [...(card.details || []).filter((item) => !["视频供应商", "参考策略"].includes(item.label)), { label: "视频供应商", content: `ImaRouter / ${model.label}` }, { label: "参考策略", content: modelStrategy }],
@@ -237,7 +241,7 @@ export function resumeImaRouterVideoGeneration(sessionId, cardId, requestedModel
   const plan = parseStoryboardVideoPlan(card);
   const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
   const model = resolveVideoModel(requestedModel);
-  const reference = selectReferences(workspace, model.family !== "minimax");
+  const reference = selectReferences(workspace);
   db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(now(), sessionId);
   generate(sessionId, card, plan, reference, model.key);
 }
@@ -250,7 +254,7 @@ async function generate(sessionId, card, plan, reference, modelKey, forceNewVers
     const storyboardPublicUrls = [];
     for (const source of reference.storyboardUrls) storyboardPublicUrls.push(await ensurePublicReferenceUrl(source));
     const characterPublicUrls = [];
-    if (model.family !== "minimax") for (const source of reference.characterUrls) characterPublicUrls.push(await ensurePublicReferenceUrl(source));
+    for (const source of reference.characterUrls) characterPublicUrls.push(await ensurePublicReferenceUrl(source));
     const useReviewedAssets = model.family === "seedance";
     const storyboardReferences = useReviewedAssets ? await Promise.all(storyboardPublicUrls.map((url) => createAssetReference(baseUrl, headers, url))) : storyboardPublicUrls;
     const characterReferences = useReviewedAssets ? await Promise.all(characterPublicUrls.map((url) => createAssetReference(baseUrl, headers, url))) : characterPublicUrls;
@@ -278,7 +282,7 @@ async function generate(sessionId, card, plan, reference, modelKey, forceNewVers
       if (!taskId) {
         db.prepare("INSERT INTO creative_video_shots (session_id,prompt_card_id,shot_id,shot_order,version,provider,model_key,duration_seconds,prompt,status,created_at,updated_at) VALUES (?,?,?,?,?,'imarouter',?,?,?,'generating',?,?)")
           .run(sessionId, card.id, shot.shotId, shot.order, version, model.key, shot.durationSeconds, shot.promptEn, createdAt, createdAt);
-        const referenceInstruction = model.family === "minimax" ? "Use the supplied storyboard image as the first frame and preserve its composition, character appearance, costume, props, and environment. " : imaRouterReferenceInstruction(characterReferences.length);
+        const referenceInstruction = imaRouterReferenceInstruction(characterReferences.length);
         const created = await submitShot(`${referenceInstruction}${shot.promptEn}`);
         taskId = created?.id || created?.task_id;
         if (!taskId) throw new Error(`${shot.shotId}：ImaRouter 未返回视频任务 ID`);
@@ -326,7 +330,7 @@ async function generate(sessionId, card, plan, reference, modelKey, forceNewVers
       }
       if (!previewUrl) throw new Error(`${shot.shotId} 查询超时或未返回视频地址`);
       db.prepare("UPDATE creative_video_shots SET status='completed',result_url=?,updated_at=? WHERE session_id=? AND prompt_card_id=? AND shot_id=? AND version=?").run(previewUrl, now(), sessionId, card.id, shot.shotId, version);
-      const referenceSummary = model.family === "minimax" ? `对应分镜图 ${shot.order} 作为唯一首帧` : `${characterReferences.length} 张人物身份参考在前，对应分镜图 ${shot.order} 在最后`;
+      const referenceSummary = `${characterReferences.length} 张人物身份参考在前，对应分镜图 ${shot.order} 在最后`;
       append(sessionId, `${shot.shotId} V${version} 已生成，可以单独播放复审。`, shotCard(card, shot, { previewUrl, status: "completed", version, details: [...shotCard(card, shot).details, { label: "版本", content: `V${version}` }, { label: "视频供应商", content: `ImaRouter / ${model.label}` }, { label: "参考策略", content: removedPrivacyReference ? `已移除 ${removedPrivacyReference} 后自动重试成功` : referenceSummary }, { label: "音频", content: model.family === "seedance" || model.family === "kling" ? (audioDowngraded ? "该镜头因版权审核自动降级为无音频" : "生成同步音频") : "该模型不生成音频" }, { label: "视频任务", content: taskId }] }));
     }
     if (forceNewVersion) {
@@ -339,7 +343,7 @@ async function generate(sessionId, card, plan, reference, modelKey, forceNewVers
     const message = error instanceof Error ? error.message : String(error);
     append(sessionId, `ImaRouter 视频没有生成成功：${message}。提示词和参考素材均已保留。`, {
       ...card, previewUrl: "", status: "failed",
-      details: [...(card.details || []).filter((item) => !["失败原因", "视频供应商", "参考策略"].includes(item.label)), { label: "视频供应商", content: `ImaRouter / ${resolveVideoModel(modelKey).label}` }, { label: "参考策略", content: resolveVideoModel(modelKey).family === "minimax" ? "对应分镜图作为唯一首帧" : reference.strategy }, { label: "失败原因", content: message }],
+      details: [...(card.details || []).filter((item) => !["失败原因", "视频供应商", "参考策略"].includes(item.label)), { label: "视频供应商", content: `ImaRouter / ${resolveVideoModel(modelKey).label}` }, { label: "参考策略", content: reference.strategy }, { label: "失败原因", content: message }],
     });
     db.prepare("UPDATE creative_sessions SET stage='prompt_review',error_message=?,updated_at=? WHERE id=?").run(message, now(), sessionId);
   }
