@@ -175,6 +175,10 @@ if (!creativeMessageColumns.has("visibility")) db.exec("ALTER TABLE creative_mes
 if (!creativeMessageColumns.has("attachments_json")) db.exec("ALTER TABLE creative_messages ADD COLUMN attachments_json TEXT");
 const gameAnalysisColumns = new Set(db.prepare("PRAGMA table_info(game_analyses)").all().map((column) => column.name));
 if (!gameAnalysisColumns.has("source_json")) db.exec("ALTER TABLE game_analyses ADD COLUMN source_json TEXT");
+const faceCandidateColumns = new Set(db.prepare("PRAGMA table_info(drama_face_candidates)").all().map((column) => column.name));
+if (!faceCandidateColumns.has("overlay_score")) db.exec("ALTER TABLE drama_face_candidates ADD COLUMN overlay_score REAL NOT NULL DEFAULT 0");
+if (!faceCandidateColumns.has("overlay_regions_json")) db.exec("ALTER TABLE drama_face_candidates ADD COLUMN overlay_regions_json TEXT");
+if (!faceCandidateColumns.has("needs_cleanup")) db.exec("ALTER TABLE drama_face_candidates ADD COLUMN needs_cleanup INTEGER NOT NULL DEFAULT 0");
 
 export const now = () => new Date().toISOString();
 
@@ -206,7 +210,7 @@ export function serializeAnalysis(row) {
     FROM drama_screenshots WHERE analysis_id = ? ORDER BY timestamp_seconds
   `).all(row.id);
   const faceCandidates = db.prepare(`
-    SELECT id,candidate_id,character_id,timestamp_seconds,view,yaw_degrees,quality_score
+    SELECT id,candidate_id,character_id,timestamp_seconds,view,yaw_degrees,quality_score,overlay_score,overlay_regions_json,needs_cleanup
     FROM drama_face_candidates WHERE analysis_id=? ORDER BY timestamp_seconds,id
   `).all(row.id);
   return {
@@ -240,6 +244,9 @@ export function serializeAnalysis(row) {
       view: item.view,
       yawDegrees: item.yaw_degrees,
       qualityScore: item.quality_score,
+      overlayScore: Number(item.overlay_score || 0),
+      overlayRegions: (() => { try { return JSON.parse(item.overlay_regions_json || "[]"); } catch { return []; } })(),
+      needsCleanup: Boolean(item.needs_cleanup),
       url: `/api/face-candidates/${item.id}`,
     })),
   };
@@ -366,6 +373,9 @@ export function creativeCharacterReferenceAssets(sessionId) {
     timestampSeconds: candidate.timestampSeconds,
     view,
     qualityScore: candidate.qualityScore,
+    overlayScore: candidate.overlayScore,
+    overlayRegions: candidate.overlayRegions || [],
+    needsCleanup: Boolean(candidate.needsCleanup),
     version: 1,
   }));
 }

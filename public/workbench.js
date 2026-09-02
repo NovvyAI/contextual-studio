@@ -225,6 +225,17 @@ async function createAnnotationMask(image, annotations) {
   return { blob, width: canvas.width, height: canvas.height };
 }
 
+async function createDetectedOverlayMask(imageUrl, regions) {
+  const image = new Image();
+  image.src = imageUrl;
+  const annotations = (regions || []).map((region) => ({
+    type: "rect", x: Number(region.x || 0), y: Number(region.y || 0),
+    width: Number(region.width || 0), height: Number(region.height || 0),
+  })).filter((region) => region.width > 0 && region.height > 0);
+  if (!annotations.length) throw new Error("没有检测到可自动标注的字幕或水印区域");
+  return createAnnotationMask(image, annotations);
+}
+
 function imageEditRequestOptions(instruction, mask, fileStem) {
   if (!mask) return { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ feedback: instruction }) };
   const request = new FormData();
@@ -1182,6 +1193,7 @@ function renderAssetLibrary(assets, characterReferences, screenshots, disabled) 
     const body = element("div", "asset-library-body");
     const top = element("div", "asset-library-card-heading"); top.append(element("b", "asset-number character-reference-number", asset.reference), element("small", "", `${Number(asset.timestampSeconds || 0).toFixed(2)}s`));
     body.append(top, element("strong", "", asset.title), element("p", "", asset.description));
+    if (asset.needsCleanup) body.append(element("div", "character-overlay-warning", `检测到疑似字幕/水印 · 覆盖分 ${Number(asset.overlayScore || 0).toFixed(2)}`));
     const use = element("button", "asset-use-button", `引用 ${asset.reference}`); use.type = "button";
     use.addEventListener("click", () => {
       const input = document.querySelector("#creative-chat-input");
@@ -1203,6 +1215,20 @@ function renderAssetLibrary(assets, characterReferences, screenshots, disabled) 
     });
     revision.append(feedback);
     addAnnotationButton(revision, asset.url, `${asset.reference} ${asset.title}`, feedback, disabled, { useMask: true, maskKey: imageMaskKey });
+    if (asset.needsCleanup && asset.overlayRegions?.length) {
+      const autoMask = element("button", "image-annotate-button character-auto-overlay", "一键标注字幕/水印"); autoMask.type = "button"; autoMask.disabled = disabled;
+      autoMask.addEventListener("click", async () => {
+        try {
+          autoMask.disabled = true; autoMask.textContent = "正在生成文字区域蒙版…";
+          const mask = await createDetectedOverlayMask(asset.url, asset.overlayRegions);
+          pendingImageMasks.set(imageMaskKey, mask);
+          const instruction = "去除自动检测区域内的字幕、水印、Logo 和叠加文字；根据周围像素自然补全背景、服装或头发，保持人物身份、五官、姿势、服装、光影、构图和蒙版外全部内容不变，不要添加任何新文字。";
+          feedback.value = `${feedback.value.trim()}${feedback.value.trim() ? "\n" : ""}${instruction}`;
+          feedback.focus(); autoMask.textContent = "已标注，请审核意见后重新生成";
+        } catch (error) { autoMask.disabled = disabled; autoMask.textContent = "一键标注字幕/水印"; alert(error.message); }
+      });
+      revision.append(autoMask);
+    }
     revision.append(regenerate);
     body.append(use, revision); card.append(media, body); characterGrid.append(card);
   });

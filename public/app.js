@@ -140,6 +140,7 @@ function renderAnalysis(root, result, screenshots) {
       const figure = element("figure", "source-screenshot reference-selected");
       const image = element("img"); image.src = candidate.url; image.alt = `${character.displayName || character.characterId} ${candidate.view}`; image.loading = "lazy";
       const caption = element("figcaption"); caption.append(element("span", "", `${candidate.view} · ${Number(candidate.timestampSeconds || 0).toFixed(2)}s`));
+      if (candidate.needsCleanup) caption.append(element("small", "character-overlay-flag", "疑似字幕/水印，建议清理"));
       figure.append(image, caption); gallery.append(figure);
     }
     card.append(gallery); return card;

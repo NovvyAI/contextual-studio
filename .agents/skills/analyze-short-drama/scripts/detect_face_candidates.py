@@ -54,6 +54,57 @@ def quality_score(crop: np.ndarray, face_width: int, frame_width: int) -> tuple[
     return round(0.45 * sharp_score + 0.35 * size_score + 0.20 * light_score, 4), sharpness, brightness
 
 
+def overlay_regions(crop: np.ndarray) -> tuple[list[dict], float]:
+    """Detect likely burned-in subtitle/watermark bands without OCR or network calls.
+
+    This intentionally returns conservative candidate regions. It is used to
+    prefer a cleaner neighbouring observation and to seed a user-reviewed PNG
+    edit mask; it never erases pixels during analysis.
+    """
+    height, width = crop.shape[:2]
+    if height < 80 or width < 80:
+        return [], 0.0
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    gradient = cv2.morphologyEx(gray, cv2.MORPH_GRADIENT, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)))
+    _, edges = cv2.threshold(gradient, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    kernel_width = max(9, width // 28)
+    joined = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_width, 3)))
+    joined = cv2.dilate(joined, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 2)), iterations=1)
+    contours, _ = cv2.findContours(joined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    boxes: list[list[int]] = []
+    for contour in contours:
+        x, y, box_width, box_height = cv2.boundingRect(contour)
+        relative_width = box_width / width
+        relative_height = box_height / height
+        center_x = (x + box_width / 2) / width
+        center_y = (y + box_height / 2) / height
+        in_subtitle_band = center_y >= 0.58 and relative_width >= 0.16
+        in_title_band = center_y <= 0.20 and relative_width >= 0.10
+        in_corner_watermark = (center_x <= 0.22 or center_x >= 0.78) and (center_y <= 0.34 or center_y >= 0.72) and relative_width >= 0.07
+        if not (in_subtitle_band or in_title_band or in_corner_watermark):
+            continue
+        if not (0.012 <= relative_height <= 0.16) or box_width / max(1, box_height) < 1.35:
+            continue
+        padding_x, padding_y = max(3, width // 100), max(2, height // 120)
+        boxes.append([max(0, x - padding_x), max(0, y - padding_y), min(width, x + box_width + padding_x), min(height, y + box_height + padding_y)])
+
+    boxes.sort(key=lambda box: (box[1], box[0]))
+    merged: list[list[int]] = []
+    for box in boxes:
+        if merged and box[1] <= merged[-1][3] + max(4, height // 80) and box[0] <= merged[-1][2] + max(8, width // 40) and box[2] >= merged[-1][0] - max(8, width // 40):
+            merged[-1] = [min(merged[-1][0], box[0]), min(merged[-1][1], box[1]), max(merged[-1][2], box[2]), max(merged[-1][3], box[3])]
+        else:
+            merged.append(box)
+    normalized = [{
+        "x": round(x1 / width * 100, 2), "y": round(y1 / height * 100, 2),
+        "width": round((x2 - x1) / width * 100, 2), "height": round((y2 - y1) / height * 100, 2),
+        "kind": "subtitle" if (y1 + y2) / 2 >= height * 0.55 else "watermark",
+    } for x1, y1, x2, y2 in merged[:4]]
+    covered = sum(region["width"] * region["height"] for region in normalized) / 10000.0
+    score = min(1.0, covered * 3.5 + len(normalized) * 0.08)
+    return normalized, round(score, 4)
+
+
 def make_sheet(items: list[dict], destination: Path) -> None:
     if not items:
         return
@@ -122,8 +173,9 @@ def main() -> int:
             portrait_y2 = min(height, int(y2 + face_h * 3.25))
             portrait_crop = frame[portrait_y1:portrait_y2, portrait_x1:portrait_x2]
             visual_score, sharpness, brightness = quality_score(face_crop, face_w, width)
+            detected_overlays, overlay_score = overlay_regions(portrait_crop)
             detection_confidence = float(face[-1])
-            score = round(0.8 * visual_score + 0.2 * detection_confidence, 4)
+            score = round((0.8 * visual_score + 0.2 * detection_confidence) * (1.0 - min(0.38, overlay_score * 0.55)), 4)
             if score < 0.50:
                 continue
             view, yaw = head_pose(face)
@@ -131,6 +183,7 @@ def main() -> int:
                 "timestampSeconds": round(timestamp, 3), "view": view, "yawDegrees": round(yaw, 2),
                 "qualityScore": score, "sharpness": round(sharpness, 2), "brightness": round(brightness, 2),
                 "detectionConfidence": round(detection_confidence, 4),
+                "overlayScore": overlay_score, "overlayRegions": detected_overlays, "needsCleanup": bool(detected_overlays),
                 "bbox": [x1, y1, face_w, face_h], "portraitBbox": [portrait_x1, portrait_y1, portrait_x2 - portrait_x1, portrait_y2 - portrait_y1],
                 "faceCrop": face_crop, "crop": portrait_crop,
             })
@@ -158,7 +211,7 @@ def main() -> int:
     sheet_path = output / "face-candidates.jpg"
     make_sheet(serializable, sheet_path)
     print(json.dumps({
-        "version": "local-face-candidates.v1", "engine": "opencv-yunet",
+        "version": "local-face-candidates.v2", "engine": "opencv-yunet-overlay-aware",
         "sampleFps": args.sample_fps, "durationSeconds": duration,
         "candidateCount": len(serializable), "contactSheet": str(sheet_path) if serializable else "",
         "candidates": serializable,

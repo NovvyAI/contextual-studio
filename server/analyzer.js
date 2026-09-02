@@ -95,7 +95,7 @@ async function prepareFaceCandidates(analysisId, videoPath) {
     ], { env: runtimeEnv(), maxBuffer: 16 * 1024 * 1024, timeout: 30 * 60 * 1000 });
     return JSON.parse(stdout);
   } catch (error) {
-    return { version: "local-face-candidates.v1", engine: "opencv-yunet", candidateCount: 0, contactSheet: "", candidates: [], warning: error instanceof Error ? error.message : String(error) };
+    return { version: "local-face-candidates.v2", engine: "opencv-yunet-overlay-aware", candidateCount: 0, contactSheet: "", candidates: [], warning: error instanceof Error ? error.message : String(error) };
   }
 }
 async function lookupMemory(videoPath) {
@@ -156,12 +156,12 @@ async function persistFrames(id, evidence) {
 async function persistFaceCandidates(id, faceEvidence) {
   db.prepare("DELETE FROM drama_face_candidates WHERE analysis_id=?").run(id);
   const insert = db.prepare(`INSERT INTO drama_face_candidates
-    (analysis_id,candidate_id,timestamp_seconds,view,yaw_degrees,quality_score,bbox_json,mime_type,image_blob,created_at)
-    VALUES (?,?,?,?,?,?,?,'image/jpeg',?,?)`);
+    (analysis_id,candidate_id,timestamp_seconds,view,yaw_degrees,quality_score,bbox_json,overlay_score,overlay_regions_json,needs_cleanup,mime_type,image_blob,created_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,'image/jpeg',?,?)`);
   const persisted = [];
   for (const candidate of faceEvidence.candidates || []) {
     const image = await fs.readFile(candidate.cropPath);
-    const row = insert.run(id, candidate.candidateId, Number(candidate.timestampSeconds || 0), candidate.view || "unknown", Number(candidate.yawDegrees || 0), Number(candidate.qualityScore || 0), JSON.stringify(candidate.bbox || []), image, now());
+    const row = insert.run(id, candidate.candidateId, Number(candidate.timestampSeconds || 0), candidate.view || "unknown", Number(candidate.yawDegrees || 0), Number(candidate.qualityScore || 0), JSON.stringify(candidate.bbox || []), Number(candidate.overlayScore || 0), JSON.stringify(candidate.overlayRegions || []), candidate.needsCleanup ? 1 : 0, image, now());
     persisted.push({ ...candidate, id: Number(row.lastInsertRowid), url: `/api/face-candidates/${Number(row.lastInsertRowid)}` });
   }
   return persisted;
@@ -171,7 +171,7 @@ function attachCharacterCandidates(episode, candidates, analysisId) {
   const assigned = new Set();
   for (const [index, character] of (episode.characterLibrary?.characters || []).entries()) {
     character.characterId = String(character.characterId || `character-${String(index + 1).padStart(2, "0")}`);
-    character.candidates = (character.candidateIds || []).map((candidateId) => byCandidateId.get(candidateId)).filter(Boolean).map((item) => ({ candidateId: item.candidateId, screenshotId: item.id, url: item.url, timestampSeconds: item.timestampSeconds, view: item.view, yawDegrees: item.yawDegrees, qualityScore: item.qualityScore }));
+    character.candidates = (character.candidateIds || []).map((candidateId) => byCandidateId.get(candidateId)).filter(Boolean).map((item) => ({ candidateId: item.candidateId, screenshotId: item.id, url: item.url, timestampSeconds: item.timestampSeconds, view: item.view, yawDegrees: item.yawDegrees, qualityScore: item.qualityScore, overlayScore: Number(item.overlayScore || 0), overlayRegions: item.overlayRegions || [], needsCleanup: Boolean(item.needsCleanup) }));
     for (const item of character.candidates) {
       assigned.add(item.candidateId);
       db.prepare("UPDATE drama_face_candidates SET character_id=? WHERE analysis_id=? AND candidate_id=?").run(character.characterId, analysisId, item.candidateId);
@@ -193,7 +193,7 @@ async function analyzeWithCodex(row, evidence, frames, faceEvidence) {
   if (!overview) throw new Error("外部证据流程没有生成概览拼图");
   const timeline = frames.map((item) => `frameIndex=${item.frameIndex}，${item.timestampSeconds.toFixed(2)} 秒`).join("\n");
   const faceSheet = faceEvidence.contactSheet || "";
-  const faceIndex = (faceEvidence.candidates || []).map((item) => `${item.candidateId}，${item.timestampSeconds.toFixed(2)} 秒，${item.view}，质量 ${item.qualityScore}`).join("\n") || "没有检测到可靠人脸候选";
+  const faceIndex = (faceEvidence.candidates || []).map((item) => `${item.candidateId}，${item.timestampSeconds.toFixed(2)} 秒，${item.view}，质量 ${item.qualityScore}${item.needsCleanup ? `，疑似字幕/水印覆盖 ${item.overlayScore}` : "，未检出明显文字覆盖"}`).join("\n") || "没有检测到可靠人脸候选";
   const codex = new Codex();
   const additionalDirectories = [...new Set([path.dirname(overview), ...(faceSheet ? [path.dirname(faceSheet)] : [])])];
   const thread = codex.startThread({ ...(model ? { model } : {}), workingDirectory: path.resolve("."), additionalDirectories, skipGitRepoCheck: true, sandboxMode: "read-only", approvalPolicy: "never", networkAccessEnabled: false });
