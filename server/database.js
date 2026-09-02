@@ -179,6 +179,8 @@ const faceCandidateColumns = new Set(db.prepare("PRAGMA table_info(drama_face_ca
 if (!faceCandidateColumns.has("overlay_score")) db.exec("ALTER TABLE drama_face_candidates ADD COLUMN overlay_score REAL NOT NULL DEFAULT 0");
 if (!faceCandidateColumns.has("overlay_regions_json")) db.exec("ALTER TABLE drama_face_candidates ADD COLUMN overlay_regions_json TEXT");
 if (!faceCandidateColumns.has("needs_cleanup")) db.exec("ALTER TABLE drama_face_candidates ADD COLUMN needs_cleanup INTEGER NOT NULL DEFAULT 0");
+const creativeVideoShotColumns = new Set(db.prepare("PRAGMA table_info(creative_video_shots)").all().map((column) => column.name));
+if (!creativeVideoShotColumns.has("model_key")) db.exec("ALTER TABLE creative_video_shots ADD COLUMN model_key TEXT");
 
 export const now = () => new Date().toISOString();
 

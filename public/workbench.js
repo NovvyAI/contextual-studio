@@ -972,14 +972,31 @@ function renderChatCard(card, disabled) {
     directorChoice = () => select.value;
   }
   let videoProvider;
+  let videoModel;
   if (isVideoPromptDraft && !isShotBatchReady) {
     const providerRow = element("label", "video-provider-picker");
     providerRow.append(element("span", "", "视频生成方式"));
     videoProvider = document.createElement("select");
-    videoProvider.append(new Option("ImaRouter（六视图人物面板 + 分镜图）", "imarouter"), new Option("Novvy MCP（多人物参考）", "novvy"));
+    videoProvider.append(new Option("ImaRouter", "imarouter"), new Option("Novvy MCP（Seedance 2.0 Fast）", "novvy"));
     videoProvider.disabled = disabled || card.status === "generating";
     providerRow.append(videoProvider);
     actions.append(providerRow);
+
+    const modelRow = element("label", "video-provider-picker");
+    modelRow.append(element("span", "", "ImaRouter 视频模型"));
+    videoModel = document.createElement("select");
+    videoModel.append(
+      new Option("Seedance 2.0 Fast（人物六视图 + 分镜图）", "seedance-2.0-fast"),
+      new Option("Kling v3 Omni（人物六视图 + 分镜图）", "kling-v3-omni-video"),
+      new Option("MiniMax Hailuo 2.3（仅用分镜图作为首帧）", "MiniMax-Hailuo-2.3"),
+      new Option("Vidu Q3 Turbo（人物六视图 + 分镜图）", "viduq3-turbo"),
+    );
+    videoModel.disabled = disabled || card.status === "generating";
+    const syncModelVisibility = () => { modelRow.hidden = videoProvider.value !== "imarouter"; };
+    videoProvider.addEventListener("change", syncModelVisibility);
+    modelRow.append(videoModel);
+    actions.append(modelRow);
+    syncModelVisibility();
   }
   const adoptLabel = card.kind === "concept" ? "选择这个方案" : card.kind === "audiovisual_direction" ? "确认视听方向并生成剧情与分镜" : card.kind === "storyboard" ? "选择并生成分镜图" : isFinalCardDirection ? "确认这个落版方向" : isFailedFinalCard ? "重新生成落版图" : isFinalCardDraft ? "确认并生成落版图" : isGeneratedFinalCard ? "确认使用" : isFinalVideo && card.status === "confirmed" ? "最终成片已确认" : isFinalVideo ? "确认最终成片" : isShotBatchReady ? "确认全部镜头并合成" : isVideoPromptDraft && card.status === "failed" ? "按所选方式重新生成" : isVideoPromptDraft ? "确认并生成逐镜视频" : "采用这个候选";
   const adopt = element("button", "chat-card-adopt", adoptLabel); adopt.type = "button";
@@ -1045,7 +1062,7 @@ function renderChatCard(card, disabled) {
         await api(`/api/creative/sessions/${sessionId}/cards/${encodeURIComponent(card.id)}/generate-video`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ provider: videoProvider?.value || "imarouter" }),
+          body: JSON.stringify({ provider: videoProvider?.value || "imarouter", model: videoModel?.value || "seedance-2.0-fast" }),
         });
         return refreshSession();
       } catch (error) {

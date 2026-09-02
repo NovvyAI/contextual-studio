@@ -417,7 +417,7 @@ const server = http.createServer(async (req, res) => {
       const body = JSON.parse((await requestBody(req)).toString("utf8") || "{}");
       const provider = body.provider === "novvy" ? "novvy" : "imarouter";
       if (!productionProfile.allowed_video_providers.includes(provider)) return json(res, 400, { error: `当前生产 Profile 不允许视频提供者：${provider}` });
-      if (provider === "imarouter") startImaRouterVideoGeneration(id, cardId);
+      if (provider === "imarouter") startImaRouterVideoGeneration(id, cardId, body.model);
       else startVideoGeneration(id, cardId);
       return json(res, 202, { id, cardId, provider, status: "working" });
     }
@@ -653,7 +653,7 @@ function recoverInterruptedCreativeTurns() {
     WHERE s.stage='working' OR (pending.id IS NOT NULL AND completed.id IS NOT NULL)
   `).all();
   for (const session of interrupted) {
-    const interruptedVideo = db.prepare("SELECT prompt_card_id,provider,status,task_id,updated_at FROM creative_video_shots WHERE session_id=? ORDER BY CASE WHEN status='generating' THEN 0 ELSE 1 END,id DESC LIMIT 1").get(session.id);
+    const interruptedVideo = db.prepare("SELECT prompt_card_id,provider,model_key,status,task_id,updated_at FROM creative_video_shots WHERE session_id=? ORDER BY CASE WHEN status='generating' THEN 0 ELSE 1 END,id DESC LIMIT 1").get(session.id);
     const hasPartialVideoBatch = interruptedVideo && db.prepare(`
       SELECT 1
       FROM creative_video_shots pending
@@ -671,7 +671,7 @@ function recoverInterruptedCreativeTurns() {
       db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
         .run(session.id, `检测到${interruptedVideo.provider === "imarouter" ? " ImaRouter" : " Novvy MCP"} 逐镜视频任务被服务重启中断，正在恢复未完成镜头；已经成功的镜头会保留，不会重新生成，也不会退回导演或剧情阶段。`, timestamp);
       setImmediate(() => {
-        if (interruptedVideo.provider === "imarouter") resumeImaRouterVideoGeneration(session.id, interruptedVideo.prompt_card_id);
+        if (interruptedVideo.provider === "imarouter") resumeImaRouterVideoGeneration(session.id, interruptedVideo.prompt_card_id, interruptedVideo.model_key);
         else resumeNovvyStoryboardVideoGeneration(session.id, interruptedVideo.prompt_card_id);
       });
       continue;

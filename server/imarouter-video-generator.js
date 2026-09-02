@@ -9,8 +9,13 @@ import { traceToolCall } from "./mlflow-tracing.js";
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const execFileAsync = promisify(execFile);
-const VIDEO_MODEL = "seedance-2.0-fast";
-const VIDEO_MODEL_LABEL = "Seedance 2.0 Fast";
+const DEFAULT_VIDEO_MODEL = "seedance-2.0-fast";
+const VIDEO_MODELS = Object.freeze({
+  "seedance-2.0-fast": { label: "Seedance 2.0 Fast", family: "seedance" },
+  "kling-v3-omni-video": { label: "Kling v3 Omni", family: "kling" },
+  "MiniMax-Hailuo-2.3": { label: "MiniMax Hailuo 2.3", family: "minimax" },
+  "viduq3-turbo": { label: "Vidu Q3 Turbo", family: "vidu" },
+});
 const OK = new Set(["succeeded", "completed", "success"]);
 const FAILED = new Set(["failed", "error", "cancelled", "canceled"]);
 
@@ -79,6 +84,48 @@ export function orderImaRouterShotReferences(characterReferences, storyboardRefe
   };
 }
 
+function resolveVideoModel(value) {
+  const key = Object.hasOwn(VIDEO_MODELS, value) ? value : DEFAULT_VIDEO_MODEL;
+  return { key, ...VIDEO_MODELS[key] };
+}
+
+function nearestDuration(value, allowed) {
+  const duration = Math.max(1, Math.round(Number(value) || allowed[0]));
+  return allowed.reduce((best, item) => Math.abs(item - duration) < Math.abs(best - duration) ? item : best);
+}
+
+export function buildImaRouterVideoRequest(modelKey, shot, references, generateAudio = true) {
+  const model = resolveVideoModel(modelKey);
+  const prompt = String(shot.prompt || "");
+  if (model.family === "minimax") {
+    return {
+      model: model.key,
+      prompt,
+      duration: nearestDuration(shot.durationSeconds, [6, 10]),
+      size: "768p",
+      metadata: { first_frame_image: references.storyboard },
+    };
+  }
+  if (model.family === "kling") {
+    const images = references.ordered;
+    return {
+      model: model.key, prompt, duration: Math.min(15, Math.max(3, Math.round(shot.durationSeconds))),
+      aspect_ratio: "9:16", mode: "std", sound: generateAudio ? "on" : "off",
+      ...(images.length === 1 ? { image: images[0] } : { image_list: images }),
+    };
+  }
+  if (model.family === "vidu") {
+    return {
+      model: model.key, prompt, duration: Math.min(16, Math.max(1, Math.round(shot.durationSeconds))),
+      size: "9:16", images: references.ordered, metadata: { resolution: "720p" },
+    };
+  }
+  return {
+    model: model.key, prompt, duration: nearestDuration(shot.durationSeconds, [4, 5, 6, 8, 10, 12, 15]),
+    aspect_ratio: "9:16", metadata: { resolution: "720p", audio: generateAudio }, images: references.ordered,
+  };
+}
+
 function imaRouterReferenceInstruction(characterCount, storyboardAvailable = true) {
   const identityInstruction = characterCount > 0
     ? `Reference images 1 through ${characterCount} are approved six-view character panels, one panel per character. Use them only to preserve each character's identity, facial features, body proportions, hairstyle, costume, and accessories. `
@@ -109,7 +156,7 @@ async function createAssetReference(baseUrl, headers, imageUrl) {
   throw new Error("ImaRouter 参考图审核超时");
 }
 
-function selectReferences(workspace) {
+function selectReferences(workspace, requireCharacters = true) {
   const confirmedStoryboard = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "storyboard" && item.status === "confirmed");
   const referenceGroup = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "reference_panel" && item.status === "confirmed");
   const storyboardUrls = (confirmedStoryboard?.details || []).map((item) => referenceUrl(item.content)).filter(Boolean);
@@ -118,7 +165,7 @@ function selectReferences(workspace) {
     : [referenceGroup?.previewUrl, ...(referenceGroup?.details || []).map((item) => item.content)])
     .map(referenceUrl).filter(Boolean);
   if (!storyboardUrls.length) throw new Error("ImaRouter 没有可用的已确认分镜图");
-  if (!characterUrls.length) throw new Error("ImaRouter 没有可用的已确认人物参考图");
+  if (requireCharacters && !characterUrls.length) throw new Error("ImaRouter 没有可用的已确认人物参考图");
   return {
     storyboardUrls: [...new Set(storyboardUrls)],
     characterUrls: [...new Set(characterUrls)],
@@ -158,7 +205,7 @@ async function ensurePublicReferenceUrl(source) {
   }
 }
 
-export function startImaRouterVideoGeneration(sessionId, cardId) {
+export function startImaRouterVideoGeneration(sessionId, cardId, requestedModel = DEFAULT_VIDEO_MODEL) {
   const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
   if (!session) throw new Error("创意工作台不存在");
   if (session.stage === "working") throw new Error("当前仍有任务正在处理");
@@ -167,40 +214,48 @@ export function startImaRouterVideoGeneration(sessionId, cardId) {
   if (!card) throw new Error("找不到视频提示词卡");
   const plan = parseStoryboardVideoPlan(card);
   const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
-  const reference = selectReferences(workspace);
+  const model = resolveVideoModel(requestedModel);
+  const reference = selectReferences(workspace, model.family !== "minimax");
   const timestamp = now();
   db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, `使用 ImaRouter 生成视频：${cardId}`, timestamp);
-  append(sessionId, `已选择 ImaRouter。正在准备逐镜分镜图和多人物参考图，然后通过 ${VIDEO_MODEL_LABEL} 生成视频。参考策略：${reference.strategy}。`, {
+  const modelStrategy = model.family === "minimax" ? "每镜仅使用对应分镜图作为首帧" : "人物六视图在前，对应分镜图在最后";
+  append(sessionId, `已选择 ImaRouter / ${model.label}。正在准备逐镜参考素材并生成视频。参考策略：${modelStrategy}。`, {
     ...card, previewUrl: "", status: "generating",
-    details: [...(card.details || []).filter((item) => !["视频供应商", "参考策略"].includes(item.label)), { label: "视频供应商", content: `ImaRouter / ${VIDEO_MODEL_LABEL}` }, { label: "参考策略", content: reference.strategy }],
+    details: [...(card.details || []).filter((item) => !["视频供应商", "参考策略"].includes(item.label)), { label: "视频供应商", content: `ImaRouter / ${model.label}` }, { label: "参考策略", content: modelStrategy }],
   });
   db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, sessionId);
-  generate(sessionId, card, plan, reference);
+  generate(sessionId, card, plan, reference, model.key);
 }
 
-export function resumeImaRouterVideoGeneration(sessionId, cardId) {
+export function resumeImaRouterVideoGeneration(sessionId, cardId, requestedModel = DEFAULT_VIDEO_MODEL) {
   const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
   if (!session) throw new Error("创意工作台不存在");
   const card = allCards(sessionId).find((item) => item.id === cardId && item.kind === "video_prompt");
   if (!card) throw new Error("找不到待恢复的视频提示词卡");
   const plan = parseStoryboardVideoPlan(card);
   const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
-  const reference = selectReferences(workspace);
+  const model = resolveVideoModel(requestedModel);
+  const reference = selectReferences(workspace, model.family !== "minimax");
   db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(now(), sessionId);
-  generate(sessionId, card, plan, reference);
+  generate(sessionId, card, plan, reference, model.key);
 }
 
-async function generate(sessionId, card, plan, reference) {
+async function generate(sessionId, card, plan, reference, modelKey) {
   try {
     const { baseUrl, headers } = config();
+    const model = resolveVideoModel(modelKey);
     if (reference.storyboardUrls.length < plan.shots.length) throw new Error(`已确认分镜图不足：需要 ${plan.shots.length} 张，当前只有 ${reference.storyboardUrls.length} 张`);
-    const storyboardReferences = [];
-    for (const source of reference.storyboardUrls) storyboardReferences.push(await materializeReference(baseUrl, headers, source));
-    const characterReferences = [];
-    for (const source of reference.characterUrls) characterReferences.push(await materializeReference(baseUrl, headers, source));
+    const storyboardPublicUrls = [];
+    for (const source of reference.storyboardUrls) storyboardPublicUrls.push(await ensurePublicReferenceUrl(source));
+    const characterPublicUrls = [];
+    if (model.family !== "minimax") for (const source of reference.characterUrls) characterPublicUrls.push(await ensurePublicReferenceUrl(source));
+    const useReviewedAssets = model.family === "seedance";
+    const storyboardReferences = useReviewedAssets ? await Promise.all(storyboardPublicUrls.map((url) => createAssetReference(baseUrl, headers, url))) : storyboardPublicUrls;
+    const characterReferences = useReviewedAssets ? await Promise.all(characterPublicUrls.map((url) => createAssetReference(baseUrl, headers, url))) : characterPublicUrls;
     for (const shot of plan.shots) {
       const createdAt = now();
-      const existing = db.prepare("SELECT * FROM creative_video_shots WHERE session_id=? AND prompt_card_id=? AND shot_id=? ORDER BY version DESC LIMIT 1").get(sessionId, card.id, shot.shotId);
+      const existing = db.prepare("SELECT * FROM creative_video_shots WHERE session_id=? AND prompt_card_id=? AND shot_id=? AND COALESCE(model_key,?)=? ORDER BY version DESC LIMIT 1")
+        .get(sessionId, card.id, shot.shotId, DEFAULT_VIDEO_MODEL, model.key);
       if (existing?.status === "completed" && existing.result_url) continue;
       const version = existing?.status === "generating" ? Number(existing.version) : Number(db.prepare("SELECT COALESCE(MAX(version),0)+1 version FROM creative_video_shots WHERE session_id=? AND prompt_card_id=? AND shot_id=?").get(sessionId, card.id, shot.shotId).version);
       const storyboardReference = storyboardReferences[shot.order - 1];
@@ -215,12 +270,12 @@ async function generate(sessionId, card, plan, reference) {
       const submitShot = async (prompt) => request(`${baseUrl}/v1/videos`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ model: VIDEO_MODEL, prompt, duration: shot.durationSeconds, aspect_ratio: "9:16", metadata: { resolution: "720p", audio: generateAudio }, images: activeImageReferences }),
+        body: JSON.stringify(buildImaRouterVideoRequest(model.key, { ...shot, prompt }, { ordered: activeImageReferences, storyboard: storyboardReference }, generateAudio)),
       });
       if (!taskId) {
-        db.prepare("INSERT INTO creative_video_shots (session_id,prompt_card_id,shot_id,shot_order,version,provider,duration_seconds,prompt,status,created_at,updated_at) VALUES (?,?,?,?,?,'imarouter',?,?,'generating',?,?)")
-          .run(sessionId, card.id, shot.shotId, shot.order, version, shot.durationSeconds, shot.promptEn, createdAt, createdAt);
-        const referenceInstruction = imaRouterReferenceInstruction(characterReferences.length);
+        db.prepare("INSERT INTO creative_video_shots (session_id,prompt_card_id,shot_id,shot_order,version,provider,model_key,duration_seconds,prompt,status,created_at,updated_at) VALUES (?,?,?,?,?,'imarouter',?,?,?,'generating',?,?)")
+          .run(sessionId, card.id, shot.shotId, shot.order, version, model.key, shot.durationSeconds, shot.promptEn, createdAt, createdAt);
+        const referenceInstruction = model.family === "minimax" ? "Use the supplied storyboard image as the first frame and preserve its composition, character appearance, costume, props, and environment. " : imaRouterReferenceInstruction(characterReferences.length);
         const created = await submitShot(`${referenceInstruction}${shot.promptEn}`);
         taskId = created?.id || created?.task_id;
         if (!taskId) throw new Error(`${shot.shotId}：ImaRouter 未返回视频任务 ID`);
@@ -252,7 +307,7 @@ async function generate(sessionId, card, plan, reference) {
           retryInstruction = imaRouterReferenceInstruction(activeCharacterCount, storyboardAvailable);
           db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
             .run(sessionId, `${shot.shotId} 的 ${removedPrivacyReference} 触发真人隐私检测，Novvy 已自动移除该图并重试一次。`, now());
-        } else if (!audioDowngraded && isOutputAudioCopyrightFailure(failureMessage)) {
+        } else if (["seedance", "kling"].includes(model.family) && !audioDowngraded && isOutputAudioCopyrightFailure(failureMessage)) {
           audioDowngraded = true;
           generateAudio = false;
           retryInstruction = `Generate a silent video with no music, dialogue, voice, or sound effects. `;
@@ -268,7 +323,8 @@ async function generate(sessionId, card, plan, reference) {
       }
       if (!previewUrl) throw new Error(`${shot.shotId} 查询超时或未返回视频地址`);
       db.prepare("UPDATE creative_video_shots SET status='completed',result_url=?,updated_at=? WHERE session_id=? AND prompt_card_id=? AND shot_id=? AND version=?").run(previewUrl, now(), sessionId, card.id, shot.shotId, version);
-      append(sessionId, `${shot.shotId} V${version} 已生成，可以单独播放复审。`, shotCard(card, shot, { previewUrl, status: "completed", version, details: [...shotCard(card, shot).details, { label: "版本", content: `V${version}` }, { label: "视频供应商", content: `ImaRouter / ${VIDEO_MODEL_LABEL}` }, { label: "参考策略", content: removedPrivacyReference ? `已移除 ${removedPrivacyReference} 后自动重试成功` : `${characterReferences.length} 张人物身份参考在前，对应分镜图 ${shot.order} 在最后` }, { label: "音频", content: audioDowngraded ? "该镜头因版权审核自动降级为无音频" : "生成同步音频" }, { label: "视频任务", content: taskId }] }));
+      const referenceSummary = model.family === "minimax" ? `对应分镜图 ${shot.order} 作为唯一首帧` : `${characterReferences.length} 张人物身份参考在前，对应分镜图 ${shot.order} 在最后`;
+      append(sessionId, `${shot.shotId} V${version} 已生成，可以单独播放复审。`, shotCard(card, shot, { previewUrl, status: "completed", version, details: [...shotCard(card, shot).details, { label: "版本", content: `V${version}` }, { label: "视频供应商", content: `ImaRouter / ${model.label}` }, { label: "参考策略", content: removedPrivacyReference ? `已移除 ${removedPrivacyReference} 后自动重试成功` : referenceSummary }, { label: "音频", content: model.family === "seedance" || model.family === "kling" ? (audioDowngraded ? "该镜头因版权审核自动降级为无音频" : "生成同步音频") : "该模型不生成音频" }, { label: "视频任务", content: taskId }] }));
     }
     append(sessionId, "全部内容镜头已经生成。请逐镜播放复审；确认后再按顺序拼接，并追加已确认的原始落版图。", { ...card, previewUrl: "", status: "completed", details: [...(card.details || []).filter((item) => item.label !== "失败原因"), { label: "逐镜状态", content: `${plan.shots.length} 个镜头已完成，等待统一确认拼接` }] });
     db.prepare("UPDATE creative_sessions SET stage='video_review',error_message=NULL,updated_at=? WHERE id=?").run(now(), sessionId);
@@ -276,7 +332,7 @@ async function generate(sessionId, card, plan, reference) {
     const message = error instanceof Error ? error.message : String(error);
     append(sessionId, `ImaRouter 视频没有生成成功：${message}。提示词和参考素材均已保留。`, {
       ...card, previewUrl: "", status: "failed",
-      details: [...(card.details || []).filter((item) => !["失败原因", "视频供应商", "参考策略"].includes(item.label)), { label: "视频供应商", content: `ImaRouter / ${VIDEO_MODEL_LABEL}` }, { label: "参考策略", content: reference.strategy }, { label: "失败原因", content: message }],
+      details: [...(card.details || []).filter((item) => !["失败原因", "视频供应商", "参考策略"].includes(item.label)), { label: "视频供应商", content: `ImaRouter / ${resolveVideoModel(modelKey).label}` }, { label: "参考策略", content: resolveVideoModel(modelKey).family === "minimax" ? "对应分镜图作为唯一首帧" : reference.strategy }, { label: "失败原因", content: message }],
     });
     db.prepare("UPDATE creative_sessions SET stage='prompt_review',error_message=?,updated_at=? WHERE id=?").run(message, now(), sessionId);
   }
