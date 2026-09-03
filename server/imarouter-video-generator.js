@@ -212,13 +212,29 @@ async function ensurePublicReferenceUrl(source) {
   }
 }
 
-export function stableReferenceObjectPath(source, contentType = "") {
-  const pathname = (() => { try { return new URL(source).pathname; } catch { return ""; } })();
-  const sourceExtension = path.extname(pathname).toLowerCase();
-  const extension = [".png", ".jpg", ".jpeg", ".webp"].includes(sourceExtension)
-    ? sourceExtension.replace(".jpeg", ".jpg")
-    : (/png/i.test(contentType) ? ".png" : /webp/i.test(contentType) ? ".webp" : ".jpg");
-  const digest = createHash("sha256").update(source).digest("hex");
+function sniffImageMimeType(bytes) {
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return "image/png";
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (bytes.length >= 12 && bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP") return "image/webp";
+  if (bytes.length >= 6 && ["GIF87a", "GIF89a"].includes(bytes.toString("ascii", 0, 6))) return "image/gif";
+  return null;
+}
+
+// The object path is derived only from the source's origin+pathname (no query string),
+// so a signed URL whose token rotates on every fetch still resolves to the same cached
+// object, and the cache-hit check always agrees with the actual upload target.
+export function stableReferenceObjectPath(source) {
+  const normalizedSource = (() => {
+    try {
+      const url = new URL(source);
+      return `${url.origin}${url.pathname}`;
+    } catch {
+      return source;
+    }
+  })();
+  const sourceExtension = path.extname(normalizedSource).toLowerCase();
+  const extension = [".png", ".jpg", ".jpeg", ".webp"].includes(sourceExtension) ? sourceExtension.replace(".jpeg", ".jpg") : ".jpg";
+  const digest = createHash("sha256").update(normalizedSource).digest("hex");
   return `contextual-studio/imarouter-references/${digest}${extension}`;
 }
 
@@ -236,22 +252,24 @@ async function stabilizeRemoteReferenceUrl(source) {
     if (cached?.ok) return stableUrl;
     const response = await fetch(source, { signal: AbortSignal.timeout(90_000) });
     if (!response.ok) throw new Error(`源素材返回 HTTP ${response.status}`);
-    const contentType = response.headers.get("content-type") || "";
-    if (contentType && !contentType.toLowerCase().startsWith("image/")) throw new Error(`源素材不是图片（${contentType}）`);
     const bytes = Buffer.from(await response.arrayBuffer());
     if (!bytes.length) throw new Error("源素材为空");
-    const typedObjectPath = stableReferenceObjectPath(source, contentType);
-    const localPath = path.join(tempDir, path.basename(typedObjectPath));
+    // Some object stores serve valid images with a generic Content-Type such as
+    // application/octet-stream, so validate the actual bytes instead of trusting the
+    // header — trusting the header used to hard-reject genuine images.
+    const sniffedType = sniffImageMimeType(bytes);
+    if (!sniffedType) throw new Error(`源素材不是可识别的图片格式（Content-Type: ${response.headers.get("content-type") || "未知"}）`);
+    const localExtension = sniffedType === "image/png" ? "png" : sniffedType === "image/webp" ? "webp" : sniffedType === "image/gif" ? "gif" : "jpg";
+    const localPath = path.join(tempDir, `reference.${localExtension}`);
     await fsp.writeFile(localPath, bytes);
     try {
-      await execFileAsync("gcloud", ["storage", "cp", localPath, `gs://${bucket}/${typedObjectPath}`], { maxBuffer: 4 * 1024 * 1024 });
+      await execFileAsync("gcloud", ["storage", "cp", localPath, `gs://${bucket}/${objectPath}`], { maxBuffer: 4 * 1024 * 1024 });
     } catch (error) {
       throw new Error(`稳定参考图上传 GCS 失败：${error instanceof Error ? error.message : String(error)}`);
     }
-    const uploadedUrl = `${ownPrefix}${typedObjectPath}`;
-    const validation = await fetch(uploadedUrl, { method: "HEAD", signal: AbortSignal.timeout(30_000) });
+    const validation = await fetch(stableUrl, { method: "HEAD", signal: AbortSignal.timeout(30_000) });
     if (!validation.ok) throw new Error(`稳定参考图上传后不可公开读取（HTTP ${validation.status}）`);
-    return uploadedUrl;
+    return stableUrl;
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(`ImaRouter 参考图稳定化失败：${detail}；未提交视频任务`);
@@ -277,9 +295,15 @@ export function startImaRouterVideoGeneration(sessionId, cardId, requestedModel 
   // An explicit retry from a failed review state must not keep polling the old,
   // terminal provider task. Startup recovery uses resumeImaRouterVideoGeneration
   // instead and therefore still resumes genuinely active tasks after a restart.
+  // The session mutex above (stage==='working' throws) guarantees no generate()
+  // call is currently active, so ANY row still 'generating' here is a leftover
+  // from a previous crashed run — regardless of which model it used. Scoping this
+  // cleanup to only the newly requested model left stale rows under other models
+  // forever 'generating', which server-restart recovery could then pick up and
+  // resume with a stale, unrequested model.
   if (session.stage !== "working" && session.error_message) {
-    db.prepare("UPDATE creative_video_shots SET status='failed',error_message=COALESCE(error_message,?),updated_at=? WHERE session_id=? AND prompt_card_id=? AND provider='imarouter' AND COALESCE(model_key,?)=? AND status='generating'")
-      .run(session.error_message, timestamp, sessionId, card.id, DEFAULT_VIDEO_MODEL, model.key);
+    db.prepare("UPDATE creative_video_shots SET status='failed',error_message=COALESCE(error_message,?),updated_at=? WHERE session_id=? AND prompt_card_id=? AND provider='imarouter' AND status='generating'")
+      .run(session.error_message, timestamp, sessionId, card.id);
   }
   db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, targetShotId ? `使用 ImaRouter 重新生成 ${targetShotId}` : `使用 ImaRouter 生成视频：${cardId}`, timestamp);
   const modelStrategy = "人物六视图在前，对应分镜图在最后";

@@ -45,8 +45,11 @@ test("unknown models safely fall back to Seedance 2.0 Fast", () => {
 
 test("remote references receive stable deterministic GCS object names", () => {
   const source = "https://storage.googleapis.com/novvy-asia/aigc/example.png?token=one";
-  const first = stableReferenceObjectPath(source, "image/png");
-  assert.equal(first, stableReferenceObjectPath(source, "image/png"));
+  const first = stableReferenceObjectPath(source);
+  assert.equal(first, stableReferenceObjectPath(source));
   assert.match(first, /^contextual-studio\/imarouter-references\/[a-f0-9]{64}\.png$/);
-  assert.notEqual(first, stableReferenceObjectPath(source.replace("one", "two"), "image/png"));
+  // A rotating signed-URL token for the same object must still resolve to the same
+  // cached path; only a different origin/pathname is a genuinely different object.
+  assert.equal(first, stableReferenceObjectPath(source.replace("token=one", "token=two")));
+  assert.notEqual(first, stableReferenceObjectPath(source.replace("example.png", "other.png")));
 });
