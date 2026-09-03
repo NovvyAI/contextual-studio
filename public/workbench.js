@@ -532,7 +532,29 @@ function openSourceAnalysis(type, source) {
 async function api(url, options) {
   const response = await fetch(url, options);
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error || "请求失败");
+  if (!response.ok) {
+    const error = new Error(data.error || "请求失败");
+    const method = String(options?.method || "GET").toUpperCase();
+    if (method !== "GET" && !url.endsWith("/errors/report") && Number.isInteger(sessionId) && sessionId > 0) {
+      const operation = ({
+        "generate-video": "确认并生成视频", "regenerate-video-shot": "重新生成视频镜头", "approve-video-shots": "确认并合成视频镜头",
+        "generate-storyboard-images": "选择并生成分镜图", "regenerate-storyboard-image": "重新生成分镜图", "storyboards/approve": "统一确认分镜图",
+        "characters/approve": "确认人物参考图", "characters/generate": "生成人物候选", "regenerate-image": "重新生成人物图",
+        "approve-final-card-direction": "确认落版方向", "regenerate-final-card": "重新生成落版图", "package-landing-page": "打包落地页",
+      })[Object.keys({
+        "generate-video": 1, "regenerate-video-shot": 1, "approve-video-shots": 1, "generate-storyboard-images": 1,
+        "regenerate-storyboard-image": 1, "storyboards/approve": 1, "characters/approve": 1, "characters/generate": 1,
+        "regenerate-image": 1, "approve-final-card-direction": 1, "regenerate-final-card": 1, "package-landing-page": 1,
+      }).find((key) => url.includes(key))] || "工作台操作";
+      try {
+        await fetch(`/api/creative/sessions/${sessionId}/errors/report`, {
+          method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ error: error.message, operation }),
+        });
+        setTimeout(refreshSession, 0);
+      } catch { /* Keep the original actionable error when reporting itself is unavailable. */ }
+    }
+    throw error;
+  }
   return data;
 }
 
@@ -549,7 +571,7 @@ const cardKindLabels = {
 
 const chatCardKindLabels = {
   concept: "创意方案", final_card: "落版图", character_image: "人物图", prop_image: "道具图",
-  reference_image: "参考图", audiovisual_direction: "视听语言 Bible", storyboard: "剧情与分镜", storyboard_image: "分镜图片", video_prompt: "视频提示词", video_shot: "视频镜头",
+  reference_image: "参考图", audiovisual_direction: "视听语言 Bible", storyboard: "剧情与分镜", storyboard_image: "分镜图片", video_prompt: "视频提示词", video_shot: "视频镜头", error_diagnostic: "错误诊断",
 };
 const characterCandidateNumbers = { "reference-male_front": "01", "reference-male_side": "02", "reference-female_front": "03", "reference-female_side": "04" };
 
@@ -851,6 +873,13 @@ function renderChatCard(card, disabled) {
   const facts = element("dl");
   (card.details || []).filter((item) => card.kind !== "audiovisual_direction" || !/^(?:AI推荐导演|导演选项)｜/.test(String(item.label || ""))).forEach((item) => { const row = element("div"); row.append(element("dt", "", item.label), element("dd", ["storyboard", "storyboard_image"].includes(card.kind) ? "storyboard-readable" : "", storyboardDisplayValue(card, item))); facts.append(row); });
   details.append(facts); node.append(details);
+  if (card.kind === "error_diagnostic") {
+    const recovery = element("section", "error-diagnostic-guidance");
+    recovery.append(element("strong", "", "处理后再重试原操作"), element("p", "", "系统不会在原因未解除时无限重试，以免重复创建任务或重复计费。原始素材和已经完成的结果会继续保留。"));
+    const refresh = element("button", "ghost", "刷新恢复状态"); refresh.type = "button"; refresh.addEventListener("click", refreshSession);
+    recovery.append(refresh); node.append(recovery);
+    return node;
+  }
   const cardErrorText = [card.summary, ...(card.details || []).map((item) => item.content)].filter((value) => typeof value === "string").join("\n");
   if (card.status === "failed" && /(?:gcloud\.storage\.cp|refreshing your current auth tokens|Reauthentication failed|gcloud auth login)/i.test(cardErrorText)) {
     const recovery = element("section", "integration-recovery");

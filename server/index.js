@@ -24,6 +24,7 @@ import { backfillCreativeTelemetry, flushTelemetryOutbox, recordCreativeFeedback
 import { mlflowTracingStatus } from "./mlflow-tracing.js";
 import { dramaAnalysisContract, dramaAnalysisView, isDramaAnalysisV3 } from "./drama-analysis-v3.js";
 import { listDirectorStyles } from "./director-library.js";
+import { ensureCreativeErrorDiagnostic, recordCreativeError } from "./error-diagnostics.js";
 
 const port = Number(process.env.PORT || 4180);
 const publicDir = path.resolve("public");
@@ -562,9 +563,19 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { id, assetNumber, deleted: true });
     }
 
+    const creativeErrorReportMatch = url.pathname.match(/^\/api\/creative\/sessions\/(\d+)\/errors\/report$/);
+    if (req.method === "POST" && creativeErrorReportMatch) {
+      const id = Number(creativeErrorReportMatch[1]);
+      const body = JSON.parse((await requestBody(req)).toString("utf8") || "{}");
+      const diagnosis = recordCreativeError(id, body.error, String(body.operation || "用户操作"));
+      return diagnosis ? json(res, 201, { ok: true, diagnosis }) : json(res, 404, { error: "工作台不存在" });
+    }
+
     const creativeDetailMatch = url.pathname.match(/^\/api\/creative\/sessions\/(\d+)$/);
     if (req.method === "GET" && creativeDetailMatch) {
-      const row = db.prepare("SELECT * FROM creative_sessions WHERE id = ?").get(Number(creativeDetailMatch[1]));
+      const id = Number(creativeDetailMatch[1]);
+      const row = db.prepare("SELECT * FROM creative_sessions WHERE id = ?").get(id);
+      if (row?.error_message) ensureCreativeErrorDiagnostic(id, row.error_message);
       return row ? json(res, 200, { ...serializeCreativeSession(row), productionProfile: { maxShotsPerFinal: productionProfile.max_shots_per_final } }) : json(res, 404, { error: "工作台不存在" });
     }
 
