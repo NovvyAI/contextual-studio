@@ -138,8 +138,21 @@ async function uploadLocalImage(inputPath, slot) {
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(`图片上传需要 Python 3.10 或更高版本。请重新运行 ./install_environment.sh 后重试。${detail ? ` (${detail})` : ""}`);
   }
-  const { stdout } = await execFileAsync(python, [script, "--mode", "asset", "--kind", "image", "--mcp-json", mcpConfigPath(), "--slot", `${slot}=${inputPath}`], { env: { ...process.env, NOVVY_PYTHON: python }, maxBuffer: 4 * 1024 * 1024 });
-  const result = JSON.parse(stdout);
+  let stdout = "";
+  try {
+    ({ stdout } = await execFileAsync(python, [script, "--mode", "asset", "--kind", "image", "--mcp-json", mcpConfigPath(), "--slot", `${slot}=${inputPath}`], { env: { ...process.env, NOVVY_PYTHON: python }, maxBuffer: 4 * 1024 * 1024 }));
+  } catch (error) {
+    const output = String(error?.stdout || error?.stderr || "").trim();
+    let detail = output;
+    try {
+      const failure = JSON.parse(output);
+      detail = failure.message || failure.error || failure.safeNextStep || output;
+      if (failure.failedStep === "local_environment") detail += "。请检查项目 .env 中的 NOVVY_MCP_URL 与 NOVVY_MCP_AUTHORIZATION，然后重启服务";
+    } catch { /* The upload helper may fail before emitting JSON. */ }
+    throw new Error(`人物参考图上传失败：${detail || error?.message || "未知错误"}`);
+  }
+  let result;
+  try { result = JSON.parse(stdout); } catch { throw new Error("人物参考图上传返回了无法识别的结果"); }
   const url = result.videoPayloadHint?.imageUrls?.[0] || result.referenceUrls?.[0];
   if (!url) throw new Error("图片上传后没有返回公开地址");
   return url;

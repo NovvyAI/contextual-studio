@@ -1608,6 +1608,7 @@ function renderCharacterGroupActions(session) {
 
 function renderStoryboardGroupActions(session, storyboardCards) {
   const panel = element("section", "character-group-actions storyboard-group-actions");
+  const maxShots = Number(session.productionProfile?.maxShotsPerFinal) || 3;
   const storyboardTitleById = new Map((session.messages || []).flatMap((message) => message.cards || []).filter((card) => card.kind === "storyboard").map((card) => [card.id, card.title]));
   const storyboardIdFor = (card) => String(card.details?.find((item) => item.label === "所属方案")?.content || "");
   const groups = new Map();
@@ -1637,14 +1638,23 @@ function renderStoryboardGroupActions(session, storyboardCards) {
   approve.type = "button";
   approve.classList.add("workflow-confirm-action"); approve.dataset.workflowStages = "storyboard_review"; approve.dataset.workflowLabel = "统一确认这组分镜图"; approve.dataset.workflowPriority = "100";
   const selectedCards = () => groups.get(selectedStoryboardGroupId) || [];
+  const warning = element("p", "storyboard-selection-warning", "");
   const updateSelection = () => {
     choices.forEach(({ label, storyboardId }) => label.classList.toggle("selected", storyboardId === selectedStoryboardGroupId));
     const cards = selectedCards();
     const complete = cards.length && cards.every((card) => card.previewUrl && card.status !== "generating");
-    approve.disabled = session.stage === "working" || !complete;
-    approve.textContent = selectedStoryboardGroupId ? `确认所选方案（${cards.length} 张）` : "请先选择一套分镜方案";
+    const overLimit = cards.length > maxShots;
+    warning.textContent = overLimit ? `当前方案包含 ${cards.length} 镜，超过最多 ${maxShots} 镜的限制。请先精简分镜，系统不会进入下一步。` : "";
+    warning.classList.toggle("hidden", !overLimit);
+    approve.disabled = session.stage === "working" || !complete || overLimit;
+    approve.textContent = overLimit ? `超过上限（${cards.length}/${maxShots} 镜）` : selectedStoryboardGroupId ? `确认所选方案（${cards.length} 张）` : "请先选择一套分镜方案";
   };
-  choices.forEach(({ radio, storyboardId }) => radio.addEventListener("change", () => { selectedStoryboardGroupId = storyboardId; updateSelection(); }));
+  choices.forEach(({ radio, storyboardId }) => radio.addEventListener("change", () => {
+    selectedStoryboardGroupId = storyboardId;
+    updateSelection();
+    const count = selectedCards().length;
+    if (count > maxShots) alert(`这套方案共有 ${count} 个镜头，当前最多允许 ${maxShots} 镜。请先修改或重新生成精简版分镜。`);
+  }));
   updateSelection();
   approve.addEventListener("click", async () => {
     const cards = selectedCards();
@@ -1655,7 +1665,7 @@ function renderStoryboardGroupActions(session, storyboardCards) {
       await refreshSession();
     } catch (error) { approve.disabled = false; approve.textContent = "统一确认这组分镜图"; alert(error.message); }
   });
-  panel.append(approve);
+  panel.append(warning, approve);
   const failedCards = selectedCards().filter((card) => !card.previewUrl && card.status !== "generating");
   if (failedCards.length) {
     const retry = element("button", "character-group-retry", `重试失败的分镜图（${failedCards.length} 张）`); retry.type = "button"; retry.disabled = session.stage === "working";

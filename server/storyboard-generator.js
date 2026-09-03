@@ -2,6 +2,7 @@ import { db, now, resolveAssetReferences } from "./database.js";
 import { publicInputUrl } from "./character-generator.js";
 import { preparePngEditSource, uploadPngEditInput, validatePngEditInputs } from "./image-mask.js";
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
+import { productionProfile } from "./production-profile.js";
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -159,6 +160,7 @@ export function approveStoryboardImages(sessionId, cardIds) {
   cards(sessionId).forEach((card) => { if (!latest.has(card.id)) latest.set(card.id, card); });
   const selected = [...new Set((cardIds || []).map(String))].map((id) => latest.get(id)).filter((card) => card?.kind === "storyboard_image" && card.previewUrl);
   if (!selected.length || selected.length !== new Set(cardIds || []).size) throw new Error("部分分镜图尚未生成完成");
+  if (selected.length > productionProfile.max_shots_per_final) throw new Error(`当前最多允许确认 ${productionProfile.max_shots_per_final} 镜，但所选方案包含 ${selected.length} 镜。请返回分镜方案并精简后再继续`);
   const storyboardId = selected[0].details?.find((item) => item.label === "所属方案")?.content;
   if (!storyboardId || selected.some((card) => card.details?.find((item) => item.label === "所属方案")?.content !== storyboardId)) throw new Error("请选择同一套方案的分镜图");
   const timestamp = now();

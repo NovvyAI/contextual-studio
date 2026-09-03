@@ -303,6 +303,14 @@ class ReferenceWorkflowTests(unittest.TestCase):
 
 
 class UploaderAndMemoryTests(unittest.TestCase):
+    def test_project_environment_overrides_stale_plugin_upload_credentials(self) -> None:
+        server = {"url": "https://old.example/mcp", "http_headers": {"Authorization": "Bearer stale-token"}}
+        with mock.patch.dict("os.environ", {"NOVVY_MCP_URL": "https://developer.novvy.ai/mcp", "NOVVY_MCP_AUTHORIZATION": "Bearer project-token"}, clear=True), mock.patch.object(
+            uploader, "resolve_token_from_local_config", return_value=("local-token", {"safeSummary": "configured"})
+        ):
+            self.assertEqual(uploader.resolve_token(server), "project-token")
+            self.assertEqual(uploader.resolve_base_url_from_mcp(server), "https://developer.novvy.ai")
+
     def test_upload_error_is_sanitized(self) -> None:
         error = uploader.UploadError(
             "bad response",

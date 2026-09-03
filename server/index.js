@@ -565,7 +565,7 @@ const server = http.createServer(async (req, res) => {
     const creativeDetailMatch = url.pathname.match(/^\/api\/creative\/sessions\/(\d+)$/);
     if (req.method === "GET" && creativeDetailMatch) {
       const row = db.prepare("SELECT * FROM creative_sessions WHERE id = ?").get(Number(creativeDetailMatch[1]));
-      return row ? json(res, 200, serializeCreativeSession(row)) : json(res, 404, { error: "工作台不存在" });
+      return row ? json(res, 200, { ...serializeCreativeSession(row), productionProfile: { maxShotsPerFinal: productionProfile.max_shots_per_final } }) : json(res, 404, { error: "工作台不存在" });
     }
 
     if (req.method === "POST" && url.pathname === "/api/games") {

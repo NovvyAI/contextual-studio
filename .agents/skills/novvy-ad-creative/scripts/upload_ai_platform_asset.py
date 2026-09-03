@@ -510,7 +510,11 @@ def base_url_from_mcp_server(server: dict) -> str:
 
 
 def resolve_token(_server: dict) -> str:
-    token, status = resolve_token_from_local_config()
+    token = os.environ.get("NOVVY_API_KEY", "").strip()
+    if not token:
+        authorization = os.environ.get("NOVVY_MCP_AUTHORIZATION", "").strip()
+        token = authorization[7:].strip() if authorization.lower().startswith("bearer ") else authorization
+    local_token, status = resolve_token_from_local_config()
     if not token:
         headers = _server.get("http_headers") or _server.get("headers") or {}
         authorization = headers.get("Authorization", "") if isinstance(headers, dict) else ""
@@ -518,10 +522,7 @@ def resolve_token(_server: dict) -> str:
         if token.lower().startswith("bearer "):
             token = token[7:].strip()
     if not token:
-        token = os.environ.get("NOVVY_API_KEY", "").strip()
-    if not token:
-        authorization = os.environ.get("NOVVY_MCP_AUTHORIZATION", "").strip()
-        token = authorization[7:].strip() if authorization.lower().startswith("bearer ") else authorization
+        token = local_token
     if token:
         return token
     raise UploadError(
@@ -532,7 +533,7 @@ def resolve_token(_server: dict) -> str:
 
 
 def resolve_base_url_from_mcp(server: dict) -> str:
-    base_url = base_url_from_mcp_server(server)
+    base_url = os.environ.get("NOVVY_MCP_URL", "").strip().removesuffix("/mcp").rstrip("/") or base_url_from_mcp_server(server)
     if not base_url:
         raise UploadError(
             ".mcp.json must set mcpServers.novvy_ai_platform.url, for example https://developer.novvy.ai/mcp",
