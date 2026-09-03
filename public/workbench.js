@@ -1833,7 +1833,6 @@ function describeWorkingTask(session) {
   const workspace = session.workspace || {};
   const plan = workspace.productionPlan || {};
   const messages = session.messages || [];
-  const recentMessages = messages.slice(-8);
   const latestCards = new Map();
   for (const message of messages) for (const card of message.cards || []) if (card?.id) latestCards.set(card.id, card);
   const latestGenerating = [...latestCards.values()].filter((card) => card.status === "generating").at(-1);
@@ -1847,14 +1846,32 @@ function describeWorkingTask(session) {
   if (latestGenerating?.kind === "final_card") return { title: "正在生成真实落版图", description: "完成后需要审核画面、英文文字和 CTA" };
   if (latestGenerating?.kind === "video_shot") return { title: "正在生成逐镜视频", description: latestGenerating.title || "完成后可以逐镜播放复审" };
   if (["reference_image", "prop_image"].includes(latestGenerating?.kind)) return { title: "正在生成图片资产", description: latestGenerating.title || "完成后会加入资产区域" };
-  const recentText = recentMessages.map((message) => message.content || "").join("\n");
+  // Structured productionPlan flags describe their own pipeline step directly, so
+  // trust them ahead of guessing from chat text.
   if (plan.sixViewStatus === "generating") return { title: "正在生成人物六视图面板", description: "系统正在按人物补齐六个固定角度" };
-  if (plan.videoGenerationStatus === "generating" || /生成逐镜视频|生成视频/.test(recentText)) return { title: "正在生成逐镜视频", description: "正在提交或查询当前镜头的视频任务" };
-  if (plan.videoPromptStatus === "pending" || /生成正式\s*video_prompt|生成正式视频提示词|自动生成正式视频提示词/.test(recentText)) return { title: "正在生成正式视频提示词", description: "正在汇总已确认分镜图、人物参考与落版图" };
-  if (plan.finalCardStatus === "direction_pending" || /生成.*落版方向/.test(recentText)) return { title: "正在生成落版方向候选", description: "正在准备末镜衔接、构图、英文文案与 CTA" };
-  if (/生成.*视听方向/.test(recentText)) return { title: "正在生成视听方向", description: "正在整理可执行的镜头、灯光、剪辑与声音参数" };
-  if (/生成.*(?:剧情与分镜|storyboard)/i.test(recentText)) return { title: "正在生成剧情与文字分镜", description: "正在编排剧情、镜头动作和玩法展示" };
-  if (/落版图/.test(recentText)) return { title: "正在处理落版图", description: "完成后会更新当前落版任务" };
+  if (plan.videoGenerationStatus === "generating") return { title: "正在生成逐镜视频", description: "正在提交或查询当前镜头的视频任务" };
+  if (plan.videoPromptStatus === "pending") return { title: "正在生成正式视频提示词", description: "正在汇总已确认分镜图、人物参考与落版图" };
+  if (plan.finalCardStatus === "direction_pending") return { title: "正在生成落版方向候选", description: "正在准备末镜衔接、构图、英文文案与 CTA" };
+  // No structured flag applies yet — this happens mid a multi-step confirmation chain,
+  // before the backend writes workspace_json back. Fall back to keyword-matching chat
+  // text, but walk messages from newest to oldest and stop at the first match, so the
+  // freshest "现在自动生成…" line always wins over an older message that happens to
+  // mention an earlier-stage keyword (previously all 8 recent messages were joined into
+  // one blob and checked in a fixed category order, so an older message could win over
+  // a newer, more accurate one).
+  const textPatterns = [
+    { test: /生成逐镜视频|生成视频/, result: { title: "正在生成逐镜视频", description: "正在提交或查询当前镜头的视频任务" } },
+    { test: /生成正式\s*video_prompt|生成正式视频提示词|自动生成正式视频提示词/, result: { title: "正在生成正式视频提示词", description: "正在汇总已确认分镜图、人物参考与落版图" } },
+    { test: /生成.*(?:剧情与分镜|storyboard)/i, result: { title: "正在生成剧情与文字分镜", description: "正在编排剧情、镜头动作和玩法展示" } },
+    { test: /生成.*视听方向/, result: { title: "正在生成视听方向", description: "正在整理可执行的镜头、灯光、剪辑与声音参数" } },
+    { test: /生成.*落版方向/, result: { title: "正在生成落版方向候选", description: "正在准备末镜衔接、构图、英文文案与 CTA" } },
+    { test: /落版图/, result: { title: "正在处理落版图", description: "完成后会更新当前落版任务" } },
+  ];
+  for (const message of [...messages].reverse().slice(0, 8)) {
+    const text = message.content || "";
+    const match = textPatterns.find((pattern) => pattern.test.test(text));
+    if (match) return match.result;
+  }
   return { title: "Novvy 正在处理当前任务", description: "完成后会自动显示下一项需要你确认的内容" };
 }
 
