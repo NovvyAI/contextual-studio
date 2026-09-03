@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -185,7 +186,9 @@ async function materializeReference(baseUrl, headers, source) {
 }
 
 async function ensurePublicReferenceUrl(source) {
-  if (/^https?:\/\//i.test(source) && !/^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:|\/|$)/i.test(source)) return source;
+  if (/^https?:\/\//i.test(source) && !/^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:|\/|$)/i.test(source)) {
+    return stabilizeRemoteReferenceUrl(source);
+  }
   const match = source.match(/^\/api\/screenshots\/(\d+)$/);
   if (!match) throw new Error(`ImaRouter 无法读取参考图：${source}`);
   const screenshotId = Number(match[1]);
@@ -209,6 +212,54 @@ async function ensurePublicReferenceUrl(source) {
   }
 }
 
+export function stableReferenceObjectPath(source, contentType = "") {
+  const pathname = (() => { try { return new URL(source).pathname; } catch { return ""; } })();
+  const sourceExtension = path.extname(pathname).toLowerCase();
+  const extension = [".png", ".jpg", ".jpeg", ".webp"].includes(sourceExtension)
+    ? sourceExtension.replace(".jpeg", ".jpg")
+    : (/png/i.test(contentType) ? ".png" : /webp/i.test(contentType) ? ".webp" : ".jpg");
+  const digest = createHash("sha256").update(source).digest("hex");
+  return `contextual-studio/imarouter-references/${digest}${extension}`;
+}
+
+async function stabilizeRemoteReferenceUrl(source) {
+  const bucket = String(process.env.IMAROUTER_GCS_BUCKET || "novvy-seedance-public").trim();
+  if (!/^[a-z0-9][a-z0-9._-]+$/i.test(bucket)) throw new Error("IMAROUTER_GCS_BUCKET 配置无效");
+  const ownPrefix = `https://storage.googleapis.com/${bucket}/`;
+  if (source.startsWith(ownPrefix)) return source;
+
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "contextual-imarouter-reference-"));
+  try {
+    const objectPath = stableReferenceObjectPath(source);
+    const stableUrl = `${ownPrefix}${objectPath}`;
+    const cached = await fetch(stableUrl, { method: "HEAD", signal: AbortSignal.timeout(30_000) }).catch(() => null);
+    if (cached?.ok) return stableUrl;
+    const response = await fetch(source, { signal: AbortSignal.timeout(90_000) });
+    if (!response.ok) throw new Error(`源素材返回 HTTP ${response.status}`);
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType && !contentType.toLowerCase().startsWith("image/")) throw new Error(`源素材不是图片（${contentType}）`);
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (!bytes.length) throw new Error("源素材为空");
+    const typedObjectPath = stableReferenceObjectPath(source, contentType);
+    const localPath = path.join(tempDir, path.basename(typedObjectPath));
+    await fsp.writeFile(localPath, bytes);
+    try {
+      await execFileAsync("gcloud", ["storage", "cp", localPath, `gs://${bucket}/${typedObjectPath}`], { maxBuffer: 4 * 1024 * 1024 });
+    } catch (error) {
+      throw new Error(`稳定参考图上传 GCS 失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+    const uploadedUrl = `${ownPrefix}${typedObjectPath}`;
+    const validation = await fetch(uploadedUrl, { method: "HEAD", signal: AbortSignal.timeout(30_000) });
+    if (!validation.ok) throw new Error(`稳定参考图上传后不可公开读取（HTTP ${validation.status}）`);
+    return uploadedUrl;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`ImaRouter 参考图稳定化失败：${detail}；未提交视频任务`);
+  } finally {
+    await fsp.rm(tempDir, { recursive: true, force: true });
+  }
+}
+
 export function startImaRouterVideoGeneration(sessionId, cardId, requestedModel = DEFAULT_VIDEO_MODEL, targetShotId = "", promptOverride = "") {
   const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
   if (!session) throw new Error("创意工作台不存在");
@@ -223,6 +274,13 @@ export function startImaRouterVideoGeneration(sessionId, cardId, requestedModel 
   const model = resolveVideoModel(requestedModel);
   const reference = selectReferences(workspace);
   const timestamp = now();
+  // An explicit retry from a failed review state must not keep polling the old,
+  // terminal provider task. Startup recovery uses resumeImaRouterVideoGeneration
+  // instead and therefore still resumes genuinely active tasks after a restart.
+  if (session.stage !== "working" && session.error_message) {
+    db.prepare("UPDATE creative_video_shots SET status='failed',error_message=COALESCE(error_message,?),updated_at=? WHERE session_id=? AND prompt_card_id=? AND provider='imarouter' AND COALESCE(model_key,?)=? AND status='generating'")
+      .run(session.error_message, timestamp, sessionId, card.id, DEFAULT_VIDEO_MODEL, model.key);
+  }
   db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, targetShotId ? `使用 ImaRouter 重新生成 ${targetShotId}` : `使用 ImaRouter 生成视频：${cardId}`, timestamp);
   const modelStrategy = "人物六视图在前，对应分镜图在最后";
   append(sessionId, `已选择 ImaRouter / ${model.label}。正在准备逐镜参考素材并生成视频。参考策略：${modelStrategy}。`, {
@@ -247,6 +305,7 @@ export function resumeImaRouterVideoGeneration(sessionId, cardId, requestedModel
 }
 
 async function generate(sessionId, card, plan, reference, modelKey, forceNewVersion = false) {
+  let activeShotId = "";
   try {
     const { baseUrl, headers } = config();
     const model = resolveVideoModel(modelKey);
@@ -259,6 +318,7 @@ async function generate(sessionId, card, plan, reference, modelKey, forceNewVers
     const storyboardReferences = useReviewedAssets ? await Promise.all(storyboardPublicUrls.map((url) => createAssetReference(baseUrl, headers, url))) : storyboardPublicUrls;
     const characterReferences = useReviewedAssets ? await Promise.all(characterPublicUrls.map((url) => createAssetReference(baseUrl, headers, url))) : characterPublicUrls;
     for (const shot of plan.shots) {
+      activeShotId = shot.shotId;
       const createdAt = now();
       const existing = db.prepare("SELECT * FROM creative_video_shots WHERE session_id=? AND prompt_card_id=? AND shot_id=? AND COALESCE(model_key,?)=? ORDER BY version DESC LIMIT 1")
         .get(sessionId, card.id, shot.shotId, DEFAULT_VIDEO_MODEL, model.key);
@@ -341,6 +401,10 @@ async function generate(sessionId, card, plan, reference, modelKey, forceNewVers
     db.prepare("UPDATE creative_sessions SET stage='video_review',error_message=NULL,updated_at=? WHERE id=?").run(now(), sessionId);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (activeShotId) {
+      db.prepare("UPDATE creative_video_shots SET status='failed',error_message=?,updated_at=? WHERE id=(SELECT id FROM creative_video_shots WHERE session_id=? AND prompt_card_id=? AND shot_id=? AND provider='imarouter' AND COALESCE(model_key,?)=? AND status='generating' ORDER BY version DESC LIMIT 1)")
+        .run(message, now(), sessionId, card.id, activeShotId, DEFAULT_VIDEO_MODEL, resolveVideoModel(modelKey).key);
+    }
     append(sessionId, `ImaRouter 视频没有生成成功：${message}。提示词和参考素材均已保留。`, {
       ...card, previewUrl: "", status: "failed",
       details: [...(card.details || []).filter((item) => !["失败原因", "视频供应商", "参考策略"].includes(item.label)), { label: "视频供应商", content: `ImaRouter / ${resolveVideoModel(modelKey).label}` }, { label: "参考策略", content: reference.strategy }, { label: "失败原因", content: message }],

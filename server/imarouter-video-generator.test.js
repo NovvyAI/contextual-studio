@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildImaRouterVideoRequest } from "./imarouter-video-generator.js";
+import { buildImaRouterVideoRequest, stableReferenceObjectPath } from "./imarouter-video-generator.js";
 
 const shot = { durationSeconds: 9, prompt: "Move naturally." };
 const references = { ordered: ["character-a", "character-b", "storyboard"], storyboard: "storyboard" };
@@ -41,4 +41,12 @@ test("unknown models safely fall back to Seedance 2.0 Fast", () => {
   assert.equal(body.model, "seedance-2.0-fast");
   assert.equal(body.metadata.audio, false);
   assert.deepEqual(body.images, references.ordered);
+});
+
+test("remote references receive stable deterministic GCS object names", () => {
+  const source = "https://storage.googleapis.com/novvy-asia/aigc/example.png?token=one";
+  const first = stableReferenceObjectPath(source, "image/png");
+  assert.equal(first, stableReferenceObjectPath(source, "image/png"));
+  assert.match(first, /^contextual-studio\/imarouter-references\/[a-f0-9]{64}\.png$/);
+  assert.notEqual(first, stableReferenceObjectPath(source.replace("one", "two"), "image/png"));
 });
