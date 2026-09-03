@@ -1448,9 +1448,13 @@ function renderCanvas(session) {
 
   const latestCards = [...session.messages].reverse().find((message) => message.cards?.length)?.cards || [];
   const focusKinds = presentation.kind === "reference_image" ? new Set(["character_image", "prop_image", "reference_image"]) : new Set([presentation.kind]);
-  const focusCards = latestCards.filter((card) => focusKinds.has(card.kind));
+  const latestFocusCards = latestCards.filter((card) => focusKinds.has(card.kind));
+  const focusCards = presentation.kind === "reference_image"
+    ? [...new Map([...characterCandidates, ...latestFocusCards].map((card) => [card.id, card])).values()]
+    : latestFocusCards;
   const focus = element("section", "current-focus");
-  focus.append(element("h3", "canvas-heading", presentation.heading));
+  if (presentation.kind === "reference_image" && characterCandidates.length) focus.classList.add("character-focus");
+  focus.append(element("h3", "canvas-heading", presentation.kind === "reference_image" && characterCandidates.length ? `${presentation.heading} · ${characterCandidates.length} 张人物候选` : presentation.heading));
   if (focusCards.length) {
     const list = element("div", "current-focus-list");
     focusCards.forEach((card) => {

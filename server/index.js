@@ -96,9 +96,9 @@ async function parseImageEditRequest(req) {
   };
 }
 
-function sendFile(res, filePath, contentType) {
+function sendFile(res, filePath, contentType, extraHeaders = {}) {
   if (!fs.existsSync(filePath)) return json(res, 404, { error: "文件不存在" });
-  res.writeHead(200, { "content-type": contentType, "accept-ranges": "bytes" });
+  res.writeHead(200, { "content-type": contentType, "accept-ranges": "bytes", ...extraHeaders });
   fs.createReadStream(filePath).pipe(res);
 }
 
@@ -667,7 +667,7 @@ const server = http.createServer(async (req, res) => {
     const filePath = path.resolve(publicDir, relativePath);
     if (!filePath.startsWith(publicDir) || !fs.existsSync(filePath)) return json(res, 404, { error: "Not found" });
     const contentTypes = { ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8" };
-    return sendFile(res, filePath, contentTypes[path.extname(filePath)] || "application/octet-stream");
+    return sendFile(res, filePath, contentTypes[path.extname(filePath)] || "application/octet-stream", { "cache-control": "no-store" });
   } catch (error) {
     return json(res, 500, { error: error instanceof Error ? error.message : String(error) });
   }

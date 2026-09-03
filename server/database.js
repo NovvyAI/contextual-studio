@@ -363,9 +363,7 @@ export function creativeCharacterReferenceAssets(sessionId) {
       selected.push({ character, candidate, view });
     }
   }
-  return selected.map(({ character, candidate, view }, index) => ({
-    number: index + 1,
-    reference: `人物图 ${String(index + 1).padStart(2, "0")}`,
+  const assets = selected.map(({ character, candidate, view }) => ({
     kind: "character_reference",
     title: `${character.displayName || character.characterId}｜${viewLabels[view] || view}`,
     description: `${character.narrativeRole || "unknown"}；来自短剧原视频 ${Number(candidate.timestampSeconds || 0).toFixed(2)} 秒；本地质量分 ${Number(candidate.qualityScore || 0).toFixed(2)}。`,
@@ -379,6 +377,41 @@ export function creativeCharacterReferenceAssets(sessionId) {
     overlayRegions: candidate.overlayRegions || [],
     needsCleanup: Boolean(candidate.needsCleanup),
     version: 1,
+  }));
+  const latestCards = new Map();
+  const rows = db.prepare("SELECT cards_json FROM creative_messages WHERE session_id=? AND cards_json IS NOT NULL ORDER BY id").all(sessionId);
+  for (const row of rows) {
+    let messageCards = [];
+    try { messageCards = JSON.parse(row.cards_json || "[]"); } catch { /* ignore malformed history */ }
+    for (const card of messageCards) if (card.kind === "character_image" && card.id) latestCards.set(card.id, card);
+  }
+  const seenUrls = new Set(assets.map((asset) => asset.url));
+  for (const card of latestCards.values()) {
+    const url = String(card.previewUrl || "");
+    if (!url || seenUrls.has(url) || ["failed", "generating", "superseded"].includes(card.status)) continue;
+    const details = new Map((card.details || []).map((item) => [item.label, item.content]));
+    const timeValue = Number.parseFloat(String(details.get("时间点") || ""));
+    assets.push({
+      kind: "character_reference",
+      title: card.title || "人物参考候选",
+      description: card.summary || "工作台中新增或生成的人物参考候选。",
+      url,
+      characterId: details.get("人物编号") || card.id,
+      candidateId: details.get("候选编号") || card.id,
+      timestampSeconds: Number.isFinite(timeValue) ? timeValue : null,
+      view: details.get("画面角度") || "custom",
+      qualityScore: details.get("本地质量分") || null,
+      overlayScore: 0,
+      overlayRegions: [],
+      needsCleanup: false,
+      version: Number(card.version || 1),
+    });
+    seenUrls.add(url);
+  }
+  return assets.map((asset, index) => ({
+    ...asset,
+    number: index + 1,
+    reference: `人物图 ${String(index + 1).padStart(2, "0")}`,
   }));
 }
 
