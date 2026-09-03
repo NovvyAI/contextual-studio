@@ -1436,6 +1436,7 @@ function renderCanvas(session) {
   liveCopy.append(element("small", "", "CURRENT"), element("h2", "", presentation.title));
   liveHeading.append(liveCopy, element("span", "board-live", session.stage === "working" ? "Novvy 正在更新" : "可继续修改"));
   liveCard.append(liveHeading);
+  if (!hasConfirmedReferenceGroup && characterCandidates.length) liveCard.append(renderCharacterSelectionPanel(session, characterCandidates));
 
   const strategy = element("section", "strategy-board");
   [["剧游连接", workspace.connectionThesis], ["目标受众", workspace.audienceStrategy], ["情绪接续", workspace.emotionalContinuity], ["转化策略", workspace.conversionStrategy]].forEach(([label, value]) => {
@@ -1488,8 +1489,6 @@ function renderCanvas(session) {
     focus.append(element("p", "current-focus-status", workspace.productionPlan[presentation.statusKey]));
   }
   liveCard.append(focus);
-  if (!hasConfirmedReferenceGroup && characterCandidates.length) liveCard.append(renderCharacterSelectionPanel(session, characterCandidates));
-
   const concepts = element("div", "concept-grid");
   const hasSelectedConcept = Boolean(workspace.selectedConceptIds?.length);
   (workspace.concepts || []).forEach((concept) => {

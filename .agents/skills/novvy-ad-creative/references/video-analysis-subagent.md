@@ -153,6 +153,7 @@ NOVVY_PYTHON_BIN="$("$SKILL_DIR/scripts/novvy_python.sh")"
             "narrativeRole": "protagonist|co_protagonist|supporting|antagonist|unknown",
             "genderPresentation": "female|male|nonbinary_unknown|not_applicable",
             "candidateIds": ["face-001", "face-014"],
+            "fallbackFrameIndexes": [3, 8],
             "selectionReason": "",
             "confidence": "high|medium|low|unknown"
           }

@@ -18,7 +18,7 @@ import { approveAndFinalizeVideoShots, approveFinalVideo } from "./video-shot-re
 import { generatedVideoPath } from "./video-finalizer.js";
 import { productionProfile } from "./production-profile.js";
 import { landingPackagePath, packageLandingPage } from "./landing-page-packager.js";
-import { registerChatAttachmentsAsAssets, startAssetCreation, startAssetRegeneration, startAttachmentImageEdit, startCharacterReferenceRegeneration } from "./asset-generator.js";
+import { registerChatAttachmentsAsAssets, registerReferencedScreenshotsAsAssets, registerReferencedScreenshotsAsCharacterReferences, startAssetCreation, startAssetRegeneration, startAttachmentImageEdit, startCharacterReferenceRegeneration } from "./asset-generator.js";
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
 import { backfillCreativeTelemetry, flushTelemetryOutbox, recordCreativeFeedback, recordCreativeRunStart, recordCreativeStage, startTelemetryWorker, telemetryStatus } from "./creative-telemetry.js";
 import { mlflowTracingStatus } from "./mlflow-tracing.js";
@@ -291,6 +291,20 @@ const server = http.createServer(async (req, res) => {
         attachments.push({ name: file.name, type: file.type, size: file.size, storedName, storedPath, url: `/api/creative/chat-attachments/${id}/${encodeURIComponent(storedName)}` });
       }
       const userMessage = content || "请查看并分析我上传的附件。";
+      const registerCharacterScreenshot = !attachments.length
+        && /(?:视频)?截图\s*0*\d+/.test(content)
+        && /(?:上传|保存|存|加入|添加).{0,10}(?:为|成|到|进|作为|当做)?.{0,6}人物参考(?:图|候选)?|作为人物参考(?:图|候选)?/i.test(content);
+      if (registerCharacterScreenshot) {
+        const registered = registerReferencedScreenshotsAsCharacterReferences(id, userMessage);
+        return json(res, 201, { id, status: "reference_review", action: "screenshots_registered_as_character_references", cards: registered.map((card) => ({ id: card.id, title: card.title, previewUrl: card.previewUrl, candidateNumber: card.candidateNumber })) });
+      }
+      const registerReferencedScreenshot = !attachments.length
+        && /(?:视频)?截图\s*0*\d+/.test(content)
+        && /(?:上传|保存|存|加入|添加).{0,8}(?:为|成|到|进|作为|当做)?.{0,5}(?:一个)?资产(?:区域|区)?|作为资产/i.test(content);
+      if (registerReferencedScreenshot) {
+        const registered = registerReferencedScreenshotsAsAssets(id, userMessage);
+        return json(res, 201, { id, status: db.prepare("SELECT stage FROM creative_sessions WHERE id=?").get(id)?.stage, action: "screenshots_registered_as_assets", assets: registered.map((asset) => ({ reference: asset.reference, title: asset.title, url: asset.url })) });
+      }
       const uploadAsAsset = attachments.length > 0 && /(?:上传|保存|存|加入|添加).{0,8}(?:为|成|到|进|作为|当做)?.{0,5}(?:一个)?资产(?:区域|区)?|作为资产/i.test(content);
       if (uploadAsAsset) {
         const registered = registerChatAttachmentsAsAssets(id, attachments, userMessage);

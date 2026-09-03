@@ -25,7 +25,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", required=True)
     parser.add_argument("--sample-fps", type=float, default=2.5)
     parser.add_argument("--max-candidates", type=int, default=80)
-    parser.add_argument("--min-face-pixels", type=int, default=72)
+    parser.add_argument("--min-face-pixels", type=int, default=48)
     return parser.parse_args()
 
 
@@ -140,7 +140,9 @@ def main() -> int:
     duration = frame_count / native_fps if frame_count else 0.0
     interval = max(1, round(native_fps / max(0.25, args.sample_fps)))
 
-    detector = cv2.FaceDetectorYN.create(str(model), "", (320, 320), 0.85, 0.3, 5000)
+    # Favor recall here: this detector proposes candidates, while the later
+    # narrative grouping and user review reject false positives.
+    detector = cv2.FaceDetectorYN.create(str(model), "", (320, 320), 0.70, 0.3, 5000)
     observations: list[dict] = []
     frame_index = 0
     while True:
@@ -176,7 +178,7 @@ def main() -> int:
             detected_overlays, overlay_score = overlay_regions(portrait_crop)
             detection_confidence = float(face[-1])
             score = round((0.8 * visual_score + 0.2 * detection_confidence) * (1.0 - min(0.38, overlay_score * 0.55)), 4)
-            if score < 0.50:
+            if score < 0.42:
                 continue
             view, yaw = head_pose(face)
             observations.append({

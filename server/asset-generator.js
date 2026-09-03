@@ -55,6 +55,97 @@ export function registerChatAttachmentsAsAssets(sessionId, attachments, descript
   registered.forEach((asset) => recordCreativeAsset(sessionId, "reference_panel", asset.url, { stageOutputId: asset.sourceCardId, metadata: { title: asset.title, source: "chat_upload", reference: asset.reference }, key: `session:${sessionId}:uploaded-asset:${asset.sourceCardId}` }));
   return registered;
 }
+
+export function registerReferencedScreenshotsAsAssets(sessionId, description) {
+  const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
+  if (!session) throw new Error("创意工作台不存在");
+  if (session.stage === "working") throw new Error("当前仍有任务正在处理");
+  const screenshots = resolveAssetReferences(sessionId, description).filter((item) => item.kind === "video_screenshot");
+  if (!screenshots.length) throw new Error("请指定要上传的截图编号，例如“截图 14 上传为资产”");
+  const timestamp = now();
+  db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)")
+    .run(sessionId, String(description || "上传截图为资产"), timestamp);
+  const existingUrls = new Set(creativeAssets(sessionId).map((asset) => asset.url));
+  const cards = screenshots.filter((item) => !existingUrls.has(item.url)).map((item) => ({
+    id: `screenshot-asset-${item.screenshotId}`,
+    kind: "reference_image",
+    title: item.title || item.reference,
+    summary: `${item.reference}，${item.description || "来自短剧原视频的关键帧"}`,
+    previewUrl: item.url,
+    version: 1,
+    status: "candidate",
+    details: [
+      { label: "资产来源", content: "短剧原视频截图" },
+      { label: "截图编号", content: item.reference },
+      { label: "时间点", content: `${Number(item.timestampSeconds || 0).toFixed(2)} 秒` },
+      { label: "处理方式", content: "直接登记原始截图；未调用 Codex 或图片生成模型" },
+    ],
+  }));
+  if (cards.length) {
+    db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,visibility,created_at) VALUES (?,'assistant',?,?,'asset',?)")
+      .run(sessionId, `已将 ${cards.length} 张短剧截图登记到资产区域。`, JSON.stringify(cards), timestamp);
+  }
+  const registered = creativeAssets(sessionId).filter((asset) => screenshots.some((item) => item.url === asset.url));
+  db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
+    .run(sessionId, cards.length
+      ? `${registered.map((asset) => asset.reference).join("、")}已加入资产区域。原始截图没有修改，也没有调用 Novvy 对话或图片模型。`
+      : "指定截图已经在资产区域，无需重复上传。", timestamp);
+  let returnStage = session.stage;
+  if (returnStage === "error") {
+    let workspace = {};
+    try { workspace = JSON.parse(session.workspace_json || "{}"); } catch { /* keep safe fallback */ }
+    returnStage = workspace.productionPlan?.referenceStatus === "candidate_review" ? "reference_review" : "concept_review";
+  }
+  db.prepare("UPDATE creative_sessions SET stage=?,error_message=NULL,updated_at=? WHERE id=?").run(returnStage, timestamp, sessionId);
+  registered.forEach((asset) => recordCreativeAsset(sessionId, "reference_panel", asset.url, { stageOutputId: asset.sourceCardId, metadata: { title: asset.title, source: "video_screenshot", reference: asset.reference }, key: `session:${sessionId}:screenshot-asset:${asset.sourceCardId}` }));
+  return registered;
+}
+
+export function registerReferencedScreenshotsAsCharacterReferences(sessionId, description) {
+  const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
+  if (!session) throw new Error("创意工作台不存在");
+  if (session.stage === "working") throw new Error("当前仍有任务正在处理");
+  const screenshots = resolveAssetReferences(sessionId, description).filter((item) => item.kind === "video_screenshot");
+  if (!screenshots.length) throw new Error("请指定人物截图编号，例如“截图 18 上传为人物参考图”");
+  const timestamp = now();
+  db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)")
+    .run(sessionId, String(description || "上传截图为人物参考图"), timestamp);
+  const allCards = cards(sessionId);
+  const existingIds = new Set(allCards.filter((card) => card.kind === "character_image").map((card) => card.id));
+  let candidateNumber = new Set(allCards.filter((card) => card.kind === "character_image").map((card) => card.id)).size + 1;
+  const requestedLabel = String(description || "").match(/[（(]([^）)]+)[）)]/)?.[1]?.trim() || "";
+  const cardsToAdd = screenshots.filter((item) => !existingIds.has(`reference-screenshot-${item.screenshotId}`)).map((item) => {
+    const viewLabel = requestedLabel || item.title || "人物参考";
+    const characterName = viewLabel.replace(/(?:正面|正脸|侧面|侧脸|左侧|右侧|左侧\s*3\/4|右侧\s*3\/4|3\/4).*$/i, "").trim() || "自定义人物";
+    return {
+      id: `reference-screenshot-${item.screenshotId}`,
+      kind: "character_image",
+      title: `${viewLabel}｜${item.reference}`,
+      summary: `${item.reference}已直接加入人物参考候选；这是短剧原始截图，未经过重绘。`,
+      previewUrl: item.url,
+      version: 1,
+      candidateNumber: candidateNumber++,
+      status: "candidate",
+      details: [
+        { label: "人物编号", content: `character-user-${characterName}` },
+        { label: "剧情身份", content: characterName },
+        { label: "人物参考来源", content: item.reference },
+        { label: "时间点", content: `${Number(item.timestampSeconds || 0).toFixed(2)} 秒` },
+        { label: "处理方式", content: "直接登记短剧原始截图；未调用 Codex 或图片生成模型" },
+      ],
+    };
+  });
+  if (cardsToAdd.length) {
+    db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,created_at) VALUES (?,'assistant',?,?,?)")
+      .run(sessionId, `已将 ${cardsToAdd.length} 张截图加入人物参考候选，可以在人物确认区域直接勾选。`, JSON.stringify(cardsToAdd), timestamp);
+  } else {
+    db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
+      .run(sessionId, "指定截图已经是人物参考候选，无需重复添加。", timestamp);
+  }
+  db.prepare("UPDATE creative_sessions SET stage='reference_review',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, sessionId);
+  cardsToAdd.forEach((card) => recordCreativeAsset(sessionId, "reference_panel", card.previewUrl, { stageOutputId: card.id, metadata: { title: card.title, source: "video_screenshot_character_reference" }, key: `session:${sessionId}:character-screenshot:${card.id}` }));
+  return cardsToAdd;
+}
 function walk(value) {
   if (Array.isArray(value)) return value.flatMap(walk);
   if (value && typeof value === "object") return [value, ...Object.values(value).flatMap(walk)];
