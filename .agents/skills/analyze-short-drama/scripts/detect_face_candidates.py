@@ -26,6 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sample-fps", type=float, default=2.5)
     parser.add_argument("--max-candidates", type=int, default=80)
     parser.add_argument("--min-face-pixels", type=int, default=48)
+    parser.add_argument("--max-duration-seconds", type=float, default=900.0)
     return parser.parse_args()
 
 
@@ -153,6 +154,8 @@ def main() -> int:
             frame_index += 1
             continue
         timestamp = frame_index / native_fps
+        if args.max_duration_seconds > 0 and timestamp > args.max_duration_seconds:
+            break
         height, width = frame.shape[:2]
         detector.setInputSize((width, height))
         _, faces = detector.detect(frame)

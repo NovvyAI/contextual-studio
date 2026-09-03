@@ -28,8 +28,8 @@ export function prepareCharacterReferenceReview(sessionId) {
   if (!session) throw new Error("创意工作台不存在");
   const drama = db.prepare("SELECT analysis_json FROM drama_analyses WHERE id=?").get(session.drama_id);
   const analysis = drama?.analysis_json ? JSON.parse(drama.analysis_json) : {};
-  const episode = Array.isArray(analysis.episodeAnalyses) ? analysis.episodeAnalyses.at(-1) : null;
-  const dynamicCharacters = Array.isArray(episode?.characterLibrary?.characters) ? episode.characterLibrary.characters : [];
+  const episodes = Array.isArray(analysis.episodeAnalyses) ? analysis.episodeAnalyses : [];
+  const dynamicCharacters = episodes.flatMap((episode) => Array.isArray(episode?.characterLibrary?.characters) ? episode.characterLibrary.characters : []);
   const candidates = dramaReferenceImageCandidates(analysis);
   const slotMeta = {
     maleFront: ["male_front", "男主人公正面"], maleSide: ["male_side", "男主人公侧面"],
@@ -139,8 +139,13 @@ async function uploadLocalImage(inputPath, slot) {
     throw new Error(`图片上传需要 Python 3.10 或更高版本。请重新运行 ./install_environment.sh 后重试。${detail ? ` (${detail})` : ""}`);
   }
   let stdout = "";
+  let uploadPath = inputPath;
   try {
-    ({ stdout } = await execFileAsync(python, [script, "--mode", "asset", "--kind", "image", "--mcp-json", mcpConfigPath(), "--slot", `${slot}=${inputPath}`], { env: { ...process.env, NOVVY_PYTHON: python }, maxBuffer: 4 * 1024 * 1024 }));
+    if (slot === "character_reference") {
+      uploadPath = path.join(path.dirname(inputPath), "normalized-character-reference.png");
+      await execFileAsync(python, [path.resolve("server/normalize-character-reference.py"), inputPath, uploadPath], { maxBuffer: 1024 * 1024 });
+    }
+    ({ stdout } = await execFileAsync(python, [script, "--mode", "asset", "--kind", "image", "--mcp-json", mcpConfigPath(), "--slot", `${slot}=${uploadPath}`], { env: { ...process.env, NOVVY_PYTHON: python }, maxBuffer: 4 * 1024 * 1024 }));
   } catch (error) {
     const output = String(error?.stdout || error?.stderr || "").trim();
     let detail = output;

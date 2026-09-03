@@ -39,6 +39,21 @@ db.exec(`
     created_at TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS drama_episodes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    analysis_id INTEGER NOT NULL REFERENCES drama_analyses(id) ON DELETE CASCADE,
+    episode_index INTEGER NOT NULL,
+    original_name TEXT NOT NULL,
+    video_path TEXT NOT NULL,
+    mime_type TEXT,
+    file_size INTEGER NOT NULL DEFAULT 0,
+    duration_seconds REAL,
+    width INTEGER,
+    height INTEGER,
+    created_at TEXT NOT NULL,
+    UNIQUE(analysis_id, episode_index)
+  );
+
   CREATE INDEX IF NOT EXISTS idx_drama_screenshots_analysis
     ON drama_screenshots(analysis_id, timestamp_seconds);
 
@@ -179,6 +194,9 @@ const faceCandidateColumns = new Set(db.prepare("PRAGMA table_info(drama_face_ca
 if (!faceCandidateColumns.has("overlay_score")) db.exec("ALTER TABLE drama_face_candidates ADD COLUMN overlay_score REAL NOT NULL DEFAULT 0");
 if (!faceCandidateColumns.has("overlay_regions_json")) db.exec("ALTER TABLE drama_face_candidates ADD COLUMN overlay_regions_json TEXT");
 if (!faceCandidateColumns.has("needs_cleanup")) db.exec("ALTER TABLE drama_face_candidates ADD COLUMN needs_cleanup INTEGER NOT NULL DEFAULT 0");
+if (!faceCandidateColumns.has("episode_index")) db.exec("ALTER TABLE drama_face_candidates ADD COLUMN episode_index INTEGER NOT NULL DEFAULT 1");
+const dramaScreenshotColumns = new Set(db.prepare("PRAGMA table_info(drama_screenshots)").all().map((column) => column.name));
+if (!dramaScreenshotColumns.has("episode_index")) db.exec("ALTER TABLE drama_screenshots ADD COLUMN episode_index INTEGER NOT NULL DEFAULT 1");
 const creativeVideoShotColumns = new Set(db.prepare("PRAGMA table_info(creative_video_shots)").all().map((column) => column.name));
 if (!creativeVideoShotColumns.has("model_key")) db.exec("ALTER TABLE creative_video_shots ADD COLUMN model_key TEXT");
 
@@ -208,13 +226,14 @@ migrateLegacyDramaAnalyses();
 export function serializeAnalysis(row) {
   if (!row) return null;
   const screenshots = db.prepare(`
-    SELECT id, timestamp_seconds, width, height
-    FROM drama_screenshots WHERE analysis_id = ? ORDER BY timestamp_seconds
+    SELECT id, episode_index, timestamp_seconds, width, height
+    FROM drama_screenshots WHERE analysis_id = ? ORDER BY episode_index,timestamp_seconds
   `).all(row.id);
   const faceCandidates = db.prepare(`
-    SELECT id,candidate_id,character_id,timestamp_seconds,view,yaw_degrees,quality_score,overlay_score,overlay_regions_json,needs_cleanup
-    FROM drama_face_candidates WHERE analysis_id=? ORDER BY timestamp_seconds,id
+    SELECT id,episode_index,candidate_id,character_id,timestamp_seconds,view,yaw_degrees,quality_score,overlay_score,overlay_regions_json,needs_cleanup
+    FROM drama_face_candidates WHERE analysis_id=? ORDER BY episode_index,timestamp_seconds,id
   `).all(row.id);
+  const episodes = db.prepare("SELECT id,episode_index,original_name,mime_type,file_size,duration_seconds,width,height FROM drama_episodes WHERE analysis_id=? ORDER BY episode_index").all(row.id);
   return {
     id: row.id,
     title: row.title,
@@ -231,8 +250,11 @@ export function serializeAnalysis(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     videoUrl: `/api/dramas/${row.id}/video`,
+    inputType: episodes.length > 1 ? "series_folder" : "single_video",
+    episodes: episodes.map((item) => ({ id: item.id, episodeIndex: item.episode_index, originalName: item.original_name, mimeType: item.mime_type, fileSize: item.file_size, durationSeconds: item.duration_seconds, width: item.width, height: item.height, videoUrl: `/api/dramas/${row.id}/episodes/${item.episode_index}/video` })),
     screenshots: screenshots.map((item) => ({
       id: item.id,
+      episodeIndex: item.episode_index,
       timestampSeconds: item.timestamp_seconds,
       width: item.width,
       height: item.height,
@@ -240,6 +262,7 @@ export function serializeAnalysis(row) {
     })),
     faceCandidates: faceCandidates.map((item) => ({
       id: item.id,
+      episodeIndex: item.episode_index,
       candidateId: item.candidate_id,
       characterId: item.character_id || "",
       timestampSeconds: item.timestamp_seconds,
@@ -327,13 +350,13 @@ export function creativeScreenshotAssets(sessionId) {
   for (const [key, candidate] of Object.entries(sourceCandidates)) {
     if (candidate?.screenshotId) roleByScreenshotId.set(Number(candidate.screenshotId), roleLabels[key] || candidate.character || "人物参考");
   }
-  return db.prepare("SELECT id,timestamp_seconds,width,height FROM drama_screenshots WHERE analysis_id=? ORDER BY timestamp_seconds,id").all(session.drama_id)
+  return db.prepare("SELECT id,episode_index,timestamp_seconds,width,height FROM drama_screenshots WHERE analysis_id=? ORDER BY episode_index,timestamp_seconds,id").all(session.drama_id)
     .map((shot, index) => ({
       number: index + 1,
       reference: `截图 ${String(index + 1).padStart(2, "0")}`,
       kind: "video_screenshot",
-      title: roleByScreenshotId.get(shot.id) || `${Number(shot.timestamp_seconds).toFixed(2)} 秒关键帧`,
-      description: `${Number(shot.timestamp_seconds).toFixed(2)} 秒的短剧原视频截图，${shot.width}×${shot.height}${roleByScreenshotId.has(shot.id) ? `；已标记为${roleByScreenshotId.get(shot.id)}` : ""}。`,
+      title: roleByScreenshotId.get(shot.id) || `第 ${shot.episode_index} 集 · ${Number(shot.timestamp_seconds).toFixed(2)} 秒关键帧`,
+      description: `第 ${shot.episode_index} 集 ${Number(shot.timestamp_seconds).toFixed(2)} 秒的短剧原视频截图，${shot.width}×${shot.height}${roleByScreenshotId.has(shot.id) ? `；已标记为${roleByScreenshotId.get(shot.id)}` : ""}。`,
       url: `/api/screenshots/${shot.id}`,
       screenshotId: shot.id,
       timestampSeconds: shot.timestamp_seconds,
@@ -347,11 +370,11 @@ export function creativeCharacterReferenceAssets(sessionId) {
   const drama = db.prepare("SELECT analysis_json FROM drama_analyses WHERE id=?").get(session.drama_id);
   let analysis = {};
   try { analysis = JSON.parse(drama?.analysis_json || "{}"); } catch { return []; }
-  const episode = Array.isArray(analysis.episodeAnalyses) ? analysis.episodeAnalyses.at(-1) : null;
+  const episodes = Array.isArray(analysis.episodeAnalyses) ? analysis.episodeAnalyses : [];
   const viewOrder = ["front", "three_quarter_left", "three_quarter_right", "left_profile", "right_profile"];
   const viewLabels = { front: "正面", three_quarter_left: "左侧 3/4", three_quarter_right: "右侧 3/4", left_profile: "左侧面", right_profile: "右侧面" };
   const selected = [];
-  for (const character of episode?.characterLibrary?.characters || []) {
+  for (const character of episodes.flatMap((item) => item?.characterLibrary?.characters || [])) {
     const bestByView = new Map();
     for (const candidate of character.candidates || []) {
       const current = bestByView.get(candidate.view);

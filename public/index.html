@@ -30,11 +30,12 @@
           <div class="section-heading"><div><small>INPUT</small><h2>上传短剧视频</h2></div><div class="step-state">STEP 1 / 4</div></div>
           <form id="upload-form">
             <label id="dropzone" class="dropzone">
-              <input id="video-input" name="video" type="file" accept="video/*" hidden />
+              <input id="video-input" type="file" accept="video/*" hidden />
               <div class="upload-icon">↑</div>
-              <strong>拖入视频，或点击选择文件</strong>
-              <span>支持 MP4、MOV、WebM，单个文件不超过 1GB</span>
+              <strong>拖入视频，或点击选择单个视频</strong>
+              <span>也可以选择一个包含多集视频的文件夹</span>
             </label>
+            <label class="folder-upload-button">选择剧集文件夹<input id="folder-input" type="file" accept="video/*" webkitdirectory multiple hidden /></label>
             <div id="file-card" class="file-card hidden">
               <div class="file-glyph">▶</div>
               <div><strong id="file-name"></strong><span id="file-size"></span></div>

@@ -52,6 +52,18 @@ test("v2 and missing contracts are rejected", () => {
   assert.throws(() => dramaReferenceImageCandidates(null), /请重新分析短剧/);
 });
 
+test("series view merges every episode instead of exposing only the last one", () => {
+  const episode = (episodeIndex, thesis) => ({
+    episodeIndex, confidence: "medium", oneLineSummary: thesis,
+    detailedAnalysis: { ...detailedAnalysis, oneSentenceThesis: thesis, synopsis: `${thesis} synopsis`, chronology: [{ timeRange: "0-5s", beat: thesis }] },
+    referenceImageCandidates: { slots: [] }, characterLibrary: { characters: [{ characterId: `ep${episodeIndex}-lead`, candidates: [] }], unassignedCandidateIds: [], limitations: [] },
+  });
+  const view = dramaAnalysisView({ contract: "novvy.video-analysis.v3", episodeAnalyses: [episode(1, "first"), episode(2, "second")] });
+  assert.match(view.oneSentenceThesis, /2 集剧集分析/);
+  assert.equal(view.chronology.length, 2);
+  assert.equal(view.characterLibrary.characters.length, 2);
+});
+
 test("legacy v2 analysis migrates deterministically and preserves reference screenshot ids", () => {
   const legacy = {
     version: 2,

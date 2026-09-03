@@ -14,6 +14,7 @@ Produce an evidence-based narrative and creative analysis from the video itself.
    - If the file is remote, obtain or open the actual artifact when authorized. Do not infer an episode from its title alone.
 
 2. Build visual coverage.
+   - Contextual Studio accepts either one video or a folder of episode videos. For production analysis, sample every 5 seconds from the first 900 seconds of each episode, split frames into sequential overview sheets, and analyze every sheet for that episode.
    - Run `scripts/make_contact_sheets.sh VIDEO OUTPUT_DIR` when `ffmpeg` is available.
    - Inspect the overview sheet first, then the denser sheet and individual frames around reversals, reveals, entrances, exits, injuries, kisses, slaps, confrontations, and cliffhangers.
    - Increase sampling density for rapid editing or unclear action. A contact sheet is navigation, not proof that nothing happened between frames.

@@ -133,19 +133,20 @@ export function dramaReferenceImageCandidates(analysis) {
 // derived object is never persisted in the analysis artifact.
 export function dramaAnalysisView(analysis) {
   const episode = assertDramaAnalysisV3(analysis);
+  const episodes = Array.isArray(analysis.episodeAnalyses) ? analysis.episodeAnalyses : [episode];
   const detailed = episode.detailedAnalysis;
   const confidenceNotes = detailed.confidenceNotes || {};
   return {
     contract: dramaAnalysisContract,
-    oneSentenceThesis: detailed.oneSentenceThesis || episode.oneLineSummary || "",
-    synopsis: detailed.synopsis || "",
-    chronology: detailed.chronology || [],
-    characters: detailed.characters || [],
-    emotionalCurve: detailed.emotionalCurve || [],
-    keyDialogue: detailed.keyDialogue || [],
-    motifs: detailed.motifs || [],
+    oneSentenceThesis: episodes.length > 1 ? `${episodes.length} 集剧集分析：${episodes.map((item) => item.detailedAnalysis?.oneSentenceThesis || item.oneLineSummary).filter(Boolean).join("；")}` : detailed.oneSentenceThesis || episode.oneLineSummary || "",
+    synopsis: episodes.length > 1 ? analysis.seriesAnalysis?.synopsis || episodes.map((item) => `第${item.episodeIndex}集：${item.detailedAnalysis?.synopsis || ""}`).join("\n") : detailed.synopsis || "",
+    chronology: episodes.flatMap((item) => (item.detailedAnalysis?.chronology || []).map((entry) => ({ ...entry, timeRange: episodes.length > 1 ? `第${item.episodeIndex}集 · ${entry.timeRange}` : entry.timeRange }))),
+    characters: episodes.flatMap((item) => (item.detailedAnalysis?.characters || []).map((entry) => ({ ...entry, role: episodes.length > 1 ? `第${item.episodeIndex}集 · ${entry.role}` : entry.role }))),
+    emotionalCurve: episodes.flatMap((item) => (item.detailedAnalysis?.emotionalCurve || []).map((entry) => ({ ...entry, timeRange: episodes.length > 1 ? `第${item.episodeIndex}集 · ${entry.timeRange}` : entry.timeRange }))),
+    keyDialogue: episodes.flatMap((item) => (item.detailedAnalysis?.keyDialogue || []).map((entry) => ({ ...entry, timeRange: episodes.length > 1 ? `第${item.episodeIndex}集 · ${entry.timeRange}` : entry.timeRange }))),
+    motifs: episodes.flatMap((item) => item.detailedAnalysis?.motifs || []),
     hookAndCliffhanger: detailed.hookAndCliffhanger || {},
-    creativeHandoff: detailed.creativeHandoff || { safeToReuse: [], continuityRisks: [], transitionOpportunities: [] },
+    creativeHandoff: { safeToReuse: episodes.flatMap((item) => item.detailedAnalysis?.creativeHandoff?.safeToReuse || []), continuityRisks: episodes.flatMap((item) => item.detailedAnalysis?.creativeHandoff?.continuityRisks || []), transitionOpportunities: episodes.flatMap((item) => item.detailedAnalysis?.creativeHandoff?.transitionOpportunities || []) },
     visualStyle: episode.visualStyle || {},
     referenceImageCandidates: dramaReferenceImageCandidates(analysis),
     confidence: {
@@ -155,5 +156,10 @@ export function dramaAnalysisView(analysis) {
       limitations: confidenceNotes.limitations || episode.risksAndUncertainties || [],
     },
     narrativeContinuity: episode.narrativeContinuity || {},
+    characterLibrary: {
+      characters: episodes.flatMap((item) => item.characterLibrary?.characters || []),
+      unassignedCandidateIds: episodes.flatMap((item) => item.characterLibrary?.unassignedCandidateIds || []),
+      limitations: episodes.flatMap((item) => item.characterLibrary?.limitations || []),
+    },
   };
 }

@@ -15,8 +15,10 @@ from prepare_video_evidence import ensure_workspace_output, workspace_dir
 from video_analysis_memory import ANALYSIS_VERSION, MEMORY_SCHEMA_VERSION, lookup
 
 
-WORKFLOW_VERSION = 3
-FRAMES_PER_EPISODE = 20
+WORKFLOW_VERSION = 4
+FRAME_INTERVAL_SECONDS = 5
+MAX_ANALYZE_DURATION_SECONDS = 900
+OVERVIEW_FRAMES_PER_SHEET = 20
 
 
 def run_episode_evidence(video_path: Path) -> tuple[dict[str, Any] | None, str]:
@@ -25,8 +27,12 @@ def run_episode_evidence(video_path: Path) -> tuple[dict[str, Any] | None, str]:
         sys.executable,
         str(evidence_script),
         str(video_path),
-        "--frame-count",
-        str(FRAMES_PER_EPISODE),
+        "--frame-interval-seconds",
+        str(FRAME_INTERVAL_SECONDS),
+        "--max-duration-seconds",
+        str(MAX_ANALYZE_DURATION_SECONDS),
+        "--overview-frame-count",
+        str(OVERVIEW_FRAMES_PER_SHEET),
         "--no-audio-preview",
     ]
 
@@ -43,10 +49,10 @@ def run_episode_evidence(video_path: Path) -> tuple[dict[str, Any] | None, str]:
 
     frames = evidence.get("frames") if isinstance(evidence, dict) else None
     sheets = evidence.get("overviewSheets") if isinstance(evidence, dict) else None
-    if not isinstance(frames, list) or len(frames) != FRAMES_PER_EPISODE:
-        return None, f"episode evidence must contain exactly {FRAMES_PER_EPISODE} frames"
-    if not isinstance(sheets, list) or len(sheets) != 1:
-        return None, "episode evidence must contain exactly one overview sheet"
+    if not isinstance(frames, list) or not frames:
+        return None, "episode evidence must contain at least one sampled frame"
+    if not isinstance(sheets, list) or not sheets:
+        return None, "episode evidence must contain at least one overview sheet"
     return evidence, ""
 
 
@@ -110,7 +116,7 @@ def build_manifest(
                     "status": evidence_status,
                     "error": evidence_error or None,
                     "actualFrameCount": evidence_summary.get("actualFrameCount") if evidence_summary else None,
-                    "overviewSheet": evidence_summary.get("contactSheet") if evidence_summary else None,
+                    "overviewSheets": evidence_summary.get("overviewSheets") if evidence_summary else None,
                     "metadataPath": (
                         str(Path(evidence_summary["outputDir"]) / "metadata.json") if evidence_summary else None
                     ),
@@ -155,8 +161,9 @@ def build_manifest(
             "cachedSeriesAnalysisPath": memory["seriesAnalysisPath"] if exact_series_hit else None,
         },
         "fixedInvariants": {
-            "framesPerEpisode": FRAMES_PER_EPISODE,
-            "overviewSheetsPerEpisode": 1,
+            "frameIntervalSeconds": FRAME_INTERVAL_SECONDS,
+            "maxAnalyzeDurationSeconds": MAX_ANALYZE_DURATION_SECONDS,
+            "overviewFramesPerSheet": OVERVIEW_FRAMES_PER_SHEET,
             "audioEvidenceEnabled": False,
             "evidencePreparedOnlyForAnalysisMisses": True,
             "maxEvidenceScriptCallsPerMissedEpisode": 1,

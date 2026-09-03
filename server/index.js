@@ -61,7 +61,7 @@ async function requestBody(req) {
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > maxUploadBytes) throw new Error("视频不能超过 1GB");
+    if (size > maxUploadBytes) throw new Error("本次上传的视频总大小不能超过 1GB");
     chunks.push(chunk);
   }
   return Buffer.concat(chunks);
@@ -607,21 +607,31 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname === "/api/dramas") {
       const form = await parseMultipart(req);
-      const file = form.get("video");
+      const files = [...form.getAll("videos"), ...form.getAll("video")].filter((item) => item instanceof File && item.size);
       const titleValue = String(form.get("title") || "").trim();
-      if (!(file instanceof File) || !file.size) return json(res, 400, { error: "请选择短剧视频" });
-      if (!file.type.startsWith("video/")) return json(res, 400, { error: "只支持视频文件" });
-      const extension = path.extname(file.name).toLowerCase() || ".mp4";
-      const storedName = `${Date.now()}-${crypto.randomUUID()}${extension}`;
-      const storedPath = path.join(uploadsDir, storedName);
-      await fsp.writeFile(storedPath, Buffer.from(await file.arrayBuffer()));
+      if (!files.length) return json(res, 400, { error: "请选择一个短剧视频或包含多集视频的文件夹" });
+      const videoExtensions = new Set([".3gp", ".avi", ".m4v", ".mkv", ".mov", ".mp4", ".mpeg", ".mpg", ".mts", ".m2ts", ".ts", ".webm"]);
+      if (files.some((file) => !file.type.startsWith("video/") && !videoExtensions.has(path.extname(file.name).toLowerCase()))) return json(res, 400, { error: "文件夹中只能提交受支持的视频文件" });
+      files.sort((a, b) => a.name.localeCompare(b.name, "zh-CN", { numeric: true }));
+      const stored = [];
+      for (const file of files) {
+        const extension = path.extname(file.name).toLowerCase() || ".mp4";
+        const storedPath = path.join(uploadsDir, `${Date.now()}-${crypto.randomUUID()}${extension}`);
+        await fsp.writeFile(storedPath, Buffer.from(await file.arrayBuffer()));
+        stored.push({ file, storedPath });
+      }
       const timestamp = now();
+      const first = stored[0];
+      const totalSize = stored.reduce((sum, item) => sum + item.file.size, 0);
       const result = db.prepare(`
         INSERT INTO drama_analyses
         (title, original_name, video_path, mime_type, file_size, status, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, 'uploaded', ?, ?)
-      `).run(titleValue || path.parse(file.name).name, file.name, storedPath, file.type, file.size, timestamp, timestamp);
-      const row = db.prepare("SELECT * FROM drama_analyses WHERE id = ?").get(Number(result.lastInsertRowid));
+      `).run(titleValue || (stored.length > 1 ? `${path.parse(first.file.name).name} 等 ${stored.length} 集` : path.parse(first.file.name).name), stored.length > 1 ? `${stored.length} 集剧集文件夹` : first.file.name, first.storedPath, first.file.type, totalSize, timestamp, timestamp);
+      const analysisId = Number(result.lastInsertRowid);
+      const insertEpisode = db.prepare("INSERT INTO drama_episodes (analysis_id,episode_index,original_name,video_path,mime_type,file_size,created_at) VALUES (?,?,?,?,?,?,?)");
+      stored.forEach((item, index) => insertEpisode.run(analysisId, index + 1, item.file.name, item.storedPath, item.file.type, item.file.size, timestamp));
+      const row = db.prepare("SELECT * FROM drama_analyses WHERE id = ?").get(analysisId);
       return json(res, 201, serializeAnalysis(row));
     }
 
@@ -645,6 +655,12 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && videoMatch) {
       const row = db.prepare("SELECT video_path, mime_type FROM drama_analyses WHERE id = ?").get(Number(videoMatch[1]));
       return row ? sendFile(res, row.video_path, row.mime_type || "video/mp4") : json(res, 404, { error: "视频不存在" });
+    }
+
+    const episodeVideoMatch = url.pathname.match(/^\/api\/dramas\/(\d+)\/episodes\/(\d+)\/video$/);
+    if (req.method === "GET" && episodeVideoMatch) {
+      const row = db.prepare("SELECT video_path,mime_type FROM drama_episodes WHERE analysis_id=? AND episode_index=?").get(Number(episodeVideoMatch[1]), Number(episodeVideoMatch[2]));
+      return row ? sendFile(res, row.video_path, row.mime_type || "video/mp4") : json(res, 404, { error: "剧集视频不存在" });
     }
 
     const screenshotMatch = url.pathname.match(/^\/api\/screenshots\/(\d+)$/);

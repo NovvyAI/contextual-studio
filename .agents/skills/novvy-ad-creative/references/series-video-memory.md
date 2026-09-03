@@ -13,7 +13,7 @@
 
 - `prepare_video_evidence.py` 每次只接收一个视频文件。
 - 文件夹代表整剧。递归识别 `.3gp`、`.avi`、`.m4v`、`.mkv`、`.mov`、`.mp4`、`.mpeg`、`.mpg`、`.mts`、`.m2ts`、`.ts`、`.webm`，忽略隐藏目录，并按文件名中的数字自然排序。
-- 每集在全片范围均匀取 20 帧，所有成功帧只合成一张 `overviewSheets[0]`。20 帧或唯一拼图任一缺失都视为证据失败。
+- 每集前 900 秒每 5 秒取一帧，每 20 帧生成一张连续 `overviewSheets`；任一输入集没有成功帧或概览拼图均视为证据失败。
 - 整剧证据固定关闭音频预览；不生成、读取或转写音频，不探测 Whisper/ASR，也不额外打开原视频或独立帧。
 - 证据默认写入 `~/novvy_ad_workplace/video-memory/evidence/<fingerprint>/evidence`。内容相同即使改名或移动，也复用同一证据。
 - 任一集证据失败都必须阻断完整整剧结果；不能跳过失败集或用相邻集补齐。
@@ -22,7 +22,7 @@
 
 ```bash
 SKILL_DIR="<novvy-ad-creative skill 根目录>"
-NOVVY_PYTHON_BIN="$("$SKILL_DIR/scripts/novvy_python.sh")" && "$NOVVY_PYTHON_BIN" "$SKILL_DIR/scripts/prepare_video_evidence.py" "<单个视频路径>" --frame-count 20 --no-audio-preview
+NOVVY_PYTHON_BIN="$("$SKILL_DIR/scripts/novvy_python.sh")" && "$NOVVY_PYTHON_BIN" "$SKILL_DIR/scripts/prepare_video_evidence.py" "<单个视频路径>" --frame-interval-seconds 5 --max-duration-seconds 900 --overview-frame-count 20 --no-audio-preview
 ```
 
 整剧证据：
@@ -55,8 +55,8 @@ manifest 的 `seriesAgent.action` 只允许：
 
 ## 分析与写入顺序
 
-1. 校验 `workflowMode == "single_series_video_analysis_agent"`、`fixedInvariants.framesPerEpisode == 20`、`fixedInvariants.overviewSheetsPerEpisode == 1`、`fixedInvariants.audioEvidenceEnabled == false`、`fixedInvariants.visualAnalysisPassesPerMissedEpisode == 1`、`fixedInvariants.parentMaySubmitEpisodeTasks == false`、`fixedInvariants.parentMaySubmitAggregationTask == false` 和 `fixedInvariants.modelMaySelectRepresentativeEpisodes == false`；当 `seriesAgent.action == "analyze_entire_series"` 时，另校验 `fixedInvariants.seriesAggregationPasses == 1`。
-2. 对每个 `episodeJobs[].analysis.action == "analyze_in_series_agent"` 的集，只查看该集唯一拼图一次，并在同一次视觉分析中产出单集 JSON。metadata 只读取文件名、时长、宽高和帧数；不读取其他媒体。
+1. 校验 `workflowMode == "single_series_video_analysis_agent"`、`fixedInvariants.frameIntervalSeconds == 5`、`fixedInvariants.maxAnalyzeDurationSeconds == 900`、`fixedInvariants.overviewFramesPerSheet == 20`、`fixedInvariants.audioEvidenceEnabled == false`、`fixedInvariants.visualAnalysisPassesPerMissedEpisode == 1`、`fixedInvariants.parentMaySubmitEpisodeTasks == false`、`fixedInvariants.parentMaySubmitAggregationTask == false` 和 `fixedInvariants.modelMaySelectRepresentativeEpisodes == false`；当 `seriesAgent.action == "analyze_entire_series"` 时，另校验 `fixedInvariants.seriesAggregationPasses == 1`。
+2. 对每个 `episodeJobs[].analysis.action == "analyze_in_series_agent"` 的集，把该集全部连续拼图放入同一次视觉分析并产出单集 JSON。metadata 只读取文件名、时长、宽高和帧数；不读取其他媒体。
 3. 每个新单集 JSON 成功后立即写入 `analysis/episodes/<episodeKey>/analysis.json`；这里保存的是该集完整大模型总结，不是路径摘要或裁剪后的重点集摘要。结构修复不得触发第二次视觉分析。`reuse_cached_analysis` 的集直接加载缓存 JSON。
 4. 按 `episodeIndex` 形成恰好 `episodeCount` 个单集 JSON。数量不足、重复或集序缺口时停止，不重复分析单集。
 5. 只把按集序排列的全部单集 JSON 作为输入，执行恰好一次整剧汇总；不再读取拼图、metadata、视频或音频。校验逐集广告相关证据覆盖全部集，并形成至少包含主题/核心冲突、人物/关系弧和另一类跨集证据的全剧广告锚点。
@@ -85,7 +85,7 @@ manifest 的 `seriesAgent.action` 只允许：
 
 ## 返回主流程
 
-- `uiImages`：首次生成或重新分析的每集唯一拼图绝对路径；主 agent 负责用 Markdown 图片展示。
+- `uiImages`：首次生成或重新分析的每集全部拼图绝对路径；主 agent 负责按集号和时间顺序展示。
 - `reusedEpisodeIndexes`：复用记忆的集序。
 - `analyzedEpisodeIndexes`：本次在视频分析 agent 内新分析的集序。
 - `episodeAnalyses`：覆盖全部集、按集序排列的完整单集模型总结；必须与独立单集缓存完全一致。

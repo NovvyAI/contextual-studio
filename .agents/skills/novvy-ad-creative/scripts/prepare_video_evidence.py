@@ -27,8 +27,10 @@ from novvy_config import read_config, resolve_binary, workspace_dir  # noqa: E40
 
 
 CONFIG = read_config()
-EVIDENCE_SCHEMA_VERSION = 3
+EVIDENCE_SCHEMA_VERSION = 4
 DEFAULT_FRAME_COUNT = 20
+DEFAULT_FRAME_INTERVAL_SECONDS = 5.0
+DEFAULT_MAX_ANALYZE_SECONDS = 900.0
 FINGERPRINT_CHUNK_BYTES = 1024 * 1024
 
 
@@ -132,6 +134,16 @@ def timestamps_for(duration: float, requested_frame_count: int) -> list[float]:
     if count == 1:
         return [min(end / 2, end)]
     return [end * index / (count - 1) for index in range(count)]
+
+
+def timestamps_for_interval(duration: float, interval_seconds: float, max_duration_seconds: float) -> list[float]:
+    analyzed_duration = min(duration, max_duration_seconds) if max_duration_seconds > 0 else duration
+    if analyzed_duration <= 0:
+        return [0.0]
+    end = max(analyzed_duration - 0.1, 0.0)
+    interval = max(interval_seconds, 0.1)
+    timestamps = [index * interval for index in range(int(end // interval) + 1)]
+    return sorted({round(min(timestamp, end), 3) for timestamp in timestamps})
 
 
 def extract_frames(ffmpeg: str, video_path: Path, output_dir: Path, timestamps: list[float]) -> list[dict]:
@@ -465,7 +477,8 @@ def cached_summary(
     *,
     video_path: Path,
     video_fingerprint: str,
-    requested_frame_count: int,
+    frame_interval_seconds: float,
+    max_duration_seconds: float,
     audio_requested: bool,
 ) -> dict | None:
     metadata_path = output_dir / "metadata.json"
@@ -478,9 +491,11 @@ def cached_summary(
         return None
     if summary.get("sourceFingerprint") != video_fingerprint:
         return None
-    if summary.get("requestedFrameCount") != requested_frame_count:
+    if float(summary.get("frameIntervalSeconds") or 0) != frame_interval_seconds:
         return None
-    if not summary.get("overviewSheets") or len(summary["overviewSheets"]) != 1:
+    if float(summary.get("maxAnalyzeDurationSeconds") or 0) != max_duration_seconds:
+        return None
+    if not summary.get("overviewSheets"):
         return None
 
     required_paths = [sheet.get("path") for sheet in summary["overviewSheets"]]
@@ -521,7 +536,7 @@ def clear_generated_evidence(output_dir: Path) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Sample one video into at most 20 frames and one contact sheet.")
+    parser = argparse.ArgumentParser(description="Sample one video at a fixed interval into timestamped overview sheets.")
     parser.add_argument("video", nargs="?", help="Local video file path")
     parser.add_argument("--input", dest="input_video", help="Local video file path. Alias for the positional video argument.")
     parser.add_argument(
@@ -530,8 +545,9 @@ def main() -> int:
     )
     parser.add_argument("--frame-count", type=int, default=DEFAULT_FRAME_COUNT, help="Maximum uniformly sampled frames. Defaults to 20")
     parser.add_argument("--max-frames", type=int, default=0, help="Deprecated compatibility cap; when set, lowers --frame-count")
-    parser.add_argument("--frame-interval-seconds", type=float, help=argparse.SUPPRESS)
-    parser.add_argument("--overview-frame-count", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--frame-interval-seconds", type=float, default=DEFAULT_FRAME_INTERVAL_SECONDS, help="Sample interval in seconds. Defaults to 5")
+    parser.add_argument("--max-duration-seconds", type=float, default=DEFAULT_MAX_ANALYZE_SECONDS, help="Analyze only the first N seconds. Defaults to 900")
+    parser.add_argument("--overview-frame-count", type=int, default=20, help="Frames per overview sheet. Defaults to 20")
     parser.add_argument("--audio-preview", dest="audio_preview", action="store_true", default=False, help="Optionally extract the first and final 30 seconds as 16 kHz mono wav. Disabled by default")
     parser.add_argument("--no-audio-preview", dest="audio_preview", action="store_false", help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -578,7 +594,8 @@ def main() -> int:
         output_dir,
         video_path=video_path,
         video_fingerprint=video_fingerprint,
-        requested_frame_count=requested_frame_count,
+        frame_interval_seconds=args.frame_interval_seconds,
+        max_duration_seconds=args.max_duration_seconds,
         audio_requested=args.audio_preview,
     )
     if cached is not None:
@@ -586,11 +603,11 @@ def main() -> int:
         return 0
 
     clear_generated_evidence(output_dir)
-    timestamps = timestamps_for(duration, requested_frame_count)
+    timestamps = timestamps_for_interval(duration, args.frame_interval_seconds, args.max_duration_seconds)
     frames = extract_frames(ffmpeg, video_path, output_dir, timestamps)
-    overview_sheets = make_overview_sheets(ffmpeg, frames, output_dir, max(len(frames), 1))
-    if not frames or len(overview_sheets) != 1:
-        print("Unable to extract video frames and create exactly one overview sheet", file=sys.stderr)
+    overview_sheets = make_overview_sheets(ffmpeg, frames, output_dir, max(args.overview_frame_count, 1))
+    if not frames or not overview_sheets:
+        print("Unable to extract video frames and create overview sheets", file=sys.stderr)
         return 1
     overview_batches = overview_input_batches(overview_sheets, 20)
     audio_preview = extract_audio_preview(ffmpeg, video_path, output_dir) if args.audio_preview else None
@@ -612,8 +629,11 @@ def main() -> int:
         "width": stream.get("width"),
         "height": stream.get("height"),
         "avgFrameRate": stream.get("avg_frame_rate"),
-        "samplingMode": "uniform_across_full_duration",
-        "requestedFrameCount": requested_frame_count,
+        "samplingMode": "fixed_interval_first_900_seconds",
+        "frameIntervalSeconds": args.frame_interval_seconds,
+        "maxAnalyzeDurationSeconds": args.max_duration_seconds,
+        "analyzedDurationSeconds": round(min(duration, args.max_duration_seconds), 3) if args.max_duration_seconds > 0 else round(duration, 3),
+        "requestedFrameCount": len(timestamps),
         "actualFrameCount": len(frames),
         "overviewFrameCount": len(frames),
         "maxImagesPerMultimodalRequest": 20,

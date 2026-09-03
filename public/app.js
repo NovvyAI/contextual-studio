@@ -1,5 +1,6 @@
 const form = document.querySelector("#upload-form");
 const input = document.querySelector("#video-input");
+const folderInput = document.querySelector("#folder-input");
 const dropzone = document.querySelector("#dropzone");
 const fileCard = document.querySelector("#file-card");
 const fileName = document.querySelector("#file-name");
@@ -20,6 +21,7 @@ let pollTimer;
 let gamePollTimer;
 let selectedDramaId = null;
 let selectedGameId = null;
+let selectedDramaFiles = [];
 
 const sizeLabel = (bytes) => bytes > 1024 ** 2 ? `${(bytes / 1024 ** 2).toFixed(1)} MB` : `${Math.ceil(bytes / 1024)} KB`;
 const timeLabel = (seconds) => `${Math.floor(seconds / 60)}:${String(Math.round(seconds % 60)).padStart(2, "0")}`;
@@ -54,7 +56,8 @@ function dramaAnalysisView(result = {}) {
     characterLibrary: { characters: [], unassignedCandidateIds: [], limitations: [] },
     confidence: { overall: "low", observed: [], strongInferences: [], limitations: [] },
   };
-  const episode = Array.isArray(result.episodeAnalyses) ? result.episodeAnalyses.at(-1) || {} : {};
+  const episodes = Array.isArray(result.episodeAnalyses) ? result.episodeAnalyses : [];
+  const episode = episodes.at(-1) || {};
   const detailed = episode.detailedAnalysis || {};
   const notes = detailed.confidenceNotes || {};
   const slotNames = { male_front: "maleFront", male_side: "maleSide", female_front: "femaleFront", female_side: "femaleSide" };
@@ -75,17 +78,17 @@ function dramaAnalysisView(result = {}) {
   }
   return {
     unsupported: false,
-    oneSentenceThesis: detailed.oneSentenceThesis || episode.oneLineSummary || "",
-    synopsis: detailed.synopsis || "",
-    chronology: detailed.chronology || [],
-    characters: detailed.characters || [],
-    emotionalCurve: detailed.emotionalCurve || [],
-    keyDialogue: detailed.keyDialogue || [],
-    motifs: detailed.motifs || [],
+    oneSentenceThesis: episodes.length > 1 ? `${episodes.length} 集剧集分析：${episodes.map((item) => item.detailedAnalysis?.oneSentenceThesis || item.oneLineSummary).filter(Boolean).join("；")}` : detailed.oneSentenceThesis || episode.oneLineSummary || "",
+    synopsis: episodes.length > 1 ? result.seriesAnalysis?.synopsis || episodes.map((item) => `第${item.episodeIndex}集：${item.detailedAnalysis?.synopsis || ""}`).join("\n") : detailed.synopsis || "",
+    chronology: episodes.flatMap((item) => (item.detailedAnalysis?.chronology || []).map((entry) => ({ ...entry, timeRange: episodes.length > 1 ? `第${item.episodeIndex}集 · ${entry.timeRange}` : entry.timeRange }))),
+    characters: episodes.flatMap((item) => (item.detailedAnalysis?.characters || []).map((entry) => ({ ...entry, role: episodes.length > 1 ? `第${item.episodeIndex}集 · ${entry.role}` : entry.role }))),
+    emotionalCurve: episodes.flatMap((item) => (item.detailedAnalysis?.emotionalCurve || []).map((entry) => ({ ...entry, timeRange: episodes.length > 1 ? `第${item.episodeIndex}集 · ${entry.timeRange}` : entry.timeRange }))),
+    keyDialogue: episodes.flatMap((item) => (item.detailedAnalysis?.keyDialogue || []).map((entry) => ({ ...entry, timeRange: episodes.length > 1 ? `第${item.episodeIndex}集 · ${entry.timeRange}` : entry.timeRange }))),
+    motifs: episodes.flatMap((item) => item.detailedAnalysis?.motifs || []),
     hookAndCliffhanger: detailed.hookAndCliffhanger || {},
-    creativeHandoff: detailed.creativeHandoff || { transitionOpportunities: [] },
+    creativeHandoff: { transitionOpportunities: episodes.flatMap((item) => item.detailedAnalysis?.creativeHandoff?.transitionOpportunities || []) },
     referenceImageCandidates: candidates,
-    characterLibrary: episode.characterLibrary || { characters: [], unassignedCandidateIds: [], limitations: [] },
+    characterLibrary: { characters: episodes.flatMap((item) => item.characterLibrary?.characters || []), unassignedCandidateIds: episodes.flatMap((item) => item.characterLibrary?.unassignedCandidateIds || []), limitations: episodes.flatMap((item) => item.characterLibrary?.limitations || []) },
     confidence: {
       overall: episode.confidence || "low",
       observed: notes.observed || [],
@@ -180,29 +183,30 @@ function renderAnalysis(root, result, screenshots) {
   const noteList = element("ul"); [...result.confidence.strongInferences, ...result.confidence.limitations].forEach((value) => noteList.append(element("li", "", value))); notes.append(noteList); root.append(notes);
 }
 
-function selectFile(file) {
-  if (!file) return;
-  const transfer = new DataTransfer();
-  transfer.items.add(file);
-  input.files = transfer.files;
-  fileName.textContent = file.name;
-  fileSize.textContent = `${sizeLabel(file.size)} · ${file.type || "video"}`;
+function selectFiles(files) {
+  const videoExtension = /\.(?:3gp|avi|m4v|mkv|mov|mp4|mpeg|mpg|mts|m2ts|ts|webm)$/i;
+  selectedDramaFiles = [...(files || [])].filter((file) => file.type.startsWith("video/") || videoExtension.test(file.name));
+  if (!selectedDramaFiles.length) return;
+  const totalSize = selectedDramaFiles.reduce((sum, file) => sum + file.size, 0);
+  fileName.textContent = selectedDramaFiles.length === 1 ? selectedDramaFiles[0].name : `${selectedDramaFiles.length} 集视频`;
+  fileSize.textContent = `${sizeLabel(totalSize)} · ${selectedDramaFiles.length === 1 ? selectedDramaFiles[0].type || "video" : "剧集文件夹"}`;
   fileCard.classList.remove("hidden");
   dropzone.classList.add("has-file");
   analyzeButton.disabled = false;
   message.textContent = "";
 }
 
-input.addEventListener("change", () => selectFile(input.files[0]));
+input.addEventListener("change", () => selectFiles(input.files));
+folderInput.addEventListener("change", () => selectFiles(folderInput.files));
 ["dragenter", "dragover"].forEach((eventName) => dropzone.addEventListener(eventName, (event) => {
   event.preventDefault(); dropzone.classList.add("dragging");
 }));
 ["dragleave", "drop"].forEach((eventName) => dropzone.addEventListener(eventName, (event) => {
   event.preventDefault(); dropzone.classList.remove("dragging");
 }));
-dropzone.addEventListener("drop", (event) => selectFile(event.dataTransfer.files[0]));
+dropzone.addEventListener("drop", (event) => selectFiles(event.dataTransfer.files));
 document.querySelector("#remove-file").addEventListener("click", () => {
-  input.value = ""; fileCard.classList.add("hidden"); dropzone.classList.remove("has-file"); analyzeButton.disabled = true;
+  input.value = ""; folderInput.value = ""; selectedDramaFiles = []; fileCard.classList.add("hidden"); dropzone.classList.remove("has-file"); analyzeButton.disabled = true;
 });
 
 async function api(url, options) {
@@ -229,10 +233,23 @@ function renderDramaDetail(item) {
   if (!item) return;
   const node = document.querySelector("#record-template").content.cloneNode(true);
   node.querySelector(".record-title").textContent = item.title;
-  node.querySelector(".record-meta").textContent = `${new Date(item.createdAt).toLocaleString("zh-CN")} · ${sizeLabel(item.fileSize)}`;
+  node.querySelector(".record-meta").textContent = `${new Date(item.createdAt).toLocaleString("zh-CN")} · ${item.episodes?.length > 1 ? `${item.episodes.length} 集 · ` : ""}${sizeLabel(item.fileSize)}`;
   const status = node.querySelector(".status"); status.className = `status ${item.status}`;
   status.textContent = ({ uploaded: "等待分析", analyzing: "分析中", completed: "已完成", failed: "失败" })[item.status] || item.status;
   node.querySelector("video").src = item.videoUrl;
+  if ((item.episodes || []).length > 1) {
+    const picker = element("label", "episode-picker");
+    picker.append(element("span", "", "当前播放"));
+    const select = element("select");
+    for (const episode of item.episodes) {
+      const option = element("option", "", `第 ${episode.episodeIndex} 集 · ${episode.originalName}`);
+      option.value = episode.videoUrl;
+      select.append(option);
+    }
+    select.addEventListener("change", () => { node.querySelector("video").src = select.value; });
+    picker.append(select);
+    node.querySelector(".record-head").after(picker);
+  }
   const analysis = dramaAnalysisView(item.result);
   node.querySelector(".thesis").textContent = analysis.unsupported ? "旧版短剧分析不再支持，请重新分析" : analysis.oneSentenceThesis || item.errorMessage || (item.status === "analyzing" ? "模型正在理解剧情、人物与情绪变化…" : "等待开始分析");
   node.querySelector(".synopsis").textContent = analysis.unsupported ? "当前只支持 novvy.video-analysis.v3。" : analysis.synopsis || "完成后将在这里显示短剧剧情分析。";
@@ -466,9 +483,12 @@ form.addEventListener("submit", async (event) => {
   analyzeButton.querySelector("span").textContent = "正在上传…";
   message.textContent = "视频上传完成后会自动开始分析。";
   try {
-    const created = await api("/api/dramas", { method: "POST", body: new FormData(form) });
+    const payload = new FormData();
+    payload.set("title", document.querySelector("#title-input").value);
+    selectedDramaFiles.forEach((file) => payload.append("videos", file, file.webkitRelativePath || file.name));
+    const created = await api("/api/dramas", { method: "POST", body: payload });
     await api(`/api/dramas/${created.id}/analyze`, { method: "POST" });
-    form.reset(); fileCard.classList.add("hidden"); dropzone.classList.remove("has-file");
+    form.reset(); selectedDramaFiles = []; fileCard.classList.add("hidden"); dropzone.classList.remove("has-file");
     message.textContent = "已创建分析任务，结果会自动刷新。";
     await loadRecords();
   } catch (error) {
