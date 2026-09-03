@@ -88,13 +88,33 @@ export function shotDetails(card) {
   if (structured.length) return structured.slice(0, 3);
   return embeddedShots(details).slice(0, 3);
 }
-function referenceUrls(session) {
+export function extractReferenceUrl(value) {
+  if (typeof value !== "string") return "";
+  return value.match(/https?:\/\/[^\s，；|]+|\/api\/(?:screenshots|face-candidates)\/\d+/)?.[0] || "";
+}
+
+function historicalCharacterReferenceUrls(sessionId) {
+  const confirmation = db.prepare("SELECT content FROM creative_messages WHERE session_id=? AND role='user' AND content LIKE '确认人物身份参考：%' ORDER BY id DESC LIMIT 1").get(sessionId);
+  const ids = String(confirmation?.content || "").replace(/^确认人物身份参考：/, "").split(/[、,，\s]+/).filter(Boolean);
+  if (!ids.length) return [];
+  const latest = latestCards(sessionId);
+  return ids.map((id) => extractReferenceUrl(latest.get(id)?.previewUrl)).filter(Boolean);
+}
+
+function referenceUrls(sessionId, session) {
   const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
   const group = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "reference_panel" && item.status === "confirmed");
   const finalCard = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "final_card" && item.status === "confirmed");
-  const characterReferences = group?.characterReferenceUrls?.length ? group.characterReferenceUrls : (group?.details || []).map((item) => item.content);
-  return [...characterReferences, ...(finalCard?.details || []).map((item) => item.content)]
-    .filter((value) => typeof value === "string" && (/^https?:\/\//.test(value) || /^\/api\/screenshots\/\d+$/.test(value)));
+  let characterReferences = (group?.characterReferenceUrls || []).map(extractReferenceUrl).filter(Boolean);
+  if (!characterReferences.length) characterReferences = historicalCharacterReferenceUrls(sessionId);
+  if (!characterReferences.length) characterReferences = (group?.details || []).map((item) => extractReferenceUrl(item.content)).filter(Boolean);
+  if (group && characterReferences.length && !group.characterReferenceUrls?.length) {
+    group.characterReferenceUrls = characterReferences;
+    db.prepare("UPDATE creative_sessions SET workspace_json=?,updated_at=? WHERE id=?").run(JSON.stringify(workspace), now(), sessionId);
+    session.workspace_json = JSON.stringify(workspace);
+  }
+  const finalCardReferences = (finalCard?.details || []).map((item) => extractReferenceUrl(item.content)).filter(Boolean);
+  return [...new Set([...characterReferences, ...finalCardReferences])];
 }
 
 export function startStoryboardImageGeneration(sessionId, storyboardId) {
@@ -105,7 +125,7 @@ export function startStoryboardImageGeneration(sessionId, storyboardId) {
   if (!storyboard) throw new Error("找不到这套剧情与分镜");
   const shots = shotDetails(storyboard);
   if (!shots.length) throw new Error("这套分镜没有可生成的镜头内容");
-  const refs = referenceUrls(session);
+  const refs = referenceUrls(sessionId, session);
   if (!refs.length) throw new Error("已确认人物参考图组为空");
   const timestamp = now();
   const placeholders = shots.map((shot, index) => ({
@@ -135,7 +155,7 @@ export function startStoryboardImageRegeneration(sessionId, cardId, feedback, ed
   db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, `修改分镜图 ${cardId}：${instruction}`, timestamp);
   append(sessionId, "收到，我会以当前分镜图为基础只修改这一个镜头。", [{ ...card, previewUrl: "", status: "generating" }]);
   db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, sessionId);
-  regenerateOne(sessionId, card, instruction, referenceUrls(session), edit);
+  regenerateOne(sessionId, card, instruction, referenceUrls(sessionId, session), edit);
 }
 
 export function startStoryboardImageRegenerationByNumber(sessionId, shotNumber, feedback) {
@@ -194,7 +214,7 @@ export function retryFailedStoryboardImages(sessionId, cardIds) {
   const storyboard = latest.get(storyboardId);
   if (!storyboard || storyboard.kind !== "storyboard") throw new Error("找不到失败分镜所属的文字分镜方案");
   if (failedCards.some((card) => card.details?.find((item) => item.label === "所属方案")?.content !== storyboardId)) throw new Error("失败分镜不属于同一套方案");
-  const refs = referenceUrls(session);
+  const refs = referenceUrls(sessionId, session);
   if (!refs.length) throw new Error("已确认人物参考图组为空");
   const timestamp = now();
   const placeholders = failedCards.map((card) => ({ ...card, previewUrl: "", status: "generating", details: (card.details || []).filter((item) => item.label !== "失败原因") }));

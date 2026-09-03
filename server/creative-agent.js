@@ -167,6 +167,20 @@ export async function runCreativeTurn(sessionId, userMessage, initial = false, a
     const turnInput = preparedAttachments.visualInputs.length ? [{ type: "text", text: input }, ...preparedAttachments.visualInputs] : input;
     const turn = await runCodexWithTrace(thread, turnInput, { outputSchema: creativeTurnSchema, signal: AbortSignal.timeout(15 * 60 * 1000) }, { name: "codex.creative_turn", sessionId: `creative:${sessionId}`, model: model || "codex-config-default" });
     let output = JSON.parse(turn.finalResponse);
+    const originalWorkspace = session.workspace_json ? JSON.parse(session.workspace_json) : null;
+    if (originalWorkspace?.confirmedCards?.length && output.workspace?.confirmedCards) {
+      const originalsById = new Map(originalWorkspace.confirmedCards.map((card) => [card.id, card]));
+      output.workspace.confirmedCards = output.workspace.confirmedCards.map((card) => {
+        const original = originalsById.get(card.id)
+          || (card.kind === "reference_panel" ? [...originalWorkspace.confirmedCards].reverse().find((item) => item.kind === "reference_panel") : null);
+        if (!original) return card;
+        return {
+          ...card,
+          ...(original.characterPanelUrls?.length ? { characterPanelUrls: original.characterPanelUrls } : {}),
+          ...(original.characterReferenceUrls?.length ? { characterReferenceUrls: original.characterReferenceUrls } : {}),
+        };
+      });
+    }
     const audiovisualDirectionRequested = /audiovisual-direction-v1/.test(userMessage) && /不要生成 storyboard/.test(userMessage);
     if (audiovisualDirectionRequested) {
       const directionCard = (output.assistantCards || []).find((card) => card.kind === "audiovisual_direction" && card.id === "audiovisual-direction-v1");
