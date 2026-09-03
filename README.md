@@ -148,6 +148,7 @@ cp .env.example .env
 | --- | --- |
 | `PORT` | 本地服务端口，默认 `4180` |
 | `CODEX_ANALYSIS_MODEL` | 可选；留空时使用本机 Codex 默认模型 |
+| `DRAMA_ANALYSIS_TIMEOUT_MINUTES` | 每集短剧的 Codex 分析超时，默认 `60` 分钟；无效值回退为 60，最大 1440 |
 | `NOVVY_MCP_URL` | Novvy MCP 地址 |
 | `NOVVY_MCP_AUTHORIZATION` | Novvy MCP 鉴权；本地也可读取已安装插件配置 |
 | `IMAROUTER_API_KEY` | ImaRouter API 密钥 |

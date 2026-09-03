@@ -66,7 +66,7 @@ const rules = [
   },
   {
     id: "network",
-    test: /ENOTFOUND|ECONNRESET|ECONNREFUSED|ETIMEDOUT|fetch failed|无法解析|network|socket hang up|查询超时/i,
+    test: /ENOTFOUND|ECONNRESET|ECONNREFUSED|ETIMEDOUT|fetch failed|无法解析|network|socket hang up|查询超时|timed out|timeout/i,
     source: "网络或远程服务连接",
     explanation: "本地服务无法稳定连接远程接口，或远程任务在限定时间内没有返回结果。任务可能仍在供应商侧运行。",
     resolution: "先检查网络和服务状态；存在 taskId 时优先继续查询原任务，不要立即重复提交。没有 taskId 时再重试原操作。",
