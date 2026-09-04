@@ -4,7 +4,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
-import { db, now, serializeAnalysis, serializeGameAnalysis, serializeCreativeSession, deleteCreativeAsset } from "./database.js";
+import { db, now, serializeAnalysis, serializeGameAnalysis, serializeCreativeSession, deleteCreativeAsset, upsertExternalDrama, upsertExternalProduct } from "./database.js";
 import { analyzeDrama } from "./analyzer.js";
 import { analyzeGame } from "./game-analyzer.js";
 import { runCreativeTurn } from "./creative-agent.js";
@@ -25,6 +25,7 @@ import { mlflowTracingStatus } from "./mlflow-tracing.js";
 import { dramaAnalysisContract, dramaAnalysisView, isDramaAnalysisV3 } from "./drama-analysis-v3.js";
 import { listDirectorStyles } from "./director-library.js";
 import { ensureCreativeErrorDiagnostic, recordCreativeError } from "./error-diagnostics.js";
+import { dramaDetailView, getAnalyzedDrama, getAnalyzedProduct, listAnalyzedDramas, listAnalyzedProducts, productDetailView, resolveAnalysisMediaUrl } from "./ai-analysis-api.js";
 
 const port = Number(process.env.PORT || 4180);
 const publicDir = path.resolve("public");
@@ -174,6 +175,41 @@ const server = http.createServer(async (req, res) => {
         landingUrl: String(item.landingUrl || item.storeUrl || ""),
       })).filter((item) => item.landingUrl);
       return json(res, 200, { items: products });
+    }
+
+    // AI Analysis API：读取已经在云端解析好的短剧/App 目录，供"创意工作台"面板作为
+    // 本地已完成记录之外的第二个来源。这组路径完全独立于 /api/dramas、/api/games，
+    // 不影响本地上传短剧、提交商店链接分析的原有流程。
+    if (req.method === "GET" && url.pathname === "/api/remote-analyses/dramas") {
+      return json(res, 200, await listAnalyzedDramas());
+    }
+    const remoteDramaDetailMatch = url.pathname.match(/^\/api\/remote-analyses\/dramas\/([0-9a-f-]{36})$/i);
+    if (req.method === "GET" && remoteDramaDetailMatch) {
+      return json(res, 200, dramaDetailView(await getAnalyzedDrama(remoteDramaDetailMatch[1])));
+    }
+    const remoteDramaSyncMatch = url.pathname.match(/^\/api\/remote-analyses\/dramas\/([0-9a-f-]{36})\/sync$/i);
+    if (req.method === "POST" && remoteDramaSyncMatch) {
+      const detail = dramaDetailView(await getAnalyzedDrama(remoteDramaSyncMatch[1], { fresh: true }));
+      return json(res, 200, serializeAnalysis(upsertExternalDrama(detail)));
+    }
+    if (req.method === "GET" && url.pathname === "/api/remote-analyses/products") {
+      return json(res, 200, await listAnalyzedProducts({ os: url.searchParams.get("os") || "", category: url.searchParams.get("category") || "" }));
+    }
+    const remoteProductDetailMatch = url.pathname.match(/^\/api\/remote-analyses\/products\/([0-9a-f-]{36})$/i);
+    if (req.method === "GET" && remoteProductDetailMatch) {
+      return json(res, 200, productDetailView(await getAnalyzedProduct(remoteProductDetailMatch[1])));
+    }
+    const remoteProductSyncMatch = url.pathname.match(/^\/api\/remote-analyses\/products\/([0-9a-f-]{36})\/sync$/i);
+    if (req.method === "POST" && remoteProductSyncMatch) {
+      const detail = productDetailView(await getAnalyzedProduct(remoteProductSyncMatch[1], { fresh: true }));
+      return json(res, 200, serializeGameAnalysis(upsertExternalProduct(detail)));
+    }
+    const analysisMediaMatch = url.pathname.match(/^\/api\/analysis-media\/(dramas|products)\/([0-9a-f-]{36})\/([^/]+)$/i);
+    if (req.method === "GET" && analysisMediaMatch) {
+      const mediaUrl = await resolveAnalysisMediaUrl(analysisMediaMatch[1].toLowerCase(), analysisMediaMatch[2], decodeURIComponent(analysisMediaMatch[3]));
+      if (!mediaUrl) return json(res, 404, { error: "分析图片不存在" });
+      res.writeHead(302, { location: mediaUrl, "cache-control": "private, max-age=240" });
+      return res.end();
     }
 
     const generatedVideoMatch = url.pathname.match(/^\/api\/generated\/videos\/([^/]+)$/);

@@ -9,6 +9,7 @@ import { preparePngEditSource, uploadPngEditInput, validatePngEditInputs } from 
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
 import { recordCreativeAsset, recordCreativeFeedback, recordCreativeStage } from "./creative-telemetry.js";
 import { dramaReferenceImageCandidates } from "./drama-analysis-v3.js";
+import { resolveAnalysisMediaUrl } from "./ai-analysis-api.js";
 
 const execFileAsync = promisify(execFile);
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -97,6 +98,15 @@ function mcpConfigPath() {
 
 export async function publicInputUrl(previewUrl) {
   if (/^https?:\/\//.test(previewUrl)) return previewUrl;
+  // Remote drama/App代表帧 use a stable local proxy path (see server/ai-analysis-api.js
+  // analysisMediaUrl) because the AI Analysis API's own signed URLs expire in ~1 hour;
+  // resolve it to a currently-valid signed URL right before actually uploading.
+  const analysisMediaMatch = previewUrl.match(/^\/api\/analysis-media\/(dramas|products)\/([0-9a-f-]{36})\/([^/]+)$/i);
+  if (analysisMediaMatch) {
+    const url = await resolveAnalysisMediaUrl(analysisMediaMatch[1].toLowerCase(), analysisMediaMatch[2], decodeURIComponent(analysisMediaMatch[3]));
+    if (!url) throw new Error("AI Analysis API 图片已不存在，请刷新后重试");
+    return url;
+  }
   if (path.isAbsolute(previewUrl) && fs.existsSync(previewUrl)) return uploadLocalImage(previewUrl, "uploaded_reference");
   const chatAttachmentMatch = previewUrl.match(/^\/api\/creative\/chat-attachments\/(\d+)\/([^/]+)$/);
   if (chatAttachmentMatch) {
