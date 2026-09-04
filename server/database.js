@@ -157,6 +157,27 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_creative_landing_packages_session
     ON creative_landing_packages(session_id, id);
 
+  CREATE TABLE IF NOT EXISTS creative_cards (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES creative_sessions(id) ON DELETE CASCADE,
+    card_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL,
+    preview_url TEXT NOT NULL DEFAULT '',
+    payload_json TEXT NOT NULL,
+    message_id INTEGER REFERENCES creative_messages(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(session_id, card_id, version)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_creative_cards_latest
+    ON creative_cards(session_id, card_id, version DESC);
+
+  CREATE INDEX IF NOT EXISTS idx_creative_cards_kind_status
+    ON creative_cards(session_id, kind, status);
+
   CREATE TABLE IF NOT EXISTS creative_telemetry_runs (
     session_id INTEGER PRIMARY KEY REFERENCES creative_sessions(id) ON DELETE CASCADE,
     local_run_id TEXT NOT NULL UNIQUE,
@@ -222,6 +243,144 @@ function migrateLegacyDramaAnalyses() {
 }
 
 migrateLegacyDramaAnalyses();
+
+function deserializeCard(row) {
+  if (!row) return null;
+  let payload = {};
+  try { payload = JSON.parse(row.payload_json || "{}"); } catch { payload = {}; }
+  return { ...payload, id: row.card_id, kind: row.kind, status: row.status, previewUrl: row.preview_url, version: row.version, messageId: row.message_id, createdAt: row.created_at, updatedAt: row.updated_at };
+}
+
+// Single card, latest version.
+export function latestCard(sessionId, cardId) {
+  return deserializeCard(db.prepare("SELECT * FROM creative_cards WHERE session_id=? AND card_id=? ORDER BY version DESC LIMIT 1").get(sessionId, cardId));
+}
+
+// One specific historical version of a card (for revision-history display).
+export function cardVersion(sessionId, cardId, version) {
+  return deserializeCard(db.prepare("SELECT * FROM creative_cards WHERE session_id=? AND card_id=? AND version=?").get(sessionId, cardId, version));
+}
+
+// Full version history of a card, oldest first.
+export function cardHistory(sessionId, cardId) {
+  return db.prepare("SELECT * FROM creative_cards WHERE session_id=? AND card_id=? ORDER BY version ASC").all(sessionId, cardId).map(deserializeCard);
+}
+
+// Latest version of every distinct card_id under a kind (e.g. all current character_image candidates).
+export function latestCardsByKind(sessionId, kind, { excludeStatuses = [] } = {}) {
+  const rows = db.prepare(`
+    SELECT c.* FROM creative_cards c
+    INNER JOIN (SELECT card_id, MAX(version) AS version FROM creative_cards WHERE session_id=? AND kind=? GROUP BY card_id) latest
+      ON latest.card_id = c.card_id AND latest.version = c.version
+    WHERE c.session_id=? AND c.kind=?
+    ORDER BY c.id ASC
+  `).all(sessionId, kind, sessionId, kind);
+  return rows.filter((row) => !excludeStatuses.includes(row.status)).map(deserializeCard);
+}
+
+// Latest version of every distinct card_id across the whole session (used to build the frontend's `cards` array).
+export function liveCardsForSession(sessionId, { excludeStatuses = ["superseded"] } = {}) {
+  const rows = db.prepare(`
+    SELECT c.* FROM creative_cards c
+    INNER JOIN (SELECT card_id, MAX(version) AS version FROM creative_cards WHERE session_id=? GROUP BY card_id) latest
+      ON latest.card_id = c.card_id AND latest.version = c.version
+    WHERE c.session_id=?
+    ORDER BY c.id ASC
+  `).all(sessionId, sessionId);
+  return rows.filter((row) => !excludeStatuses.includes(row.status)).map(deserializeCard);
+}
+
+// Most recently confirmed card of a kind — replaces the old
+// `[...workspace.confirmedCards].reverse().find(item => item.kind===X && item.status==='confirmed')`
+// convention. Ordered by row id (insertion order), not version, because the same card_id can be
+// confirmed more than once across its lifecycle (e.g. final_card: direction confirmed first,
+// the real generated image confirmed later) and the most recent confirmation event should win.
+export function latestConfirmedCard(sessionId, kind) {
+  return deserializeCard(db.prepare("SELECT * FROM creative_cards WHERE session_id=? AND kind=? AND status='confirmed' ORDER BY id DESC LIMIT 1").get(sessionId, kind));
+}
+
+// Appends a new version row for `card.id` (auto-incrementing version per card_id within the session).
+// Use for a brand-new card, or when the user explicitly asked for a new round of generation.
+export function insertCardVersion(sessionId, messageId, card) {
+  const cardId = String(card?.id || "");
+  if (!cardId) throw new Error("card 缺少 id，无法写入 creative_cards");
+  if (!card?.kind) throw new Error(`card ${cardId} 缺少 kind，无法写入 creative_cards`);
+  const version = Number(db.prepare("SELECT COALESCE(MAX(version),0)+1 version FROM creative_cards WHERE session_id=? AND card_id=?").get(sessionId, cardId).version);
+  const timestamp = now();
+  db.prepare("INSERT INTO creative_cards (session_id,card_id,kind,version,status,preview_url,payload_json,message_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)")
+    .run(sessionId, cardId, card.kind, version, card.status || "candidate", card.previewUrl || "", JSON.stringify(card), messageId || null, timestamp, timestamp);
+  return latestCard(sessionId, cardId);
+}
+
+// Patches the CURRENT version in place (e.g. generating -> completed/failed with a real previewUrl).
+// Does not bump version — this is a status/content transition within the same generation attempt,
+// mirroring how creative_video_shots rows are updated in place while a task is in flight.
+export function updateCardStatus(sessionId, cardId, version, patch, messageId) {
+  const row = db.prepare("SELECT * FROM creative_cards WHERE session_id=? AND card_id=? AND version=?").get(sessionId, cardId, version);
+  if (!row) throw new Error(`找不到 ${cardId} 的第 ${version} 版`);
+  let payload = {};
+  try { payload = JSON.parse(row.payload_json || "{}"); } catch { payload = {}; }
+  const merged = { ...payload, ...patch };
+  const timestamp = now();
+  db.prepare("UPDATE creative_cards SET status=?,preview_url=?,payload_json=?,message_id=COALESCE(?,message_id),updated_at=? WHERE session_id=? AND card_id=? AND version=?")
+    .run(merged.status || row.status, merged.previewUrl ?? row.preview_url, JSON.stringify(merged), messageId || null, timestamp, sessionId, cardId, version);
+  return latestCard(sessionId, cardId);
+}
+
+// Marks each card_id's current version as superseded (abandoned sibling candidates, an outdated
+// confirmed value being replaced, etc). Never touches an already-confirmed or already-superseded row.
+export function supersedeCards(sessionId, cardIds) {
+  if (!cardIds?.length) return;
+  const timestamp = now();
+  const stmt = db.prepare(`
+    UPDATE creative_cards SET status='superseded',updated_at=?
+    WHERE session_id=? AND card_id=? AND status NOT IN ('confirmed','superseded')
+      AND version=(SELECT MAX(version) FROM creative_cards WHERE session_id=? AND card_id=?)
+  `);
+  for (const cardId of cardIds) stmt.run(timestamp, sessionId, cardId, sessionId, cardId);
+}
+
+// One-time backfill: replay every historical creative_messages.cards_json entry (oldest message
+// first, per session) into creative_cards, so pre-migration sessions end up with exactly the same
+// "latest version per card_id" result the old full-history-scan logic used to compute. Runs once —
+// if the table is already populated (by this backfill or by normal new-code writes), it's a no-op.
+function backfillCreativeCardsFromMessages() {
+  const already = db.prepare("SELECT COUNT(*) count FROM creative_cards").get().count;
+  if (already > 0) return;
+  const messages = db.prepare("SELECT id,session_id,cards_json FROM creative_messages WHERE cards_json IS NOT NULL ORDER BY session_id ASC,id ASC").all();
+  const sessions = db.prepare("SELECT id,workspace_json FROM creative_sessions ORDER BY id ASC").all();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const message of messages) {
+      let cards = [];
+      try { cards = JSON.parse(message.cards_json || "[]"); } catch { continue; }
+      for (const card of cards) {
+        if (!card?.id || !card?.kind) continue;
+        insertCardVersion(message.session_id, message.id, card);
+      }
+    }
+    // workspace.confirmedCards was the pre-migration record of concept/reference_panel/
+    // audiovisual_direction/storyboard confirmations — those were never written as a
+    // status='confirmed' creative_messages card the way final_card/video_prompt were, so
+    // the message replay above alone would leave old sessions missing most of their
+    // confirmed-cards canvas history. Replay each session's confirmedCards array too, in
+    // its original (chronological) order, so latestConfirmedCard() still finds them.
+    for (const session of sessions) {
+      let workspace = {};
+      try { workspace = JSON.parse(session.workspace_json || "{}"); } catch { continue; }
+      for (const card of workspace.confirmedCards || []) {
+        if (!card?.id || !card?.kind) continue;
+        insertCardVersion(session.id, null, card);
+      }
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+backfillCreativeCardsFromMessages();
 
 export function serializeAnalysis(row) {
   if (!row) return null;
@@ -583,6 +742,7 @@ export function serializeCreativeSession(row) {
     assets: creativeAssets(row.id),
     characterReferences: creativeCharacterReferenceAssets(row.id),
     screenshots: creativeScreenshotAssets(row.id),
+    cards: liveCardsForSession(row.id),
     landingPackages,
     createdAt: row.created_at, updatedAt: row.updated_at,
   };

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { Codex } from "@openai/codex-sdk";
-import { db, now } from "./database.js";
+import { db, now, insertCardVersion, latestCard, latestConfirmedCard } from "./database.js";
 import { publicInputUrl } from "./character-generator.js";
 import { runCodexWithTrace } from "./mlflow-tracing.js";
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
@@ -25,35 +25,35 @@ function resultUrl(data) {
   // output fields are safe to treat as the generated video.
   return valueFor(data, ["videoUrl", "resultUrl", "outputUrl", "downloadUrl"]);
 }
-function allCards(sessionId) {
-  return db.prepare("SELECT cards_json FROM creative_messages WHERE session_id=? AND cards_json IS NOT NULL ORDER BY id DESC").all(sessionId)
-    .flatMap((row) => { try { return JSON.parse(row.cards_json || "[]"); } catch { return []; } });
-}
-
 function referenceUrl(value) {
   if (typeof value !== "string") return "";
   return value.match(/https?:\/\/[^\s，；]+|\/api\/screenshots\/\d+/)?.[0] || "";
 }
 function append(sessionId, content, card) {
-  db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,created_at) VALUES (?,'assistant',?,?,?)")
+  const result = db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,created_at) VALUES (?,'assistant',?,?,?)")
     .run(sessionId, content, JSON.stringify([card]), now());
+  return insertCardVersion(sessionId, Number(result.lastInsertRowid), card);
+}
+
+function selectStoryboardAndReferenceUrls(sessionId) {
+  const referenceGroup = latestConfirmedCard(sessionId, "reference_panel");
+  const referenceUrls = (referenceGroup?.characterReferenceUrls?.length ? referenceGroup.characterReferenceUrls : (referenceGroup?.details || []).map((item) => item.content)).map(referenceUrl).filter(Boolean);
+  const confirmedStoryboard = latestConfirmedCard(sessionId, "storyboard");
+  const storyboardUrls = (confirmedStoryboard?.details || []).map((item) => referenceUrl(item.content)).filter(Boolean);
+  return { referenceUrls, storyboardUrls };
 }
 
 export function startVideoGeneration(sessionId, cardId, targetShotId = "", promptOverride = "") {
   const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
   if (!session) throw new Error("创意工作台不存在");
   if (session.stage === "working") throw new Error("当前仍有任务正在处理");
-  const card = allCards(sessionId).find((item) => item.id === cardId && item.kind === "video_prompt");
-  if (!card) throw new Error("找不到视频提示词卡");
+  const card = latestCard(sessionId, cardId);
+  if (!card || card.kind !== "video_prompt") throw new Error("找不到视频提示词卡");
   const fullPlan = parseStoryboardVideoPlan(card);
   const plan = targetShotId ? { ...fullPlan, shots: fullPlan.shots.filter((shot) => shot.shotId === targetShotId).map((shot) => promptOverride ? { ...shot, promptEn: promptOverride } : shot) } : fullPlan;
   if (!plan.shots.length) throw new Error(`找不到要重新生成的视频镜头：${targetShotId}`);
-  const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
-  const referenceGroup = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "reference_panel" && item.status === "confirmed");
-  const referenceUrls = (referenceGroup?.characterReferenceUrls?.length ? referenceGroup.characterReferenceUrls : (referenceGroup?.details || []).map((item) => item.content)).map(referenceUrl).filter(Boolean);
+  const { referenceUrls, storyboardUrls } = selectStoryboardAndReferenceUrls(sessionId);
   if (!referenceUrls.length) throw new Error("已确认人物参考图组为空");
-  const confirmedStoryboard = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "storyboard" && item.status === "confirmed");
-  const storyboardUrls = (confirmedStoryboard?.details || []).map((item) => referenceUrl(item.content)).filter(Boolean);
   if (storyboardUrls.length < plan.shots.length) throw new Error(`已确认分镜图不足：需要 ${plan.shots.length} 张，当前只有 ${storyboardUrls.length} 张`);
   const generateAudio = !/OutputAudioSensitiveContentDetected|output audio.*copyright/i.test(session.error_message || "");
   const timestamp = now();
@@ -68,14 +68,10 @@ export function startVideoGeneration(sessionId, cardId, targetShotId = "", promp
 export function resumeNovvyStoryboardVideoGeneration(sessionId, cardId) {
   const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
   if (!session) throw new Error("创意工作台不存在");
-  const card = allCards(sessionId).find((item) => item.id === cardId && item.kind === "video_prompt");
-  if (!card) throw new Error("找不到待恢复的视频提示词卡");
+  const card = latestCard(sessionId, cardId);
+  if (!card || card.kind !== "video_prompt") throw new Error("找不到待恢复的视频提示词卡");
   const plan = parseStoryboardVideoPlan(card);
-  const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
-  const referenceGroup = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "reference_panel" && item.status === "confirmed");
-  const referenceUrls = (referenceGroup?.characterReferenceUrls?.length ? referenceGroup.characterReferenceUrls : (referenceGroup?.details || []).map((item) => item.content)).map(referenceUrl).filter(Boolean);
-  const confirmedStoryboard = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "storyboard" && item.status === "confirmed");
-  const storyboardUrls = (confirmedStoryboard?.details || []).map((item) => referenceUrl(item.content)).filter(Boolean);
+  const { referenceUrls, storyboardUrls } = selectStoryboardAndReferenceUrls(sessionId);
   if (!referenceUrls.length) throw new Error("已确认人物参考图组为空");
   if (storyboardUrls.length < plan.shots.length) throw new Error(`已确认分镜图不足：需要 ${plan.shots.length} 张，当前只有 ${storyboardUrls.length} 张`);
   const generateAudio = !/OutputAudioSensitiveContentDetected|output audio.*copyright/i.test(session.error_message || "");
@@ -86,8 +82,8 @@ export function resumeNovvyStoryboardVideoGeneration(sessionId, cardId) {
 export function resumeVideoGeneration(sessionId, cardId, taskId, providerSessionId = "") {
   const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
   if (!session) throw new Error("创意工作台不存在");
-  const card = allCards(sessionId).find((item) => item.id === cardId && item.kind === "video_prompt");
-  if (!card) throw new Error("找不到视频提示词卡");
+  const card = latestCard(sessionId, cardId);
+  if (!card || card.kind !== "video_prompt") throw new Error("找不到视频提示词卡");
   if (!taskId && !providerSessionId) throw new Error("缺少 Novvy 视频任务 ID");
   const timestamp = now();
   if (card.status !== "generating" || card.previewUrl) {

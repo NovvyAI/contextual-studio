@@ -20,33 +20,37 @@
 
 验收标准：用户能在提交视频前看见并确认每镜人物列表；过滤只依赖稳定 ID，不根据名字或服装临时猜测；生成结果不出现未选择人物；旧项目不受影响。
 
-## 创意工作台单线程解耦与状态存储重设计（暂缓）
+## 创意工作台状态存储重设计（已完成状态层，线程解耦仍暂缓）
 
-目标：把创意工作台从"一条 Codex thread 贯穿全部阶段"改成按阶段解耦的无状态调用，并把状态从"追加式聊天记录，靠扫描历史推导最新版本"改成有明确 `status`/`version` 的结构化表。
+目标：把创意工作台从"追加式聊天记录，靠扫描历史推导最新版本"改成有明确 `status`/`version` 的结构化表；线程要不要拆成按阶段解耦的无状态调用，留到状态层稳定后再评估。
 
-当前保持现状：`server/creative-agent.js` 的 `runCreativeTurn` 仍然用同一条 `codex_thread_id` 贯穿 concept/reference/final_card/audiovisual/storyboard/prompt 全部阶段；卡片状态仍然靠 `creative_messages.cards_json` 追加新消息 + 前端/后端各自扫描历史推导"最新版本"（`latestMutableCardMessageIds`、`creativeAssets()`、`richestFinalCard()` 等）。
+实现分支：`yizhao_decoupling`。
 
-背景（本轮会话里讨论并验证过的具体问题）：
+背景（本轮会话里讨论并验证过的具体问题，详见分支上的实现计划 `docs/`/commit 历史）：
 
-- **单点故障**：`resumeThread(session.codex_thread_id)` 找不到本机 Codex 会话时（换机器、磁盘清理、云端容器重建）没有任何兜底，`runCreativeTurn` 直接把 session 打成 `error`，此后该工作台所有创意轮次永久失败。`TODO.md` 里"GCP 上云"一节也间接提到这个问题（Codex Session 持久化尚未解决）。
-- **上下文重复膨胀**：`sourceContext()` 只有首轮走精简的 `initialDramaContext()`；从第二轮起每轮都把完整 `drama.analysis_json` 原样重新贴一遍（22 号工作台实测约 10.5 万字符），叠加 thread 自身已经保留的历史，成本和延迟随轮次线性甚至更快增长。
-- **状态没有单一权威来源，靠扫描历史猜"最新"**：这是本轮实际修复的三个 bug 的共同根因——"定位到待确认步骤"跳到早已废弃的候选卡（同一 `card.id` 在多条历史消息里重复出现，前端优先级打平后按 DOM 顺序猜）；未选中的落版方向候选永远停留在 `candidate` 状态，按钮一直可点击，误点可触发一次真实付费生成；`workspace.confirmedCards` 需要专门的合并逻辑（`creative-agent.js` 171-183 行）手动把 Codex 可能漏保留的字段拿回来。
-- **无法按阶段换模型/供应商、无法并行**：`CODEX_ANALYSIS_MODEL` 全局唯一，创意策略生成和琐碎卡片编辑被迫用同一个模型；`session.stage='working'` 是全局互斥锁，逻辑上独立的子任务也只能排队。
-- **参考对照**：姊妹项目 `/Users/zhaoyi/novvy/contextual-ad-agent` 走的是完全解耦路线——每个 Agent（StoryboardAgent/DirectorAgent/VideoGenAgent/PlayableAgent/SupervisorAgent…）都是无状态一次性调用（`codex exec` 或 Vercel AI SDK），状态显式存在 `ab_episode`/`ab_ad`/`ab_creativePlan` 等独立表的结构化列里，天然没有"线程丢失"这个故障模式；代价记录在它自己的 `CLAUDE.md`（M10 待办）：评审逻辑在四个 Agent 里重复了四份，prompt 里的"指令"和"数据"没分离干净。
+- **状态没有单一权威来源，靠扫描历史猜"最新"**：这是本轮实际修复的三个 bug 的共同根因——"定位到待确认步骤"跳到早已废弃的候选卡；未选中的落版方向候选永远停留在 `candidate` 状态，按钮一直可点击，误点可触发一次真实付费生成；`workspace.confirmedCards` 需要专门的合并逻辑手动把 Codex 可能漏保留的字段拿回来。三个并行 Explore agent 确认了至少 10 处相互独立、写法还不一致的"扫描全部消息、按 id 建 Map、取最新"逻辑分散在 8 个后端模块和前端里。
+- **单点故障**（仍未处理）：`resumeThread(session.codex_thread_id)` 找不到本机 Codex 会话时没有任何兜底，`runCreativeTurn` 直接把 session 打成 `error`。
+- **上下文重复膨胀**（仍未处理）：`sourceContext()` 只有首轮走精简投影，从第二轮起每轮都把完整 `drama.analysis_json` 原样重新贴一遍（22 号工作台实测约 10.5 万字符）。
+- **参考对照**：姊妹项目 `/Users/zhaoyi/novvy/contextual-ad-agent` 走的是完全解耦路线，状态显式存在独立表的结构化列里，天然没有"线程丢失"这个故障模式；代价是评审逻辑在多个 Agent 里重复、prompt 里"指令"和"数据"没分离干净（它自己的 `CLAUDE.md` M10 待办）。
 
-暂缓原因：改动面较大（需要同时改后端状态存储、Codex 调用方式和前端渲染/去重逻辑），且当前单线程设计在工作台数量不多、流程较短时问题不算致命，值得先记录方案，等出现更多类似"陈旧候选卡还活着"或"线程丢失"的真实故障再优先排期。
+已完成（`yizhao_decoupling` 分支）：
 
-后续实施事项：
+- [x] 新增 `creative_cards` 表（`server/database.js`）：`card_id`/`kind`/`version`/`status`/`preview_url`/`payload_json`/`message_id`，`UNIQUE(session_id,card_id,version)`；新增 `latestCard`/`cardVersion`/`cardHistory`/`latestCardsByKind`/`latestConfirmedCard`/`liveCardsForSession`/`insertCardVersion`/`updateCardStatus`/`supersedeCards` 查询/写入函数，替换掉 `image-generator.js`、`character-generator.js`、`storyboard-generator.js`、`audiovisual-direction.js`、`video-shot-review.js`、`video-finalizer.js`、`video-generator.js`、`imarouter-video-generator.js`、`asset-generator.js` 里各自重复实现的扫描逻辑。
+- [x] `workspace.confirmedCards` 从 `creativeTurnSchema` 和系统提示词里整体退休；Codex 不再需要自己维护这个数组（对应规则 9/10/11 已删除或改写），confirmedCards 归档改由各个 `approve*` 函数在后端确定性写 `creative_cards`。为了不让 Codex 因此丢失对已确认成果的可见性，新增 `confirmedCardsSummary()` 每轮显式把当前各阶段最新确认结果重新贴进 prompt。
+- [x] 一次性 `backfillCreativeCardsFromMessages()` 迁移：重放全部历史 `creative_messages.cards_json` 与每个 session 迁移前的 `workspace.confirmedCards` 快照到新表，服务启动时只跑一次；已用 22 号工作台真实数据验证过重放结果与迁移前完全一致。
+- [x] `serializeCreativeSession()` 新增 `cards` 字段（来自 `liveCardsForSession()`）；前端 `legacyConfirmedCards()` 改为优先读这个新字段，`workspace.confirmedCards` 降级为只给尚未跑过新代码的旧 session 兜底。
+- [x] 新增 `server/creative-cards.test.js`，覆盖全部新增函数，以及一个专门验证"回放结果等于旧扫描逻辑结果"的用例。
 
-- [ ] 给 `resumeThread` 失败增加最小兜底：退化成 `startThread()` 并用当前 `workspace_json`/`confirmedCards`/历史消息重建上下文，而不是直接把 session 判死（可以先单独做这一条，不依赖下面的大改）。
+后续实施事项（未完成）：
+
+- [ ] 给 `resumeThread` 失败增加最小兜底：退化成 `startThread()` 并用当前 `workspace_json`/`creative_cards`/历史消息重建上下文，而不是直接把 session 判死。
 - [ ] 非首轮 `sourceContext()` 也统一改用 `dramaAnalysisView()`/`initialDramaContext()` 的精简投影，而不是每轮重贴完整 `drama.analysis_json`。
-- [ ] 把 `workspace_json` 里需要被下游阶段查询或改状态的部分（落版方向候选、视听方向、分镜候选、视频提示词）拆成独立表，每条记录带 `status`（candidate/confirmed/superseded）和 `version` 列，用 `UPDATE` 推进状态，而不是靠追加新聊天消息 + 扫描历史推导最新版本。
-- [ ] `creative_messages` 收窄为纯聊天记录展示用途，不再兼职"卡片状态的事实来源"；`creativeAssets()`、`richestFinalCard()`、`latestMutableCardMessageIds` 等扫描式推导逻辑改为直接查询新表。
-- [ ] 评估把 `runCreativeTurn` 按阶段拆成独立的一次性 Codex 调用（不再共用一条 thread），每阶段可以独立选模型/供应商，且互不阻塞排队。
+- [ ] `creative_messages.cards_json` 目前仍在双写（作为迁移期间的安全网，`creativeAssets()`/`creativeCharacterReferenceAssets()` 这两个"永久编号目录"型函数仍然依赖它，语义上不是"取最新"而是"每个曾经出现过的不同 URL 永久占一个编号"，没有直接挪到新表）；等确认新表路径稳定运行一段时间后，可以评估要不要把这两个函数也改造成查 `creative_cards` 全部历史版本、彻底停止写 `cards_json`。
+- [ ] 前端 `renderMessages()`/`describeWorkingTask()`/`inferCreativeStage()`/`currentStagePresentation()` 里仍保留的扫描式推导（`latestMutableCardMessageIds`、"猜测正在生成什么"的关键词兜底等）目前靠 `cards_json` 双写继续正常工作；新表已经能提供这些信息的权威答案，值得后续单独排期把这部分也切过去、删掉扫描/猜测代码。
+- [ ] 评估把 `runCreativeTurn` 按阶段拆成独立的一次性 Codex 调用（不再共用一条 thread），每阶段可以独立选模型/供应商，且互不阻塞排队——状态层已经理顺，这条的技术前提已经具备，但本轮判断优先级低于状态层本身，特意没有一起做。
 - [ ] 参考 `contextual-ad-agent` 的 `evaluationAgent` 设计取舍（通用 `dimensions:{name,score}[]`，评分维度交给 skill markdown 而不是硬编码 schema），评估创意质量检查是否也要抽象成类似的可复用评审。
-- [ ] 补充状态机迁移测试：确保旧工作台（仍然是聊天记录驱动）在迁移期间行为不受影响。
 
-验收标准：单个 Codex 会话丢失不再导致整个工作台永久失败；同一张卡片的状态在任意时刻只有一个权威记录，不再需要扫描历史猜"最新版本"；非首轮请求的输入体积不再随轮次线性重复贴大 JSON；改动过程中旧工作台数据可以正常读取和继续使用。
+验收标准：单个 Codex 会话丢失不再导致整个工作台永久失败（仍待实现）；同一张卡片的状态在任意时刻只有一个权威记录，不再需要扫描历史猜"最新版本"（已实现）；非首轮请求的输入体积不再随轮次线性重复贴大 JSON（仍待实现）；改动过程中旧工作台数据可以正常读取和继续使用（已用 22 号工作台验证）。
 
 ## GCP 上云与媒体存储
 

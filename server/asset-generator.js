@@ -1,4 +1,4 @@
-import { creativeAssets, creativeCharacterReferenceAssets, db, now, resolveAssetReferences } from "./database.js";
+import { cardHistory, creativeAssets, creativeCharacterReferenceAssets, db, insertCardVersion, latestCard, latestCardsByKind, now, resolveAssetReferences } from "./database.js";
 import { publicInputUrl } from "./character-generator.js";
 import { preparePngEditSource, uploadPngEditInput, validatePngEditInputs } from "./image-mask.js";
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
@@ -6,17 +6,15 @@ import { recordCreativeAsset, recordCreativeFeedback } from "./creative-telemetr
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function cards(sessionId) {
-  return db.prepare("SELECT cards_json FROM creative_messages WHERE session_id=? AND cards_json IS NOT NULL ORDER BY id DESC").all(sessionId)
-    .flatMap((row) => { try { return JSON.parse(row.cards_json || "[]"); } catch { return []; } });
-}
 function append(sessionId, content, card) {
-  db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,created_at) VALUES (?,'assistant',?,?,?)")
+  const result = db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,created_at) VALUES (?,'assistant',?,?,?)")
     .run(sessionId, content, JSON.stringify([card]), now());
+  return insertCardVersion(sessionId, Number(result.lastInsertRowid), card);
 }
 function appendAsset(sessionId, content, card) {
-  db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,visibility,created_at) VALUES (?,'assistant',?,?,'asset',?)")
+  const result = db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,visibility,created_at) VALUES (?,'assistant',?,?,'asset',?)")
     .run(sessionId, content, JSON.stringify([card]), now());
+  return insertCardVersion(sessionId, Number(result.lastInsertRowid), card);
 }
 
 export function registerChatAttachmentsAsAssets(sessionId, attachments, description = "上传为资产") {
@@ -44,8 +42,10 @@ export function registerChatAttachmentsAsAssets(sessionId, attachments, descript
       { label: "存储方式", content: "本地附件；后续提交给云端生成时才按需上传" },
     ],
   }));
-  db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,visibility,created_at) VALUES (?,'assistant',?,?,'asset',?)")
+  const uploadResult = db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,visibility,created_at) VALUES (?,'assistant',?,?,'asset',?)")
     .run(sessionId, `已将 ${cards.length} 张原图登记到资产区域。`, JSON.stringify(cards), timestamp);
+  const uploadMessageId = Number(uploadResult.lastInsertRowid);
+  for (const card of cards) insertCardVersion(sessionId, uploadMessageId, card);
   const registered = creativeAssets(sessionId).filter((asset) => cards.some((card) => card.previewUrl === asset.url));
   const references = registered.map((asset) => asset.reference);
   db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
@@ -82,8 +82,10 @@ export function registerReferencedScreenshotsAsAssets(sessionId, description) {
     ],
   }));
   if (cards.length) {
-    db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,visibility,created_at) VALUES (?,'assistant',?,?,'asset',?)")
+    const screenshotResult = db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,visibility,created_at) VALUES (?,'assistant',?,?,'asset',?)")
       .run(sessionId, `已将 ${cards.length} 张短剧截图登记到资产区域。`, JSON.stringify(cards), timestamp);
+    const screenshotMessageId = Number(screenshotResult.lastInsertRowid);
+    for (const card of cards) insertCardVersion(sessionId, screenshotMessageId, card);
   }
   const registered = creativeAssets(sessionId).filter((asset) => screenshots.some((item) => item.url === asset.url));
   db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
@@ -110,9 +112,9 @@ export function registerReferencedScreenshotsAsCharacterReferences(sessionId, de
   const timestamp = now();
   db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)")
     .run(sessionId, String(description || "上传截图为人物参考图"), timestamp);
-  const allCards = cards(sessionId);
-  const existingIds = new Set(allCards.filter((card) => card.kind === "character_image").map((card) => card.id));
-  let candidateNumber = new Set(allCards.filter((card) => card.kind === "character_image").map((card) => card.id)).size + 1;
+  const existingCharacterCards = latestCardsByKind(sessionId, "character_image");
+  const existingIds = new Set(existingCharacterCards.map((card) => card.id));
+  let candidateNumber = existingIds.size + 1;
   const requestedLabel = String(description || "").match(/[（(]([^）)]+)[）)]/)?.[1]?.trim() || "";
   const cardsToAdd = screenshots.filter((item) => !existingIds.has(`reference-screenshot-${item.screenshotId}`)).map((item) => {
     const viewLabel = requestedLabel || item.title || "人物参考";
@@ -136,8 +138,10 @@ export function registerReferencedScreenshotsAsCharacterReferences(sessionId, de
     };
   });
   if (cardsToAdd.length) {
-    db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,created_at) VALUES (?,'assistant',?,?,?)")
+    const addResult = db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,created_at) VALUES (?,'assistant',?,?,?)")
       .run(sessionId, `已将 ${cardsToAdd.length} 张截图加入人物参考候选，可以在人物确认区域直接勾选。`, JSON.stringify(cardsToAdd), timestamp);
+    const addMessageId = Number(addResult.lastInsertRowid);
+    for (const card of cardsToAdd) insertCardVersion(sessionId, addMessageId, card);
   } else {
     db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
       .run(sessionId, "指定截图已经是人物参考候选，无需重复添加。", timestamp);
@@ -286,8 +290,8 @@ export function startAssetRegeneration(sessionId, assetNumber, feedback, editInp
   const instruction = String(feedback || "").trim();
   if (!instruction) throw new Error("请填写对这张图片的修改意见");
   const edit = validatePngEditInputs(editInput);
-  const sourceCard = cards(sessionId).find((card) => card.id === asset.sourceCardId && card.previewUrl === asset.url)
-    || cards(sessionId).find((card) => card.id === asset.sourceCardId);
+  const sourceCard = cardHistory(sessionId, asset.sourceCardId).find((card) => card.previewUrl === asset.url)
+    || latestCard(sessionId, asset.sourceCardId);
   if (!sourceCard) throw new Error("找不到这张资产对应的生成卡片");
   const timestamp = now();
   db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)")
@@ -308,7 +312,8 @@ export function startCharacterReferenceRegeneration(sessionId, characterReferenc
   const edit = validatePngEditInputs(editInput);
   const timestamp = now();
   const targetCardId = `reference-${asset.characterId}-${asset.candidateId}`;
-  const matchingCard = cards(sessionId).find((card) => card.id === targetCardId && card.kind === "character_image");
+  const rawMatch = latestCard(sessionId, targetCardId);
+  const matchingCard = rawMatch?.kind === "character_image" ? rawMatch : null;
   const sourceCard = matchingCard
     ? { ...matchingCard, previewUrl: "", status: "generating" }
     : {

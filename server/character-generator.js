@@ -4,7 +4,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { db, now, resolveAssetReferences } from "./database.js";
+import { db, now, resolveAssetReferences, insertCardVersion, latestCard, latestCardsByKind } from "./database.js";
 import { preparePngEditSource, uploadPngEditInput, validatePngEditInputs } from "./image-mask.js";
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
 import { recordCreativeAsset, recordCreativeFeedback, recordCreativeStage } from "./creative-telemetry.js";
@@ -13,14 +13,10 @@ import { dramaReferenceImageCandidates } from "./drama-analysis-v3.js";
 const execFileAsync = promisify(execFile);
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function cards(sessionId) {
-  return db.prepare("SELECT cards_json FROM creative_messages WHERE session_id=? AND cards_json IS NOT NULL ORDER BY id DESC").all(sessionId)
-    .flatMap((row) => { try { return JSON.parse(row.cards_json || "[]"); } catch { return []; } });
-}
-
 function append(sessionId, content, card) {
-  db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,created_at) VALUES (?,'assistant',?,?,?)")
+  const result = db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,created_at) VALUES (?,'assistant',?,?,?)")
     .run(sessionId, content, JSON.stringify([card]), now());
+  return insertCardVersion(sessionId, Number(result.lastInsertRowid), card);
 }
 
 export function prepareCharacterReferenceReview(sessionId) {
@@ -75,8 +71,10 @@ export function prepareCharacterReferenceReview(sessionId) {
   referenceCards = referenceCards.map((card, index) => ({ ...card, candidateNumber: index + 1 }));
   const timestamp = now();
   if (referenceCards.length) {
-    db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,created_at) VALUES (?,'assistant',?,?,?)")
+    const result = db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,created_at) VALUES (?,'assistant',?,?,?)")
       .run(sessionId, "创意方案已经确认。请先选择用于后续制作的人物参考图；也可以继续添加或修改人物候选。", JSON.stringify(referenceCards), timestamp);
+    const messageId = Number(result.lastInsertRowid);
+    for (const card of referenceCards) insertCardVersion(sessionId, messageId, card);
   } else {
     db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
       .run(sessionId, "创意方案已经确认。当前短剧分析中没有完整人物参考截图，请先添加人物参考图。", timestamp);
@@ -262,8 +260,7 @@ export function resumeSixViewPanelGeneration(sessionId) {
   if (!session) throw new Error("创意工作台不存在");
   const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
   const pending = workspace.pendingCharacterReferences || [];
-  const latest = new Map();
-  cards(sessionId).forEach((card) => { if (!latest.has(card.id)) latest.set(card.id, card); });
+  const latest = new Map(latestCardsByKind(sessionId, "character_image").map((card) => [card.id, card]));
   const completedCharacters = new Set([...latest.values()].filter((card) => isSixViewPanel(card) && card.previewUrl && card.status === "candidate").map((card) => characterIdentity(card).id));
   const grouped = new Map();
   for (const item of pending) {
@@ -286,8 +283,8 @@ export function startCharacterRegeneration(sessionId, cardId, feedback, editInpu
   const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
   if (!session) throw new Error("创意工作台不存在");
   if (session.stage === "working") throw new Error("当前仍有任务正在处理");
-  const card = cards(sessionId).find((item) => item.id === cardId && item.kind === "character_image" && item.previewUrl);
-  if (!card) throw new Error("找不到这张人物候选的真实图片");
+  const card = latestCard(sessionId, cardId);
+  if (!card || card.kind !== "character_image" || !card.previewUrl) throw new Error("找不到这张人物候选的真实图片");
   const instruction = String(feedback || "").trim();
   if (!instruction) throw new Error("请填写人物图修改意见");
   const edit = validatePngEditInputs(editInput);
@@ -299,9 +296,8 @@ export function startCharacterRegeneration(sessionId, cardId, feedback, editInpu
 }
 
 function identityBaseCard(sessionId, description) {
-  const all = cards(sessionId);
-  if (/(女主|女性|女人|女孩|女主人公)/.test(description)) return all.find((item) => item.id === "reference-female_front" && item.previewUrl);
-  if (/(男主|男性|男人|男孩|男主人公)/.test(description)) return all.find((item) => item.id === "reference-male_front" && item.previewUrl);
+  if (/(女主|女性|女人|女孩|女主人公)/.test(description)) return latestCard(sessionId, "reference-female_front")?.previewUrl ? latestCard(sessionId, "reference-female_front") : null;
+  if (/(男主|男性|男人|男孩|男主人公)/.test(description)) return latestCard(sessionId, "reference-male_front")?.previewUrl ? latestCard(sessionId, "reference-male_front") : null;
   return null;
 }
 
@@ -311,7 +307,7 @@ export function startCustomCharacterGeneration(sessionId, description, replaceCa
   if (session.stage === "working") throw new Error("当前仍有任务正在处理");
   const instruction = String(description || "").trim();
   if (!instruction) throw new Error("请描述要添加的人物图");
-  const existingCustom = cards(sessionId).filter((item) => /^reference-custom-/.test(item.id));
+  const existingCustom = latestCardsByKind(sessionId, "character_image").filter((item) => /^reference-custom-/.test(item.id));
   const replacing = replaceCardId ? existingCustom.find((item) => item.id === replaceCardId) : null;
   const number = replacing?.candidateNumber || String(5 + new Set(existingCustom.map((item) => item.id)).size).padStart(2, "0");
   const explicitlyReferenced = resolveAssetReferences(sessionId, instruction)[0];
@@ -329,8 +325,7 @@ export function approveCharacterReferences(sessionId, cardIds) {
   if (!session) throw new Error("创意工作台不存在");
   const selectedIds = [...new Set((cardIds || []).map(String))];
   if (!selectedIds.length) throw new Error("请至少勾选一张人物图");
-  const latest = new Map();
-  cards(sessionId).forEach((card) => { if (!latest.has(card.id)) latest.set(card.id, card); });
+  const latest = new Map(latestCardsByKind(sessionId, "character_image").map((card) => [card.id, card]));
   const selected = selectedIds.map((id) => latest.get(id)).filter((card) => card?.previewUrl && !["superseded", "failed", "generating"].includes(card.status));
   if (selected.length !== selectedIds.length) throw new Error("部分人物候选已作废、仍在生成或缺少真实图片，请刷新后重新勾选");
   const timestamp = now();
@@ -357,18 +352,16 @@ export function approveCharacterReferences(sessionId, cardIds) {
   const selectedCharacters = new Set(selected.map((card) => characterIdentity(card).id));
   if (selectedCharacters.size !== selected.length) throw new Error("同一个人物只能确认一张六视图面板");
   if (expectedCharacters.size && [...expectedCharacters].some((id) => !selectedCharacters.has(id))) throw new Error("每个已确认人物都需要勾选一张六视图面板");
-  workspace.confirmedCards ||= [];
-  workspace.confirmedCards.push({
-    id: `confirmed-reference-group-${Date.now()}`, kind: "reference_panel", title: "已确认人物参考图组",
-    summary: `已确认 ${selected.length} 个人物六视图面板，供 ImaRouter 锁定人物身份；原始人物参考继续供分镜与 Novvy MCP 使用。`,
-    details: selected.map((card) => ({ label: card.title, content: card.previewUrl })), status: "confirmed", confirmedAt: timestamp,
-    characterPanelUrls: selected.map((card) => card.previewUrl),
-    characterReferenceUrls: (workspace.pendingCharacterReferences || []).map((item) => item.previewUrl).filter(Boolean),
-  });
   workspace.productionPlan = { ...(workspace.productionPlan || {}), sixViewStatus: "approved", referenceStatus: "approved", finalCardStatus: "direction_pending", videoPromptStatus: "final_card_direction_pending" };
   db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, `确认人物六视图面板：${selectedIds.join("、")}`, timestamp);
   const autoMessage = `人物六视图面板已经确认，共 ${selected.length} 个人物。现在生成 2-4 张 final_card 落版方向候选卡：只确定末镜衔接意图、主视觉、9:16 构图、英文标题/副标题/CTA、字体层级、色彩、产品真实性边界和后续图片生成提示词；previewUrl 为空，不执行图片生成。stage 使用 final_card_review，等待用户确认一个落版方向，不要生成 audiovisual_direction 或 storyboard。`;
-  db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)").run(sessionId, `已确认 ${selected.length} 张人物六视图面板。现在自动生成落版方向候选。`, timestamp);
+  append(sessionId, `已确认 ${selected.length} 张人物六视图面板。现在自动生成落版方向候选。`, {
+    id: "reference-panel", kind: "reference_panel", title: "已确认人物参考图组",
+    summary: `已确认 ${selected.length} 个人物六视图面板，供 ImaRouter 锁定人物身份；原始人物参考继续供分镜与 Novvy MCP 使用。`,
+    previewUrl: "", details: selected.map((card) => ({ label: card.title, content: card.previewUrl })), status: "confirmed", confirmedAt: timestamp,
+    characterPanelUrls: selected.map((card) => card.previewUrl),
+    characterReferenceUrls: (workspace.pendingCharacterReferences || []).map((item) => item.previewUrl).filter(Boolean),
+  });
   db.prepare("UPDATE creative_sessions SET stage='working',workspace_json=?,error_message=NULL,updated_at=? WHERE id=?").run(JSON.stringify(workspace), timestamp, sessionId);
   recordCreativeFeedback(sessionId, `确认人物六视图面板：${selectedIds.join("、")}`, { decision: "approved", stageOutputId: "reference-panel", key: `session:${sessionId}:reference-panel:approved:${timestamp}` });
   recordCreativeStage(sessionId, "reference_panel", { cards: selected.map((card) => ({ id: card.id, title: card.title, previewUrl: card.previewUrl })) }, { status: "confirmed", key: `session:${sessionId}:reference-panel:${timestamp}` });

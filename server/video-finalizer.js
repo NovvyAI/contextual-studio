@@ -3,15 +3,14 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { db } from "./database.js";
+import { db, latestConfirmedCard } from "./database.js";
 import { productionProfile } from "./production-profile.js";
 
 const execFileAsync = promisify(execFile);
 const outputDir = path.resolve("data/generated/videos");
 
-function finalCardSource(session) {
-  const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
-  const card = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "final_card" && item.status === "confirmed");
+function finalCardSource(sessionId) {
+  const card = latestConfirmedCard(sessionId, "final_card");
   return [card?.previewUrl, ...(card?.details || []).map((item) => item.content)]
     .find((value) => typeof value === "string" && (/^https?:\/\//.test(value) || /^\/api\/screenshots\/\d+$/.test(value))) || "";
 }
@@ -74,7 +73,7 @@ async function crossfadeShots(inputs, outputPath, transitionSeconds = production
 export async function finalizeVideoWithApprovedCard(sessionId, remoteVideoUrl) {
   const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
   if (!session) throw new Error("创意工作台不存在");
-  const finalCard = finalCardSource(session);
+  const finalCard = finalCardSource(sessionId);
   if (!finalCard) throw new Error("没有找到已确认的原始落版图");
   await fsp.mkdir(outputDir, { recursive: true });
   const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "contextual-video-finalize-"));
@@ -106,7 +105,7 @@ export async function finalizeStoryboardVideosWithApprovedCard(sessionId, shotVi
   if (shotVideoUrls.length > productionProfile.max_shots_per_final) throw new Error(`当前生产 Profile 最多允许 ${productionProfile.max_shots_per_final} 个镜头`);
   const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
   if (!session) throw new Error("创意工作台不存在");
-  const finalCard = finalCardSource(session);
+  const finalCard = finalCardSource(sessionId);
   if (!finalCard) throw new Error("没有找到已确认的原始落版图");
   await fsp.mkdir(outputDir, { recursive: true });
   const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "contextual-storyboard-finalize-"));

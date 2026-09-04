@@ -4,6 +4,15 @@
 
 ## 未发布
 
+### 重构：创意工作台卡片状态改用结构化表存储（`yizhao_decoupling` 分支）
+
+- 新增 `creative_cards` 表（`card_id`/`kind`/`version`/`status`/`preview_url`/`payload_json`/`message_id`），替换掉 8 个后端模块和前端里各自独立实现、写法不完全一致的"扫描全部聊天记录、按 id 建 Map、取最新版本"逻辑；`server/database.js` 新增 `latestCard`/`cardHistory`/`latestCardsByKind`/`latestConfirmedCard`/`liveCardsForSession`/`insertCardVersion`/`updateCardStatus`/`supersedeCards` 作为统一查询/写入入口。
+- `workspace.confirmedCards` 从 Codex 输出 schema 和系统提示词里整体退休，确认归档改由后端各个 `approve*` 函数确定性写入 `creative_cards`，不再依赖 Codex 自己正确维护一个只追加、要靠 `reverse().find()` 猜"最新"的数组；新增 `confirmedCardsSummary()` 在每轮显式把当前已确认成果重新贴回 Codex 上下文，避免其可见性因此丢失。
+- 服务启动时新增一次性 `backfillCreativeCardsFromMessages()`，把历史聊天记录和迁移前的 `workspace.confirmedCards` 快照重放进新表，保证已有工作台的"最新版本"结果与迁移前完全一致；`creative_messages.cards_json` 迁移期间继续双写作为安全网。
+- `serializeCreativeSession()` 新增 `cards` 字段，前端左侧"已确认成果"画布链条改为优先读取这个字段。
+- 新增 `server/creative-cards.test.js`，覆盖新表全部读写函数及一个专门验证"回放结果与旧扫描逻辑一致"的用例。
+- 详见 `TODO.md`"创意工作台状态存储重设计"一节：`resumeThread` 单点故障兜底、非首轮上下文精简、`runCreativeTurn` 按阶段解耦仍未实现，留作后续。
+
 ### 文档：记录创意工作台单线程解耦方案
 
 - `TODO.md` 新增"创意工作台单线程解耦与状态存储重设计"一节（暂缓）：记录单条 Codex thread 贯穿全流程的具体代价（线程丢失无兜底、非首轮重复重贴完整短剧分析 JSON、卡片状态靠扫描聊天记录推导导致的多个已修复 bug），并对照姊妹项目 `contextual-ad-agent` 的无状态解耦架构给出后续实施事项。

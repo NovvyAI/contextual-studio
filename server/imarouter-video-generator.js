@@ -4,7 +4,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { db, now } from "./database.js";
+import { db, now, insertCardVersion, latestCard, latestConfirmedCard } from "./database.js";
 import { parseStoryboardVideoPlan, shotCard } from "./storyboard-video-plan.js";
 import { traceToolCall } from "./mlflow-tracing.js";
 
@@ -41,13 +41,9 @@ async function request(url, options) {
 }
 
 function append(sessionId, content, card) {
-  db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,created_at) VALUES (?,'assistant',?,?,?)")
+  const result = db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,created_at) VALUES (?,'assistant',?,?,?)")
     .run(sessionId, content, JSON.stringify([card]), now());
-}
-
-function allCards(sessionId) {
-  return db.prepare("SELECT cards_json FROM creative_messages WHERE session_id=? AND cards_json IS NOT NULL ORDER BY id DESC").all(sessionId)
-    .flatMap((row) => { try { return JSON.parse(row.cards_json || "[]"); } catch { return []; } });
+  return insertCardVersion(sessionId, Number(result.lastInsertRowid), card);
 }
 
 function explicitVideoUrl(data) {
@@ -161,9 +157,9 @@ async function createAssetReference(baseUrl, headers, imageUrl) {
   throw new Error("ImaRouter 参考图审核超时");
 }
 
-function selectReferences(workspace, requireCharacters = true) {
-  const confirmedStoryboard = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "storyboard" && item.status === "confirmed");
-  const referenceGroup = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "reference_panel" && item.status === "confirmed");
+function selectReferences(sessionId, requireCharacters = true) {
+  const confirmedStoryboard = latestConfirmedCard(sessionId, "storyboard");
+  const referenceGroup = latestConfirmedCard(sessionId, "reference_panel");
   const storyboardUrls = (confirmedStoryboard?.details || []).map((item) => referenceUrl(item.content)).filter(Boolean);
   const characterUrls = (referenceGroup?.characterPanelUrls?.length
     ? referenceGroup.characterPanelUrls
@@ -283,14 +279,13 @@ export function startImaRouterVideoGeneration(sessionId, cardId, requestedModel 
   if (!session) throw new Error("创意工作台不存在");
   if (session.stage === "working") throw new Error("当前仍有任务正在处理");
   config();
-  const card = allCards(sessionId).find((item) => item.id === cardId && item.kind === "video_prompt");
-  if (!card) throw new Error("找不到视频提示词卡");
+  const card = latestCard(sessionId, cardId);
+  if (!card || card.kind !== "video_prompt") throw new Error("找不到视频提示词卡");
   const fullPlan = parseStoryboardVideoPlan(card);
   const plan = targetShotId ? { ...fullPlan, shots: fullPlan.shots.filter((shot) => shot.shotId === targetShotId).map((shot) => promptOverride ? { ...shot, promptEn: promptOverride } : shot) } : fullPlan;
   if (!plan.shots.length) throw new Error(`找不到要重新生成的视频镜头：${targetShotId}`);
-  const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
   const model = resolveVideoModel(requestedModel);
-  const reference = selectReferences(workspace);
+  const reference = selectReferences(sessionId);
   const timestamp = now();
   // An explicit retry from a failed review state must not keep polling the old,
   // terminal provider task. Startup recovery uses resumeImaRouterVideoGeneration
@@ -318,12 +313,11 @@ export function startImaRouterVideoGeneration(sessionId, cardId, requestedModel 
 export function resumeImaRouterVideoGeneration(sessionId, cardId, requestedModel = DEFAULT_VIDEO_MODEL) {
   const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
   if (!session) throw new Error("创意工作台不存在");
-  const card = allCards(sessionId).find((item) => item.id === cardId && item.kind === "video_prompt");
-  if (!card) throw new Error("找不到待恢复的视频提示词卡");
+  const card = latestCard(sessionId, cardId);
+  if (!card || card.kind !== "video_prompt") throw new Error("找不到待恢复的视频提示词卡");
   const plan = parseStoryboardVideoPlan(card);
-  const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
   const model = resolveVideoModel(requestedModel);
-  const reference = selectReferences(workspace);
+  const reference = selectReferences(sessionId);
   db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(now(), sessionId);
   generate(sessionId, card, plan, reference, model.key);
 }

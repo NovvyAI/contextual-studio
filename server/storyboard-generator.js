@@ -1,4 +1,4 @@
-import { db, now, resolveAssetReferences } from "./database.js";
+import { db, now, resolveAssetReferences, insertCardVersion, latestCard, latestCardsByKind, latestConfirmedCard, updateCardStatus } from "./database.js";
 import { publicInputUrl } from "./character-generator.js";
 import { preparePngEditSource, uploadPngEditInput, validatePngEditInputs } from "./image-mask.js";
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
@@ -6,17 +6,8 @@ import { productionProfile } from "./production-profile.js";
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function cards(sessionId) {
-  return db.prepare("SELECT cards_json FROM creative_messages WHERE session_id=? AND cards_json IS NOT NULL ORDER BY id DESC").all(sessionId)
-    .flatMap((row) => { try { return JSON.parse(row.cards_json || "[]"); } catch { return []; } });
-}
-function latestCards(sessionId) {
-  const latest = new Map();
-  for (const card of cards(sessionId)) if (card?.id && !latest.has(card.id)) latest.set(card.id, card);
-  return latest;
-}
 function activeStoryboardImageJobs(sessionId) {
-  return [...latestCards(sessionId).values()].filter((card) => card.kind === "storyboard_image" && card.status === "generating");
+  return latestCardsByKind(sessionId, "storyboard_image").filter((card) => card.status === "generating");
 }
 function finishStoryboardImageJob(sessionId, errorMessage = null) {
   const hasOtherJobs = activeStoryboardImageJobs(sessionId).length > 0;
@@ -24,8 +15,10 @@ function finishStoryboardImageJob(sessionId, errorMessage = null) {
     .run(hasOtherJobs ? "working" : "storyboard_review", errorMessage, now(), sessionId);
 }
 function append(sessionId, content, messageCards) {
-  db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,created_at) VALUES (?,'assistant',?,?,?)")
+  const result = db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,created_at) VALUES (?,'assistant',?,?,?)")
     .run(sessionId, content, JSON.stringify(messageCards), now());
+  const messageId = Number(result.lastInsertRowid);
+  return messageCards.map((card) => insertCardVersion(sessionId, messageId, card));
 }
 function walk(value) {
   if (Array.isArray(value)) return value.flatMap(walk);
@@ -96,22 +89,17 @@ export function extractReferenceUrl(value) {
 function historicalCharacterReferenceUrls(sessionId) {
   const confirmation = db.prepare("SELECT content FROM creative_messages WHERE session_id=? AND role='user' AND content LIKE '确认人物身份参考：%' ORDER BY id DESC LIMIT 1").get(sessionId);
   const ids = String(confirmation?.content || "").replace(/^确认人物身份参考：/, "").split(/[、,，\s]+/).filter(Boolean);
-  if (!ids.length) return [];
-  const latest = latestCards(sessionId);
-  return ids.map((id) => extractReferenceUrl(latest.get(id)?.previewUrl)).filter(Boolean);
+  return ids.map((id) => extractReferenceUrl(latestCard(sessionId, id)?.previewUrl)).filter(Boolean);
 }
 
-function referenceUrls(sessionId, session) {
-  const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
-  const group = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "reference_panel" && item.status === "confirmed");
-  const finalCard = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "final_card" && item.status === "confirmed");
+function referenceUrls(sessionId) {
+  const group = latestConfirmedCard(sessionId, "reference_panel");
+  const finalCard = latestConfirmedCard(sessionId, "final_card");
   let characterReferences = (group?.characterReferenceUrls || []).map(extractReferenceUrl).filter(Boolean);
   if (!characterReferences.length) characterReferences = historicalCharacterReferenceUrls(sessionId);
   if (!characterReferences.length) characterReferences = (group?.details || []).map((item) => extractReferenceUrl(item.content)).filter(Boolean);
   if (group && characterReferences.length && !group.characterReferenceUrls?.length) {
-    group.characterReferenceUrls = characterReferences;
-    db.prepare("UPDATE creative_sessions SET workspace_json=?,updated_at=? WHERE id=?").run(JSON.stringify(workspace), now(), sessionId);
-    session.workspace_json = JSON.stringify(workspace);
+    updateCardStatus(sessionId, group.id, group.version, { characterReferenceUrls: characterReferences });
   }
   const finalCardReferences = (finalCard?.details || []).map((item) => extractReferenceUrl(item.content)).filter(Boolean);
   return [...new Set([...characterReferences, ...finalCardReferences])];
@@ -121,11 +109,11 @@ export function startStoryboardImageGeneration(sessionId, storyboardId) {
   const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
   if (!session) throw new Error("创意工作台不存在");
   if (session.stage === "working") throw new Error("当前仍有任务正在处理");
-  const storyboard = cards(sessionId).find((item) => item.id === storyboardId && item.kind === "storyboard");
-  if (!storyboard) throw new Error("找不到这套剧情与分镜");
+  const storyboard = latestCard(sessionId, storyboardId);
+  if (!storyboard || storyboard.kind !== "storyboard") throw new Error("找不到这套剧情与分镜");
   const shots = shotDetails(storyboard);
   if (!shots.length) throw new Error("这套分镜没有可生成的镜头内容");
-  const refs = referenceUrls(sessionId, session);
+  const refs = referenceUrls(sessionId);
   if (!refs.length) throw new Error("已确认人物参考图组为空");
   const timestamp = now();
   const placeholders = shots.map((shot, index) => ({
@@ -144,7 +132,7 @@ export function startStoryboardImageRegeneration(sessionId, cardId, feedback, ed
   if (!session) throw new Error("创意工作台不存在");
   const activeJobs = activeStoryboardImageJobs(sessionId);
   if (session.stage === "working" && !activeJobs.length) throw new Error("当前仍有其他任务正在处理");
-  const card = latestCards(sessionId).get(cardId);
+  const card = latestCard(sessionId, cardId);
   if (!card) throw new Error("找不到这张分镜图");
   if (card.kind !== "storyboard_image") throw new Error("这不是分镜图片卡片");
   if (card.status === "generating") throw new Error("这张分镜图已经在生成中");
@@ -155,16 +143,13 @@ export function startStoryboardImageRegeneration(sessionId, cardId, feedback, ed
   db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, `修改分镜图 ${cardId}：${instruction}`, timestamp);
   append(sessionId, "收到，我会以当前分镜图为基础只修改这一个镜头。", [{ ...card, previewUrl: "", status: "generating" }]);
   db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, sessionId);
-  regenerateOne(sessionId, card, instruction, referenceUrls(sessionId, session), edit);
+  regenerateOne(sessionId, card, instruction, referenceUrls(sessionId), edit);
 }
 
 export function startStoryboardImageRegenerationByNumber(sessionId, shotNumber, feedback) {
   const targetNumber = Number(shotNumber);
   if (!Number.isInteger(targetNumber) || targetNumber < 1) throw new Error("分镜编号无效");
-  const latestById = new Map();
-  for (const card of cards(sessionId)) if (card?.id && !latestById.has(card.id)) latestById.set(card.id, card);
-  const card = [...latestById.values()].find((item) => {
-    if (item.kind !== "storyboard_image") return false;
+  const card = latestCardsByKind(sessionId, "storyboard_image").find((item) => {
     const titleNumber = String(item.title || "").match(/^分镜\s*0*(\d+)/)?.[1];
     const idNumber = String(item.id || "").match(/-image-(\d+)$/)?.[1];
     return Number(titleNumber || idNumber) === targetNumber;
@@ -176,27 +161,29 @@ export function startStoryboardImageRegenerationByNumber(sessionId, shotNumber, 
 export function approveStoryboardImages(sessionId, cardIds) {
   const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
   if (!session) throw new Error("创意工作台不存在");
-  const latest = new Map();
-  cards(sessionId).forEach((card) => { if (!latest.has(card.id)) latest.set(card.id, card); });
+  const latest = new Map(latestCardsByKind(sessionId, "storyboard_image").map((card) => [card.id, card]));
   const selected = [...new Set((cardIds || []).map(String))].map((id) => latest.get(id)).filter((card) => card?.kind === "storyboard_image" && card.previewUrl);
   if (!selected.length || selected.length !== new Set(cardIds || []).size) throw new Error("部分分镜图尚未生成完成");
   if (selected.length > productionProfile.max_shots_per_final) throw new Error(`当前最多允许确认 ${productionProfile.max_shots_per_final} 镜，但所选方案包含 ${selected.length} 镜。请返回分镜方案并精简后再继续`);
   const storyboardId = selected[0].details?.find((item) => item.label === "所属方案")?.content;
   if (!storyboardId || selected.some((card) => card.details?.find((item) => item.label === "所属方案")?.content !== storyboardId)) throw new Error("请选择同一套方案的分镜图");
+  const storyboard = latestCard(sessionId, storyboardId);
+  if (!storyboard || storyboard.kind !== "storyboard") throw new Error("找不到对应的文字分镜方案");
   const timestamp = now();
   const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
-  workspace.confirmedCards ||= [];
-  workspace.confirmedCards.push({
-    id: `confirmed-${storyboardId}-images-${Date.now()}`, kind: "storyboard", title: `已确认分镜图｜${storyboardId}`,
-    summary: `已确认 ${selected.length} 张逐镜草案图，供视频生成和 ImaRouter 单图生视频使用。`,
-    details: selected.flatMap((card) => [
-      { label: card.title, content: card.previewUrl },
-      { label: `${card.title}｜文字描述`, content: card.details?.find((item) => item.label === "镜头内容")?.content || card.summary || "" },
-    ]), status: "confirmed", confirmedAt: timestamp,
-  });
   workspace.productionPlan = { ...(workspace.productionPlan || {}), videoPromptStatus: "waiting_for_final_card", finalCardStatus: "ready_to_generate" };
   db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, `统一确认 ${storyboardId} 的逐镜分镜图`, timestamp);
-  db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)").run(sessionId, "分镜图组已经确认。现在根据末镜和已确认落版方向准备真实落版图生成稿。", timestamp);
+  append(sessionId, "分镜图组已经确认。现在根据末镜和已确认落版方向准备真实落版图生成稿。", [{
+    ...storyboard, status: "confirmed", confirmedAt: timestamp,
+    summary: `已确认 ${selected.length} 张逐镜草案图，供视频生成和 ImaRouter 单图生视频使用。`,
+    details: [
+      ...(storyboard.details || []),
+      ...selected.flatMap((card) => [
+        { label: card.title, content: card.previewUrl },
+        { label: `${card.title}｜文字描述`, content: card.details?.find((item) => item.label === "镜头内容")?.content || card.summary || "" },
+      ]),
+    ],
+  }]);
   db.prepare("UPDATE creative_sessions SET stage='working',workspace_json=?,error_message=NULL,updated_at=? WHERE id=?").run(JSON.stringify(workspace), timestamp, sessionId);
   import("./image-generator.js").then(({ prepareFinalCardGeneration }) => prepareFinalCardGeneration(sessionId, selected));
 }
@@ -205,16 +192,15 @@ export function retryFailedStoryboardImages(sessionId, cardIds) {
   const session = db.prepare("SELECT * FROM creative_sessions WHERE id=?").get(sessionId);
   if (!session) throw new Error("创意工作台不存在");
   if (session.stage === "working") throw new Error("当前仍有任务正在处理");
-  const latest = new Map();
-  cards(sessionId).forEach((card) => { if (!latest.has(card.id)) latest.set(card.id, card); });
+  const latest = new Map(latestCardsByKind(sessionId, "storyboard_image").map((card) => [card.id, card]));
   const failedCards = [...new Set((cardIds || []).map(String))].map((id) => latest.get(id))
     .filter((card) => card?.kind === "storyboard_image" && !card.previewUrl);
   if (!failedCards.length) throw new Error("当前没有需要重试的分镜图");
   const storyboardId = failedCards[0].details?.find((item) => item.label === "所属方案")?.content;
-  const storyboard = latest.get(storyboardId);
+  const storyboard = latestCard(sessionId, storyboardId);
   if (!storyboard || storyboard.kind !== "storyboard") throw new Error("找不到失败分镜所属的文字分镜方案");
   if (failedCards.some((card) => card.details?.find((item) => item.label === "所属方案")?.content !== storyboardId)) throw new Error("失败分镜不属于同一套方案");
-  const refs = referenceUrls(sessionId, session);
+  const refs = referenceUrls(sessionId);
   if (!refs.length) throw new Error("已确认人物参考图组为空");
   const timestamp = now();
   const placeholders = failedCards.map((card) => ({ ...card, previewUrl: "", status: "generating", details: (card.details || []).filter((item) => item.label !== "失败原因") }));

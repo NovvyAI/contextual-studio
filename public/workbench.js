@@ -580,7 +580,13 @@ function cardDisplayTitle(card) {
   return String(card.title || "视听语言 Bible V1").replace(/^视听方向(?:\s*V?1)?/i, "视听语言 Bible V1");
 }
 
-function legacyConfirmedCards(workspace) {
+function legacyConfirmedCards(session, workspace) {
+  // `session.cards` (from creative_cards, the current source of truth) replaces
+  // workspace.confirmedCards going forward. workspace.confirmedCards only still has
+  // data for a session whose workspace_json hasn't been touched by a turn since this
+  // migration shipped; the concept-only synthesis below covers even older sessions.
+  const structuredConfirmed = (session.cards || []).filter((card) => card.status === "confirmed");
+  if (structuredConfirmed.length) return structuredConfirmed;
   if (workspace.confirmedCards?.length || !workspace.selectedConceptIds?.length) return workspace.confirmedCards || [];
   return workspace.concepts
     .filter((concept) => workspace.selectedConceptIds.includes(concept.id))
@@ -1437,7 +1443,7 @@ function renderCanvas(session) {
     return;
   }
 
-  const confirmedCards = legacyConfirmedCards(workspace);
+  const confirmedCards = legacyConfirmedCards(session, workspace);
   const characterCandidates = latestCharacterCandidates(session.messages);
   const hasConfirmedReferenceGroup = confirmedCards.some((card) => card.kind === "reference_panel" && card.status === "confirmed");
   const presentation = currentStagePresentation(session, workspace);
