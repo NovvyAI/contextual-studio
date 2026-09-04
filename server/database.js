@@ -407,15 +407,20 @@ export function supersedeCards(sessionId, cardIds) {
   for (const cardId of cardIds) stmt.run(timestamp, sessionId, cardId, sessionId, cardId);
 }
 
-// One-time backfill: replay every historical creative_messages.cards_json entry (oldest message
-// first, per session) into creative_cards, so pre-migration sessions end up with exactly the same
-// "latest version per card_id" result the old full-history-scan logic used to compute. Runs once —
-// if the table is already populated (by this backfill or by normal new-code writes), it's a no-op.
+// Backfill: replay every historical creative_messages.cards_json entry (oldest message first,
+// per session) into creative_cards, so pre-migration sessions end up with exactly the same
+// "latest version per card_id" result the old full-history-scan logic used to compute. Guarded
+// per session (not globally) — a session is skipped once it has any creative_cards rows of its
+// own, so this stays correct and idempotent even when sessions created under old, pre-refactor
+// code keep showing up in a database that other sessions have already written new-code rows
+// into (e.g. after switching branches back and forth during testing).
 function backfillCreativeCardsFromMessages() {
-  const already = db.prepare("SELECT COUNT(*) count FROM creative_cards").get().count;
-  if (already > 0) return;
-  const messages = db.prepare("SELECT id,session_id,cards_json FROM creative_messages WHERE cards_json IS NOT NULL ORDER BY session_id ASC,id ASC").all();
-  const sessions = db.prepare("SELECT id,workspace_json FROM creative_sessions ORDER BY id ASC").all();
+  const backfilledSessionIds = new Set(db.prepare("SELECT DISTINCT session_id FROM creative_cards").all().map((row) => row.session_id));
+  const sessions = db.prepare("SELECT id,workspace_json FROM creative_sessions ORDER BY id ASC").all().filter((session) => !backfilledSessionIds.has(session.id));
+  if (!sessions.length) return;
+  const sessionIds = new Set(sessions.map((session) => session.id));
+  const messages = db.prepare("SELECT id,session_id,cards_json FROM creative_messages WHERE cards_json IS NOT NULL ORDER BY session_id ASC,id ASC").all()
+    .filter((message) => sessionIds.has(message.session_id));
   db.exec("BEGIN IMMEDIATE");
   try {
     for (const message of messages) {
