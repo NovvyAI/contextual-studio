@@ -220,8 +220,75 @@ const dramaScreenshotColumns = new Set(db.prepare("PRAGMA table_info(drama_scree
 if (!dramaScreenshotColumns.has("episode_index")) db.exec("ALTER TABLE drama_screenshots ADD COLUMN episode_index INTEGER NOT NULL DEFAULT 1");
 const creativeVideoShotColumns = new Set(db.prepare("PRAGMA table_info(creative_video_shots)").all().map((column) => column.name));
 if (!creativeVideoShotColumns.has("model_key")) db.exec("ALTER TABLE creative_video_shots ADD COLUMN model_key TEXT");
+if (!gameAnalysisColumns.has("external_source_id")) db.exec("ALTER TABLE game_analyses ADD COLUMN external_source_id TEXT");
+const dramaAnalysisColumns = new Set(db.prepare("PRAGMA table_info(drama_analyses)").all().map((column) => column.name));
+if (!dramaAnalysisColumns.has("external_source_id")) db.exec("ALTER TABLE drama_analyses ADD COLUMN external_source_id TEXT");
+db.exec(`
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_drama_analyses_external_source ON drama_analyses(external_source_id) WHERE external_source_id IS NOT NULL;
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_game_analyses_external_source ON game_analyses(external_source_id) WHERE external_source_id IS NOT NULL;
+`);
 
 export const now = () => new Date().toISOString();
+
+// Materializes a "从云端已解析短剧选择" pick into the same drama_analyses table local
+// uploads use, keyed by external_source_id so re-syncing the same remote drama updates
+// the existing row instead of duplicating it. Downstream code (creative-agent context,
+// character reference review, etc.) never needs to know whether a row came from a local
+// upload or a remote sync.
+export function upsertExternalDrama(detail) {
+  const sourceId = String(detail?.sourceId || "").trim();
+  if (!sourceId || !detail?.result) throw new Error("远端短剧分析缺少来源 ID 或结果");
+  const timestamp = now();
+  const existing = db.prepare("SELECT id FROM drama_analyses WHERE external_source_id=?").get(sourceId);
+  if (existing) {
+    db.prepare(`
+      UPDATE drama_analyses
+      SET title=?,status='completed',analysis_json=?,error_message=NULL,updated_at=?
+      WHERE id=?
+    `).run(detail.title || "未命名短剧", JSON.stringify(detail.result), timestamp, existing.id);
+    return db.prepare("SELECT * FROM drama_analyses WHERE id=?").get(existing.id);
+  }
+  const createdAt = detail.createdAt || detail.analyzedAt || timestamp;
+  const inserted = db.prepare(`
+    INSERT INTO drama_analyses
+      (title,original_name,video_path,mime_type,file_size,status,analysis_json,error_message,created_at,updated_at,external_source_id)
+    VALUES (?,?,?,'',0,'completed',?,NULL,?,?,?)
+  `).run(detail.title || "未命名短剧", `remote:${sourceId}`, "", JSON.stringify(detail.result), createdAt, timestamp, sourceId);
+  return db.prepare("SELECT * FROM drama_analyses WHERE id=?").get(Number(inserted.lastInsertRowid));
+}
+
+// Same idea as upsertExternalDrama, for "从云端已解析 App 选择".
+export function upsertExternalProduct(detail) {
+  const sourceId = String(detail?.sourceId || "").trim();
+  if (!sourceId || !detail?.result) throw new Error("远端 App 分析缺少来源 ID 或结果");
+  const timestamp = now();
+  const storeUrl = detail.storeUrl || `novvy-product:${sourceId}`;
+  const platform = detail.platform === "Android" ? "google_play" : detail.platform === "iOS" ? "apple_app_store" : String(detail.platform || "unknown");
+  const source = {
+    productId: sourceId,
+    productName: detail.productName || detail.title || "未命名 App",
+    category: detail.category || "",
+    os: detail.platform || "",
+    iconUrl: detail.iconUrl || "",
+    landingUrl: detail.storeUrl || "",
+  };
+  const existing = db.prepare("SELECT id FROM game_analyses WHERE external_source_id=?").get(sourceId);
+  if (existing) {
+    db.prepare(`
+      UPDATE game_analyses
+      SET title=?,store_url=?,platform=?,status='completed',analysis_json=?,source_json=?,error_message=NULL,updated_at=?
+      WHERE id=?
+    `).run(source.productName, storeUrl, platform, JSON.stringify(detail.result), JSON.stringify(source), timestamp, existing.id);
+    return db.prepare("SELECT * FROM game_analyses WHERE id=?").get(existing.id);
+  }
+  const createdAt = detail.createdAt || detail.analyzedAt || timestamp;
+  const inserted = db.prepare(`
+    INSERT INTO game_analyses
+      (title,store_url,platform,status,analysis_json,error_message,codex_thread_id,created_at,updated_at,source_json,external_source_id)
+    VALUES (?,?,?,'completed',?,NULL,NULL,?,?,?,?)
+  `).run(source.productName, storeUrl, platform, JSON.stringify(detail.result), createdAt, timestamp, JSON.stringify(source), sourceId);
+  return db.prepare("SELECT * FROM game_analyses WHERE id=?").get(Number(inserted.lastInsertRowid));
+}
 
 function migrateLegacyDramaAnalyses() {
   const rows = db.prepare("SELECT id,analysis_json FROM drama_analyses WHERE status='completed' AND analysis_json IS NOT NULL").all();
@@ -408,7 +475,8 @@ export function serializeAnalysis(row) {
     errorMessage: row.error_message,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    videoUrl: `/api/dramas/${row.id}/video`,
+    videoUrl: row.video_path && fs.existsSync(row.video_path) ? `/api/dramas/${row.id}/video` : "",
+    sourceId: row.external_source_id || "",
     inputType: episodes.length > 1 ? "series_folder" : "single_video",
     episodes: episodes.map((item) => ({ id: item.id, episodeIndex: item.episode_index, originalName: item.original_name, mimeType: item.mime_type, fileSize: item.file_size, durationSeconds: item.duration_seconds, width: item.width, height: item.height, videoUrl: `/api/dramas/${row.id}/episodes/${item.episode_index}/video` })),
     screenshots: screenshots.map((item) => ({
@@ -448,6 +516,7 @@ export function serializeGameAnalysis(row) {
     errorMessage: row.error_message,
     codexThreadId: row.codex_thread_id,
     source: row.source_json ? JSON.parse(row.source_json) : null,
+    sourceId: row.external_source_id || "",
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -509,7 +578,7 @@ export function creativeScreenshotAssets(sessionId) {
   for (const [key, candidate] of Object.entries(sourceCandidates)) {
     if (candidate?.screenshotId) roleByScreenshotId.set(Number(candidate.screenshotId), roleLabels[key] || candidate.character || "人物参考");
   }
-  return db.prepare("SELECT id,episode_index,timestamp_seconds,width,height FROM drama_screenshots WHERE analysis_id=? ORDER BY episode_index,timestamp_seconds,id").all(session.drama_id)
+  const localShots = db.prepare("SELECT id,episode_index,timestamp_seconds,width,height FROM drama_screenshots WHERE analysis_id=? ORDER BY episode_index,timestamp_seconds,id").all(session.drama_id)
     .map((shot, index) => ({
       number: index + 1,
       reference: `截图 ${String(index + 1).padStart(2, "0")}`,
@@ -519,6 +588,22 @@ export function creativeScreenshotAssets(sessionId) {
       url: `/api/screenshots/${shot.id}`,
       screenshotId: shot.id,
       timestampSeconds: shot.timestamp_seconds,
+      version: 1,
+    }));
+  if (localShots.length) return localShots;
+  // 云端已解析短剧没有本地原视频，没有 drama_screenshots 行；退回远端提供的整集拼图（sourceMedia 里的
+  // episode_sheet 项），保证"视频截图区"仍有内容可看、可引用。
+  return (Array.isArray(analysis.sourceMedia) ? analysis.sourceMedia : [])
+    .filter((item) => item?.kind === "episode_sheet" && item.url)
+    .map((item, index) => ({
+      number: index + 1,
+      reference: `截图 ${String(index + 1).padStart(2, "0")}`,
+      kind: "video_screenshot",
+      title: item.title || `拼图 ${index + 1}`,
+      description: `远端整剧分析提供的剧集拼图（无精确时间码）。`,
+      url: item.url,
+      screenshotId: item.key,
+      timestampSeconds: 0,
       version: 1,
     }));
 }
@@ -532,8 +617,18 @@ export function creativeCharacterReferenceAssets(sessionId) {
   const episodes = Array.isArray(analysis.episodeAnalyses) ? analysis.episodeAnalyses : [];
   const viewOrder = ["front", "three_quarter_left", "three_quarter_right", "left_profile", "right_profile"];
   const viewLabels = { front: "正面", three_quarter_left: "左侧 3/4", three_quarter_right: "右侧 3/4", left_profile: "左侧面", right_profile: "右侧面" };
-  const selected = [];
+  // 同一个角色可能在多集的 characterLibrary 里重复出现（本地多集分析里是同一角色的不同镜头，
+  // 云端整剧分析里则是完全相同的一份数据被复制到每一集）；按 characterId 合并后再挑每个视角最好
+  // 的一张，避免角色卡片按集数重复。
+  const charactersById = new Map();
   for (const character of episodes.flatMap((item) => item?.characterLibrary?.characters || [])) {
+    const id = character.characterId || character.displayName;
+    const existing = charactersById.get(id);
+    if (existing) existing.candidates = [...(existing.candidates || []), ...(character.candidates || [])];
+    else charactersById.set(id, { ...character, candidates: [...(character.candidates || [])] });
+  }
+  const selected = [];
+  for (const character of charactersById.values()) {
     const bestByView = new Map();
     for (const candidate of character.candidates || []) {
       const current = bestByView.get(candidate.view);
@@ -541,7 +636,7 @@ export function creativeCharacterReferenceAssets(sessionId) {
     }
     for (const view of viewOrder) {
       const candidate = bestByView.get(view);
-      if (!candidate?.screenshotId) continue;
+      if (candidate?.screenshotId == null && !candidate?.url) continue;
       selected.push({ character, candidate, view });
     }
   }

@@ -425,6 +425,129 @@ novvyProductButton.addEventListener("click", async () => {
   finally { novvyProductButton.disabled = false; }
 });
 
+// "从云端已解析短剧/App 选择"——AI Analysis API 目录浏览，跟上面的 Novvy 产品库入口是
+// 并列的第三个来源：Novvy 产品库选完还要现分析，这里选的已经是"完成态"，选中后直接
+// 同步成本地 drama_analyses/game_analyses 记录并回填下拉框，不需要轮询等待。
+const remoteDramaButton = document.querySelector("#remote-drama-button");
+const remoteDramaCatalog = document.querySelector("#remote-drama-catalog");
+const remoteGameButton = document.querySelector("#remote-game-button");
+const remoteGameCatalog = document.querySelector("#remote-game-catalog");
+let remoteDramas = [];
+const remoteGameFilters = { os: "", category: "" };
+
+function renderRemoteDramaCatalog(items, query = "") {
+  remoteDramaCatalog.replaceChildren();
+  const head = element("div", "product-catalog-head");
+  head.append(element("strong", "", "云端已解析短剧"), element("span", "", `${items.length} 部可选`));
+  const search = element("input", "catalog-search"); search.type = "search"; search.placeholder = "搜索剧名"; search.value = query;
+  search.addEventListener("input", () => renderRemoteDramaCatalog(remoteDramas, search.value));
+  const grid = element("div", "product-catalog-grid");
+  const filtered = query.trim() ? items.filter((item) => item.title.toLowerCase().includes(query.trim().toLowerCase())) : items;
+  filtered.forEach((drama) => {
+    const card = element("article", "product-catalog-card");
+    if (drama.coverImageUrl) { const icon = element("img"); icon.src = drama.coverImageUrl; icon.alt = ""; card.append(icon); }
+    else card.append(element("div", "product-icon-placeholder"));
+    const copy = element("div", "product-catalog-copy");
+    copy.append(element("strong", "", drama.title), element("small", "", `${drama.episodeCount} 集 · ${drama.aiStatus}`), element("span", "", drama.analyzedAt ? new Date(drama.analyzedAt).toLocaleString("zh-CN") : ""));
+    const choose = element("button", "", "选择"); choose.type = "button";
+    choose.addEventListener("click", async () => {
+      choose.disabled = true; choose.textContent = "正在同步…";
+      creativeEntryMessage.textContent = `正在同步“${drama.title}”…`;
+      try {
+        const synced = await api(`/api/remote-analyses/dramas/${drama.sourceId}/sync`, { method: "POST" });
+        await loadCreativeHome();
+        document.querySelector("#creative-drama-select").value = String(synced.id);
+        remoteDramaCatalog.classList.add("hidden");
+        creativeEntryMessage.textContent = `“${drama.title}”已经同步并选入工作台。`;
+      } catch (error) {
+        creativeEntryMessage.textContent = error.message;
+        choose.disabled = false; choose.textContent = "选择";
+      }
+    });
+    card.append(copy, choose); grid.append(card);
+  });
+  if (!filtered.length) grid.append(element("p", "muted", "没有匹配的短剧解析。"));
+  remoteDramaCatalog.append(head, search, grid);
+}
+
+remoteDramaButton.addEventListener("click", async () => {
+  if (!remoteDramaCatalog.classList.contains("hidden")) { remoteDramaCatalog.classList.add("hidden"); return; }
+  remoteDramaButton.disabled = true;
+  creativeEntryMessage.textContent = "正在读取云端短剧目录…";
+  try {
+    const result = await api("/api/remote-analyses/dramas");
+    remoteDramas = result.items || [];
+    renderRemoteDramaCatalog(remoteDramas);
+    remoteDramaCatalog.classList.remove("hidden");
+    creativeEntryMessage.textContent = `共 ${result.analyzedCount ?? remoteDramas.length} 部已解析短剧，选择后会自动同步到本地并选中。`;
+  } catch (error) { creativeEntryMessage.textContent = error.message; }
+  finally { remoteDramaButton.disabled = false; }
+});
+
+const remoteGameCategories = ["", "Games", "Action", "Adventure", "Arcade", "Board", "Card", "Casino", "Casual", "Family", "Music", "Puzzle", "Racing", "Role Playing", "Simulation", "Sports", "Strategy", "Trivia", "Word"];
+
+function renderRemoteGameCatalog(items) {
+  remoteGameCatalog.replaceChildren();
+  const head = element("div", "product-catalog-head");
+  head.append(element("strong", "", "云端已解析 App"), element("span", "", `${items.length} 个可选`));
+  const controls = element("div", "remote-filter-controls");
+  const osSelect = document.createElement("select");
+  osSelect.append(new Option("全部平台", ""), new Option("iOS", "iOS"), new Option("Android", "Android"));
+  osSelect.value = remoteGameFilters.os;
+  osSelect.addEventListener("change", () => { remoteGameFilters.os = osSelect.value; loadRemoteGames(); });
+  const categorySelect = document.createElement("select");
+  remoteGameCategories.forEach((value) => categorySelect.append(new Option(value || "全部品类", value)));
+  categorySelect.value = remoteGameFilters.category;
+  categorySelect.addEventListener("change", () => { remoteGameFilters.category = categorySelect.value; loadRemoteGames(); });
+  controls.append(osSelect, categorySelect);
+  const grid = element("div", "product-catalog-grid");
+  items.forEach((product) => {
+    const card = element("article", "product-catalog-card");
+    if (product.iconUrl) { const icon = element("img"); icon.src = product.iconUrl; icon.alt = ""; card.append(icon); }
+    else card.append(element("div", "product-icon-placeholder"));
+    const copy = element("div", "product-catalog-copy");
+    copy.append(element("strong", "", product.title), element("small", "", [product.platform, product.category].filter(Boolean).join(" · ") || "平台未知"), element("span", "", product.analyzedAt ? new Date(product.analyzedAt).toLocaleString("zh-CN") : ""));
+    const choose = element("button", "", "选择"); choose.type = "button";
+    choose.addEventListener("click", async () => {
+      choose.disabled = true; choose.textContent = "正在同步…";
+      creativeEntryMessage.textContent = `正在同步“${product.title}”…`;
+      try {
+        const synced = await api(`/api/remote-analyses/products/${product.sourceId}/sync`, { method: "POST" });
+        await loadCreativeHome();
+        document.querySelector("#creative-game-select").value = String(synced.id);
+        remoteGameCatalog.classList.add("hidden");
+        creativeEntryMessage.textContent = `“${product.title}”已经同步并选入工作台。`;
+      } catch (error) {
+        creativeEntryMessage.textContent = error.message;
+        choose.disabled = false; choose.textContent = "选择";
+      }
+    });
+    card.append(copy, choose); grid.append(card);
+  });
+  if (!items.length) grid.append(element("p", "muted", "没有匹配的 App 解析。"));
+  remoteGameCatalog.append(head, controls, grid);
+}
+
+async function loadRemoteGames() {
+  creativeEntryMessage.textContent = "正在读取云端 App 目录…";
+  try {
+    const query = new URLSearchParams();
+    if (remoteGameFilters.os) query.set("os", remoteGameFilters.os);
+    if (remoteGameFilters.category) query.set("category", remoteGameFilters.category);
+    const result = await api(`/api/remote-analyses/products${query.size ? `?${query}` : ""}`);
+    renderRemoteGameCatalog(result.items || []);
+    creativeEntryMessage.textContent = `共 ${result.analyzedCount ?? (result.items || []).length} 个已解析 App，选择后会自动同步到本地并选中。`;
+  } catch (error) { creativeEntryMessage.textContent = error.message; }
+}
+
+remoteGameButton.addEventListener("click", async () => {
+  if (!remoteGameCatalog.classList.contains("hidden")) { remoteGameCatalog.classList.add("hidden"); return; }
+  remoteGameButton.disabled = true;
+  remoteGameCatalog.classList.remove("hidden");
+  await loadRemoteGames();
+  remoteGameButton.disabled = false;
+});
+
 function fillSelect(select, items, placeholder) {
   const current = select.value;
   select.replaceChildren(new Option(placeholder, ""));

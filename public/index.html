@@ -76,11 +76,19 @@
         <div id="creative-entry" class="creative-entry">
           <div class="entry-copy"><small>CREATIVE VIDEO WORKBENCH</small><h2>先连接一条短剧和一个游戏</h2><p>工作台会继承两边已经确认的分析结果，建立独立的创意会话与画布。</p></div>
           <form id="creative-create-form" class="source-picker">
-            <label><span>已完成的短剧</span><select id="creative-drama-select" required><option value="">请选择短剧</option></select></label>
+            <div class="picker-column">
+              <label><span>已完成的短剧</span><select id="creative-drama-select" required><option value="">请选择短剧</option></select></label>
+              <button id="remote-drama-button" class="catalog-trigger" type="button">从云端已解析短剧选择</button>
+              <div id="remote-drama-catalog" class="product-catalog hidden" aria-live="polite"></div>
+            </div>
             <div class="connector">×</div>
-            <label><span>已完成的游戏</span><select id="creative-game-select" required><option value="">请选择游戏</option></select></label>
-            <button id="novvy-product-button" class="catalog-trigger" type="button">从 Novvy 产品库选择其他游戏</button>
-            <div id="novvy-product-catalog" class="product-catalog hidden" aria-live="polite"></div>
+            <div class="picker-column">
+              <label><span>已完成的游戏</span><select id="creative-game-select" required><option value="">请选择游戏</option></select></label>
+              <button id="novvy-product-button" class="catalog-trigger" type="button">从 Novvy 产品库选择其他游戏</button>
+              <div id="novvy-product-catalog" class="product-catalog hidden" aria-live="polite"></div>
+              <button id="remote-game-button" class="catalog-trigger" type="button">从云端已解析 App 选择</button>
+              <div id="remote-game-catalog" class="product-catalog hidden" aria-live="polite"></div>
+            </div>
             <button id="creative-create-button" class="primary" type="submit"><span>进入创意工作台</span><b>→</b></button>
             <p id="creative-entry-message" class="form-message"></p>
           </form>
