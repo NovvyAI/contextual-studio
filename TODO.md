@@ -41,16 +41,17 @@
 - [x] `serializeCreativeSession()` 新增 `cards` 字段（来自 `liveCardsForSession()`）；前端 `legacyConfirmedCards()` 改为优先读这个新字段，`workspace.confirmedCards` 降级为只给尚未跑过新代码的旧 session 兜底。
 - [x] 新增 `server/creative-cards.test.js`，覆盖全部新增函数，以及一个专门验证"回放结果等于旧扫描逻辑结果"的用例。
 
+- [x] 给 `resumeThread` 失败增加最小兜底：`server/creative-agent.js` 的 `runCreativeTurn` 现在只在“本来要恢复一个已有 thread”且失败文案像是“会话/线程找不到”（`isMissingThreadError()`，按文案关键字做最佳努力匹配，宁可漏判也不误伤超时/schema 校验等真实错误）时才降级——用 `startThread()` 开一条全新 thread，把 `sourceContext()`、当前 `workspace_json`、`confirmedCardsSummary()` 和最近 12 条聊天记录（`recentMessagesDigest()`）重新贴进去悄悄重建上下文，不告诉用户“线程丢失”。之后的 repair 子调用和最终 `codex_thread_id` 落库都会自动使用降级后的新 thread。新增 `server/creative-agent.test.js` 覆盖 `isMissingThreadError`/`recentMessagesDigest`。
+
 后续实施事项（未完成）：
 
-- [ ] 给 `resumeThread` 失败增加最小兜底：退化成 `startThread()` 并用当前 `workspace_json`/`creative_cards`/历史消息重建上下文，而不是直接把 session 判死。
 - [ ] 非首轮 `sourceContext()` 也统一改用 `dramaAnalysisView()`/`initialDramaContext()` 的精简投影，而不是每轮重贴完整 `drama.analysis_json`。
 - [ ] `creative_messages.cards_json` 目前仍在双写（作为迁移期间的安全网，`creativeAssets()`/`creativeCharacterReferenceAssets()` 这两个"永久编号目录"型函数仍然依赖它，语义上不是"取最新"而是"每个曾经出现过的不同 URL 永久占一个编号"，没有直接挪到新表）；等确认新表路径稳定运行一段时间后，可以评估要不要把这两个函数也改造成查 `creative_cards` 全部历史版本、彻底停止写 `cards_json`。
 - [ ] 前端 `renderMessages()`/`describeWorkingTask()`/`inferCreativeStage()`/`currentStagePresentation()` 里仍保留的扫描式推导（`latestMutableCardMessageIds`、"猜测正在生成什么"的关键词兜底等）目前靠 `cards_json` 双写继续正常工作；新表已经能提供这些信息的权威答案，值得后续单独排期把这部分也切过去、删掉扫描/猜测代码。
 - [ ] 评估把 `runCreativeTurn` 按阶段拆成独立的一次性 Codex 调用（不再共用一条 thread），每阶段可以独立选模型/供应商，且互不阻塞排队——状态层已经理顺，这条的技术前提已经具备，但本轮判断优先级低于状态层本身，特意没有一起做。
 - [ ] 参考 `contextual-ad-agent` 的 `evaluationAgent` 设计取舍（通用 `dimensions:{name,score}[]`，评分维度交给 skill markdown 而不是硬编码 schema），评估创意质量检查是否也要抽象成类似的可复用评审。
 
-验收标准：单个 Codex 会话丢失不再导致整个工作台永久失败（仍待实现）；同一张卡片的状态在任意时刻只有一个权威记录，不再需要扫描历史猜"最新版本"（已实现）；非首轮请求的输入体积不再随轮次线性重复贴大 JSON（仍待实现）；改动过程中旧工作台数据可以正常读取和继续使用（已用 22 号工作台验证）。
+验收标准：单个 Codex 会话丢失不再导致整个工作台永久失败（已实现，最小兜底：降级新 thread + 重建上下文，未覆盖“新 thread 也失败”之外的场景）；同一张卡片的状态在任意时刻只有一个权威记录，不再需要扫描历史猜"最新版本"（已实现）；非首轮请求的输入体积不再随轮次线性重复贴大 JSON（仍待实现）；改动过程中旧工作台数据可以正常读取和继续使用（已用 22 号工作台验证）。
 
 ## GCP 上云与媒体存储
 
