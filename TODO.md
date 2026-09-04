@@ -45,13 +45,13 @@
 
 后续实施事项（未完成）：
 
-- [ ] 非首轮 `sourceContext()` 也统一改用 `dramaAnalysisView()`/`initialDramaContext()` 的精简投影，而不是每轮重贴完整 `drama.analysis_json`。
+- [x] 非首轮 `sourceContext()` 统一改用 `initialDramaContext()`/`initialGameContext()` 的精简投影，不再区分 `compact` 参数。核对过 `dramaAnalysisView()` 丢弃的两块字段（`plotSignals`、`audienceAndMarketSignals`）只在 `server/analyzer.js` 的分析阶段 schema 里出现，创意工作台侧从未按字段名引用；系统提示词第 24 条本来就要求"短剧详细分析的唯一事实源是 `episodeAnalyses[].detailedAnalysis`，不要寻找或要求根级重复副本"，这两块正是被取代的早期粗判副本。用 65 号短剧（5 集，云端同步）实测：完整 `analysis_json` 118014 字符，精简投影 59071 字符，降了约 50%；游戏分析本来就小，降幅可以忽略。
 - [ ] `creative_messages.cards_json` 目前仍在双写（作为迁移期间的安全网，`creativeAssets()`/`creativeCharacterReferenceAssets()` 这两个"永久编号目录"型函数仍然依赖它，语义上不是"取最新"而是"每个曾经出现过的不同 URL 永久占一个编号"，没有直接挪到新表）；等确认新表路径稳定运行一段时间后，可以评估要不要把这两个函数也改造成查 `creative_cards` 全部历史版本、彻底停止写 `cards_json`。
 - [ ] 前端 `renderMessages()`/`describeWorkingTask()`/`inferCreativeStage()`/`currentStagePresentation()` 里仍保留的扫描式推导（`latestMutableCardMessageIds`、"猜测正在生成什么"的关键词兜底等）目前靠 `cards_json` 双写继续正常工作；新表已经能提供这些信息的权威答案，值得后续单独排期把这部分也切过去、删掉扫描/猜测代码。
 - [ ] 评估把 `runCreativeTurn` 按阶段拆成独立的一次性 Codex 调用（不再共用一条 thread），每阶段可以独立选模型/供应商，且互不阻塞排队——状态层已经理顺，这条的技术前提已经具备，但本轮判断优先级低于状态层本身，特意没有一起做。
 - [ ] 参考 `contextual-ad-agent` 的 `evaluationAgent` 设计取舍（通用 `dimensions:{name,score}[]`，评分维度交给 skill markdown 而不是硬编码 schema），评估创意质量检查是否也要抽象成类似的可复用评审。
 
-验收标准：单个 Codex 会话丢失不再导致整个工作台永久失败（已实现，最小兜底：降级新 thread + 重建上下文，未覆盖“新 thread 也失败”之外的场景）；同一张卡片的状态在任意时刻只有一个权威记录，不再需要扫描历史猜"最新版本"（已实现）；非首轮请求的输入体积不再随轮次线性重复贴大 JSON（仍待实现）；改动过程中旧工作台数据可以正常读取和继续使用（已用 22 号工作台验证）。
+验收标准：单个 Codex 会话丢失不再导致整个工作台永久失败（已实现，最小兜底：降级新 thread + 重建上下文，未覆盖“新 thread 也失败”之外的场景）；同一张卡片的状态在任意时刻只有一个权威记录，不再需要扫描历史猜"最新版本"（已实现）；非首轮请求的输入体积不再随轮次线性重复贴大 JSON（已实现，65 号短剧实测降约 50%）；改动过程中旧工作台数据可以正常读取和继续使用（已用 22 号工作台验证）。
 
 ## GCP 上云与媒体存储
 
