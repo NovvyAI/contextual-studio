@@ -22,6 +22,29 @@ test("creative plan accepts prompt aliases emitted by compatible producers", () 
   }
 });
 
+test("final plan accepts storyboard-letter shot ids as long as order is sequential", () => {
+  const parsed = parseStoryboardVideoPlan(cardWithPlan({
+    schemaVersion: "contextual.storyboard-video.v1",
+    shots: [
+      { shotId: "B1", order: 1, durationSeconds: 6, promptEn: "Shot one", reviewZh: "镜头一" },
+      { shotId: "B2", order: 2, durationSeconds: 6.5, promptEn: "Shot two", reviewZh: "镜头二" },
+      { shotId: "B3", order: 3, durationSeconds: 5.5, promptEn: "Shot three", reviewZh: "镜头三" },
+    ],
+  }));
+  assert.deepEqual(parsed.shots.map((shot) => shot.shotId), ["shot-01", "shot-02", "shot-03"]);
+  assert.equal(parsed.shots[1].promptEn, "Shot two");
+});
+
+test("final plan still rejects shots that are genuinely out of order", () => {
+  assert.throws(() => parseStoryboardVideoPlan(cardWithPlan({
+    schemaVersion: "contextual.storyboard-video.v1",
+    shots: [
+      { shotId: "B1", order: 2, durationSeconds: 6, promptEn: "Shot one" },
+      { shotId: "B2", order: 1, durationSeconds: 6, promptEn: "Shot two" },
+    ],
+  })), /分镜顺序无效/);
+});
+
 test("detail labels may contain text after the source shot id", () => {
   const parsed = parseStoryboardVideoPlan(cardWithPlan(
     { schemaVersion: "contextual.video-shot-plan.v1", shots: [{ shotId: "shot-C01", durationSeconds: 5 }] },
