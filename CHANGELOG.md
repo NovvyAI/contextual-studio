@@ -4,6 +4,11 @@
 
 ## 未发布
 
+### 修复：`creative-cards.test.js` 会往真实开发数据库写入测试脏数据
+
+- 测试文件直接使用 `server/database.js` 的真实 `DatabaseSync` 连接（没有独立测试库），fixture 短剧/游戏记录之前用 `status='completed'` 写入，会被"创意工作台 · 选择已完成的游戏"等真实查询捞到，显示为标题 `null` 的脏数据；多次跑测试后已经在本机开发库里堆积了 35 条。
+- fixture 状态改成不会被任何真实业务查询命中的 `test_fixture`，并新增 `after()` 清理钩子在测试结束后删除本次创建的全部 session/短剧/游戏记录；已验证测试跑前跑后数据库行数一致。
+
 ### 重构：创意工作台卡片状态改用结构化表存储（`yizhao_decoupling` 分支）
 
 - 新增 `creative_cards` 表（`card_id`/`kind`/`version`/`status`/`preview_url`/`payload_json`/`message_id`），替换掉 8 个后端模块和前端里各自独立实现、写法不完全一致的"扫描全部聊天记录、按 id 建 Map、取最新版本"逻辑；`server/database.js` 新增 `latestCard`/`cardHistory`/`latestCardsByKind`/`latestConfirmedCard`/`liveCardsForSession`/`insertCardVersion`/`updateCardStatus`/`supersedeCards` 作为统一查询/写入入口。

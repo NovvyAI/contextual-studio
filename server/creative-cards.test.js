@@ -1,24 +1,52 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { after } from "node:test";
 import {
   cardHistory, cardVersion, db, insertCardVersion, latestCard, latestCardsByKind,
   latestConfirmedCard, liveCardsForSession, now, supersedeCards, updateCardStatus,
 } from "./database.js";
 
+// These tests exercise real SQL against server/database.js's actual DatabaseSync
+// connection (there is no separate test DB), which is the same file the running
+// dev server reads. `status: "test_fixture"` (never "completed") keeps these rows
+// out of any real query that filters on completed status, and the `after()` hook
+// below deletes every row this file creates so a test run never leaves stray drama/
+// game/session data behind in the shared database — that previously showed up as
+// bogus null-titled entries in the real "选择已完成的游戏" picker.
+const createdSessionIds = [];
+const createdDramaIds = [];
+const createdGameIds = [];
+
 function fixtureSession() {
   const timestamp = now();
   const dramaId = Number(db.prepare("INSERT INTO drama_analyses (title,original_name,video_path,file_size,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?)")
-    .run("test drama", "test.mp4", "/tmp/test.mp4", 0, "completed", timestamp, timestamp).lastInsertRowid);
+    .run("test drama", "test.mp4", "/tmp/test.mp4", 0, "test_fixture", timestamp, timestamp).lastInsertRowid);
   const gameId = Number(db.prepare("INSERT INTO game_analyses (store_url,platform,status,created_at,updated_at) VALUES (?,?,?,?,?)")
-    .run("https://play.google.com/store/apps/details?id=test", "google_play", "completed", timestamp, timestamp).lastInsertRowid);
+    .run("https://play.google.com/store/apps/details?id=test", "google_play", "test_fixture", timestamp, timestamp).lastInsertRowid);
   const sessionId = Number(db.prepare("INSERT INTO creative_sessions (drama_id,game_id,title,stage,created_at,updated_at) VALUES (?,?,?,?,?,?)")
     .run(dramaId, gameId, "test session", "working", timestamp, timestamp).lastInsertRowid);
+  createdDramaIds.push(dramaId);
+  createdGameIds.push(gameId);
+  createdSessionIds.push(sessionId);
   return sessionId;
 }
 
 function fixtureMessage(sessionId) {
   return Number(db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)").run(sessionId, "test", now()).lastInsertRowid);
 }
+
+after(() => {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    // Deleting sessions first cascades away their creative_messages/creative_cards rows.
+    for (const id of createdSessionIds) db.prepare("DELETE FROM creative_sessions WHERE id=?").run(id);
+    for (const id of createdDramaIds) db.prepare("DELETE FROM drama_analyses WHERE id=?").run(id);
+    for (const id of createdGameIds) db.prepare("DELETE FROM game_analyses WHERE id=?").run(id);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+});
 
 test("insertCardVersion assigns sequential versions per card_id and round-trips the payload", () => {
   const sessionId = fixtureSession();
