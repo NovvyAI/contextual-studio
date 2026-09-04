@@ -30,6 +30,30 @@ function richestFinalCard(sessionId, cardId) {
     .sort((left, right) => Number(Boolean(finalCardPrompt(right))) - Number(Boolean(finalCardPrompt(left))) || (right.details?.length || 0) - (left.details?.length || 0))[0];
 }
 
+// The single source of truth for "which direction did the user actually pick" — used
+// to reject a generation request for any other direction candidate id (e.g. a sibling
+// from the original 2-4 proposals that the user never confirmed but whose chat card is
+// still sitting, unremoved, in history).
+function confirmedFinalCardDirectionId(workspace) {
+  const direction = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "final_card" && !item.details?.some((detail) => detail.label === "真实预览"));
+  if (!direction) return "";
+  return String(direction.id).replace(/^confirmed-/, "").replace(/-direction-\d+$/, "");
+}
+
+// The direction candidates proposed alongside `cardId` in the same batch message,
+// excluding `cardId` itself — used to mark the ones the user did not pick as
+// superseded once a choice is confirmed.
+function directionBatchSiblings(sessionId, cardId) {
+  const rows = db.prepare("SELECT cards_json FROM creative_messages WHERE session_id=? AND cards_json IS NOT NULL ORDER BY id").all(sessionId);
+  for (const row of rows) {
+    let cards = [];
+    try { cards = JSON.parse(row.cards_json || "[]"); } catch { continue; }
+    const directionCards = cards.filter((item) => item.kind === "final_card" && !item.previewUrl);
+    if (directionCards.some((item) => item.id === cardId)) return directionCards.filter((item) => item.id !== cardId && item.status !== "superseded");
+  }
+  return [];
+}
+
 function appendCardMessage(sessionId, content, card) {
   db.prepare("INSERT INTO creative_messages (session_id, role, content, cards_json, created_at) VALUES (?, 'assistant', ?, ?, ?)")
     .run(sessionId, content, JSON.stringify([card]), now());
@@ -41,6 +65,8 @@ export function startFinalCardGeneration(sessionId, cardId) {
   if (session.stage === "working") throw new Error("当前仍有任务正在处理");
   const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
   if (workspace.productionPlan?.finalCardStatus !== "ready_to_generate") throw new Error("真实落版图需在末镜分镜图确认后生成");
+  const confirmedDirectionId = confirmedFinalCardDirectionId(workspace);
+  if (!confirmedDirectionId || confirmedDirectionId !== cardId) throw new Error("这张候选卡不是已确认的落版方向，不能生成真实图片");
   const currentCard = allCards(sessionId).find((item) => item.id === cardId && item.kind === "final_card");
   const sourceCard = richestFinalCard(sessionId, cardId);
   if (!currentCard || !sourceCard) throw new Error("找不到这张落版图候选卡");
@@ -169,8 +195,13 @@ export function approveFinalCardDirection(sessionId, cardId) {
   workspace.confirmedCards ||= [];
   workspace.confirmedCards.push({ ...card, id: `confirmed-${card.id}-direction-${Date.now()}`, title: `已确认落版方向｜${card.title}`, status: "confirmed", confirmedAt: timestamp });
   workspace.productionPlan = { ...(workspace.productionPlan || {}), finalCardStatus: "direction_approved", videoPromptStatus: "audiovisual_direction_pending" };
+  const siblings = directionBatchSiblings(sessionId, card.id);
   db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, `确认落版方向 ${card.id}`, timestamp);
   db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)").run(sessionId, "落版方向已确认。现在自动生成视听方向卡；真实落版图会等末镜分镜图确认后再生成。", timestamp);
+  if (siblings.length) {
+    db.prepare("INSERT INTO creative_messages (session_id, role, content, cards_json, created_at) VALUES (?, 'assistant', ?, ?, ?)")
+      .run(sessionId, "其余落版方向候选保留记录，不再推进，也不会生成图片。", JSON.stringify(siblings.map((sibling) => ({ ...sibling, status: "superseded" }))), timestamp);
+  }
   db.prepare("UPDATE creative_sessions SET stage='working',workspace_json=?,error_message=NULL,updated_at=? WHERE id=?").run(JSON.stringify(workspace), timestamp, sessionId);
   recordCreativeFeedback(sessionId, `确认落版方向 ${card.id}`, { decision: "approved", stageOutputId: card.id, key: `session:${sessionId}:final-card-direction:${card.id}:approved` });
   import("./creative-agent.js").then(({ runCreativeTurn }) => runCreativeTurn(sessionId, `已确认落版方向 ${card.id}。现在生成一张 audiovisual-direction-v1 视听方向卡，只总结可执行的视听语言 Bible，不推荐或列举导演；导演由用户在 UI 下拉框选择。进入 audiovisual_review，不生成 storyboard。`, false));
@@ -182,7 +213,7 @@ export function prepareFinalCardGeneration(sessionId, storyboardImages) {
   const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
   const direction = [...(workspace.confirmedCards || [])].reverse().find((item) => item.kind === "final_card" && !item.details?.some((detail) => detail.label === "真实预览"));
   if (!direction) throw new Error("找不到已确认的落版方向");
-  const baseCardId = String(direction.id).replace(/^confirmed-/, "").replace(/-direction-\d+$/, "");
+  const baseCardId = confirmedFinalCardDirectionId(workspace);
   const historicalDirection = richestFinalCard(sessionId, baseCardId);
   const lastShot = [...storyboardImages].sort((a, b) => String(a.id).localeCompare(String(b.id))).at(-1);
   if (!lastShot?.previewUrl) throw new Error("找不到已确认的末镜分镜图");

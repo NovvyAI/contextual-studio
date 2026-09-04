@@ -985,7 +985,10 @@ function renderChatCard(card, disabled) {
       regenerate.disabled = false; regenerate.textContent = "按意见重新生成";
     }
   });
-  const isFinalCardDraft = card.kind === "final_card" && !card.previewUrl;
+  // A superseded final-card draft is an abandoned sibling from the original direction
+  // proposal round (the user picked a different one); it must never present as an
+  // actionable "confirm this direction" step again.
+  const isFinalCardDraft = card.kind === "final_card" && !card.previewUrl && card.status !== "superseded";
   const finalCardStatus = currentSession?.workspace?.productionPlan?.finalCardStatus || "";
   const isFinalCardDirection = isFinalCardDraft && finalCardStatus === "direction_review";
   const isFailedFinalCard = isFinalCardDraft && card.status === "failed";
@@ -1051,10 +1054,16 @@ function renderChatCard(card, disabled) {
     adopt.classList.add("workflow-confirm-action");
     adopt.dataset.workflowStages = actionStages.join(" ");
     adopt.dataset.workflowLabel = adoptLabel;
-    adopt.dataset.workflowPriority = "20";
+    // The backend now marks unpicked sibling directions superseded when one is
+    // confirmed, but sessions from before that fix still have abandoned direction
+    // drafts sitting as live "candidate" cards. Once a real generated image exists it
+    // must always outrank those for "jump to pending step" — otherwise same-priority
+    // ties fall back to DOM order and an old, already-moot direction card wins over
+    // the real next step.
+    adopt.dataset.workflowPriority = isGeneratedFinalCard ? "30" : isFinalCardDraft ? "10" : "20";
   }
   if (card.kind === "character_image" || card.kind === "storyboard_image" || card.kind === "video_shot") adopt.hidden = true;
-  adopt.disabled = disabled || card.status === "selected" || (card.status === "confirmed" && !isVideoPromptDraft) || card.status === "generating" || (card.status === "completed" && !isShotBatchReady && !isFinalVideo);
+  adopt.disabled = disabled || card.status === "selected" || card.status === "superseded" || (card.status === "confirmed" && !isVideoPromptDraft) || card.status === "generating" || (card.status === "completed" && !isShotBatchReady && !isFinalVideo);
   adopt.addEventListener("click", async () => {
     if (card.kind === "audiovisual_direction") {
       adopt.disabled = true; adopt.textContent = "正在确认视听方向…";
