@@ -1,4 +1,4 @@
-import { db, now, resolveAssetReferences, cardHistory, insertCardVersion, latestCard, latestCardsByKind, latestConfirmedCard, supersedeCards } from "./database.js";
+import { db, now, resolveAssetReferences, cardHistory, insertCardVersion, latestCard, latestCardsByKind, latestConfirmedCard, supersedeCards, transitionCreativeStage } from "./database.js";
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
 import { publicInputUrl } from "./character-generator.js";
 import { preparePngEditSource, uploadPngEditInput, validatePngEditInputs } from "./image-mask.js";
@@ -51,7 +51,7 @@ export function startFinalCardGeneration(sessionId, cardId) {
   db.prepare("INSERT INTO creative_messages (session_id, role, content, created_at) VALUES (?, 'user', ?, ?)")
     .run(sessionId, `确认并生成落版图候选 ${cardId}：${card.title}`, timestamp);
   const inserted = appendCardMessage(sessionId, "好的，方案已经确认。我现在开始生成这张落版图，完成后会把真实预览放回这张卡片供你审核。", generatingCard);
-  db.prepare("UPDATE creative_sessions SET stage = 'working', error_message = NULL, updated_at = ? WHERE id = ?").run(timestamp, sessionId);
+  transitionCreativeStage(sessionId, "working", { timestamp });
 
   runFinalCardGeneration(sessionId, inserted, prompt);
 }
@@ -75,7 +75,7 @@ export function startFinalCardRegeneration(sessionId, cardId, feedback, editInpu
   db.prepare("INSERT INTO creative_messages (session_id, role, content, created_at) VALUES (?, 'user', ?, ?)")
     .run(sessionId, `修改落版图 ${cardId}：${instruction}`, timestamp);
   const inserted = appendCardMessage(sessionId, "收到，我会以当前落版图为主图生成修改版。旧版本继续保留，流程仍停留在落版图审核。", generatingCard);
-  db.prepare("UPDATE creative_sessions SET stage = 'working', error_message = NULL, updated_at = ? WHERE id = ?").run(timestamp, sessionId);
+  transitionCreativeStage(sessionId, "working", { timestamp });
   runFinalCardRegeneration(sessionId, card, inserted, instruction, edit);
 }
 
@@ -122,11 +122,11 @@ async function runFinalCardRegeneration(sessionId, sourceCard, generatingCard, f
         { label: "生成任务", content: taskId || providerSessionId },
       ],
     });
-    db.prepare("UPDATE creative_sessions SET stage = 'final_card_review', error_message = NULL, updated_at = ? WHERE id = ?").run(now(), sessionId);
+    transitionCreativeStage(sessionId, "final_card_review");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     appendCardMessage(sessionId, `落版图修改版生成失败：${message}。原图继续保留，你可以直接重试。`, { ...generatingCard, previewUrl: sourceCard.previewUrl, status: "failed" });
-    db.prepare("UPDATE creative_sessions SET stage = 'final_card_review', error_message = ?, updated_at = ? WHERE id = ?").run(message, now(), sessionId);
+    transitionCreativeStage(sessionId, "final_card_review", { errorMessage: message });
   }
 }
 
@@ -141,8 +141,7 @@ export function approveFinalCard(sessionId, cardId) {
   db.prepare("INSERT INTO creative_messages (session_id, role, content, created_at) VALUES (?, 'user', ?, ?)")
     .run(sessionId, `确认使用已生成的落版图 ${cardId}`, timestamp);
   appendCardMessage(sessionId, "真实落版图已经确认。现在基于已确认的文字分镜、逐镜图片和落版图自动生成正式视频提示词。", { ...card, status: "confirmed", confirmedAt: timestamp });
-  db.prepare("UPDATE creative_sessions SET stage = 'working', workspace_json = ?, error_message = NULL, updated_at = ? WHERE id = ?")
-    .run(JSON.stringify(workspace), timestamp, sessionId);
+  transitionCreativeStage(sessionId, "working", { workspaceJson: JSON.stringify(workspace), timestamp });
   recordCreativeFeedback(sessionId, `确认使用已生成的落版图 ${cardId}`, { decision: "approved", assetId: cardId, key: `session:${sessionId}:final-card:${cardId}:approved` });
   recordCreativeStage(sessionId, "final_card", { cardId, title: card.title, previewUrl: card.previewUrl }, { version: Number(card.version || 1), status: "confirmed", key: `session:${sessionId}:final-card:${cardId}:confirmed` });
   import("./creative-agent.js").then(({ runCreativeTurn }) => runCreativeTurn(sessionId, "真实落版图已经确认。现在生成正式 video_prompt 审核卡；保留全部人物参考、落版方向、视听方向、文字分镜和逐镜图片，不提交视频生成。", false));
@@ -170,7 +169,7 @@ export function approveFinalCardDirection(sessionId, cardId) {
     db.prepare("INSERT INTO creative_messages (session_id, role, content, cards_json, created_at) VALUES (?, 'assistant', ?, ?, ?)")
       .run(sessionId, "其余落版方向候选保留记录，不再推进，也不会生成图片。", JSON.stringify(siblingIds.map((id) => ({ ...richestVersion(sessionId, id), status: "superseded" }))), timestamp);
   }
-  db.prepare("UPDATE creative_sessions SET stage='working',workspace_json=?,error_message=NULL,updated_at=? WHERE id=?").run(JSON.stringify(workspace), timestamp, sessionId);
+  transitionCreativeStage(sessionId, "working", { workspaceJson: JSON.stringify(workspace), timestamp });
   recordCreativeFeedback(sessionId, `确认落版方向 ${card.id}`, { decision: "approved", stageOutputId: card.id, key: `session:${sessionId}:final-card-direction:${card.id}:approved` });
   import("./creative-agent.js").then(({ runCreativeTurn }) => runCreativeTurn(sessionId, `已确认落版方向 ${inserted.id}。现在生成一张 audiovisual-direction-v1 视听方向卡，只总结可执行的视听语言 Bible，不推荐或列举导演；导演由用户在 UI 下拉框选择。进入 audiovisual_review，不生成 storyboard。`, false));
 }
@@ -197,7 +196,7 @@ export function prepareFinalCardGeneration(sessionId, storyboardImages) {
   const timestamp = now();
   workspace.productionPlan = { ...(workspace.productionPlan || {}), finalCardStatus: "ready_to_generate", videoPromptStatus: "waiting_for_final_card" };
   appendCardMessage(sessionId, "逐镜分镜图已经确认。落版图生成稿已按末镜重新校准；点击“确认并生成落版图”后才会创建真实图片任务。", card);
-  db.prepare("UPDATE creative_sessions SET stage='final_card_review',workspace_json=?,error_message=NULL,updated_at=? WHERE id=?").run(JSON.stringify(workspace), timestamp, sessionId);
+  transitionCreativeStage(sessionId, "final_card_review", { workspaceJson: JSON.stringify(workspace), timestamp });
 }
 
 async function runFinalCardGeneration(sessionId, card, prompt) {
@@ -237,13 +236,13 @@ async function runFinalCardGeneration(sessionId, card, prompt) {
       details: [...(card.details || []), { label: "生成任务", content: taskId || providerSessionId }],
     };
     appendCardMessage(sessionId, "落版图已经生成好了。请直接查看真实预览；你可以确认采用，也可以在卡片里写修改意见后生成新版本。", completedCard);
-    db.prepare("UPDATE creative_sessions SET stage = 'final_card_review', updated_at = ? WHERE id = ?").run(now(), sessionId);
+    transitionCreativeStage(sessionId, "final_card_review", { keepErrorMessage: true });
     recordCreativeStage(sessionId, "final_card", { cardId: card.id, title: card.title, status: "generated" }, { version: Number(card.version || 1), status: "awaiting_confirmation", key: `session:${sessionId}:final-card:${card.id}:v${Number(card.version || 1)}:generated` });
     recordCreativeAsset(sessionId, "final_card", previewUrl, { version: Number(card.version || 1), stageOutputId: card.id });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     appendCardMessage(sessionId, `这次落版图没有生成成功：${message}。候选方案和提示词都已保留，你可以直接重试。`, { ...card, status: "failed" });
-    db.prepare("UPDATE creative_sessions SET stage = 'final_card_review', error_message = ?, updated_at = ? WHERE id = ?").run(message, now(), sessionId);
+    transitionCreativeStage(sessionId, "final_card_review", { errorMessage: message });
   }
 }
 

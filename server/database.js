@@ -812,6 +812,39 @@ function finalCardRevisionHistory(messages) {
   return history;
 }
 
+// creative_sessions.stage used to be written by ~66 separate raw UPDATE statements spread across
+// 10 backend files, each hardcoding its own literal or computed stage string with no shared
+// definition of which stage names are even valid. This is the single funnel every one of those
+// call sites now goes through. Scope is deliberately narrow for now: it only rejects a typo'd or
+// otherwise unknown stage name; it does not yet enforce a from-stage -> to-stage graph, because
+// the ~66 existing call sites include enough genuinely varied, hard-to-verify-without-live-testing
+// transitions (mid-pipeline error recovery, "wait for sibling jobs before leaving 'working'",
+// server-restart recovery) that guessing a strict graph now risks shipping one that is either too
+// permissive to matter or wrong in a way that blocks a legitimate flow. A stricter graph can be
+// layered on top of this same funnel later, once the full set of real transitions is inventoried.
+export const CREATIVE_STAGES = new Set([
+  "concept_review", "concept_selected", "final_card_review", "reference_review",
+  "audiovisual_review", "storyboard_review", "prompt_review", "ready_to_generate",
+  "video_review", "working", "error",
+]);
+
+// errorMessage defaults to null (clear it) because that matches the overwhelming majority of the
+// original 66 call sites. The rare original call site that left error_message untouched entirely
+// (finishing a turn/job without deciding anything about a possibly-stale prior error) must pass
+// keepErrorMessage: true explicitly rather than relying on a default, since "silently leave a
+// column alone" is exactly the kind of behavior a reader would otherwise assume was a bug.
+export function transitionCreativeStage(sessionId, toStage, { workspaceJson, errorMessage = null, codexThreadId, timestamp = now(), keepErrorMessage = false } = {}) {
+  if (!CREATIVE_STAGES.has(toStage)) throw new Error(`未知的创意工作台阶段：${toStage}`);
+  const assignments = ["stage=?"];
+  const params = [toStage];
+  if (workspaceJson !== undefined) { assignments.push("workspace_json=?"); params.push(workspaceJson); }
+  if (codexThreadId !== undefined) { assignments.push("codex_thread_id=?"); params.push(codexThreadId); }
+  if (!keepErrorMessage) { assignments.push("error_message=?"); params.push(errorMessage); }
+  assignments.push("updated_at=?");
+  params.push(timestamp, sessionId);
+  db.prepare(`UPDATE creative_sessions SET ${assignments.join(",")} WHERE id=?`).run(...params);
+}
+
 export function serializeCreativeSession(row) {
   if (!row) return null;
   const drama = db.prepare("SELECT * FROM drama_analyses WHERE id = ?").get(row.drama_id);

@@ -1,4 +1,4 @@
-import { db, now, insertCardVersion, latestCard } from "./database.js";
+import { db, now, insertCardVersion, latestCard, transitionCreativeStage } from "./database.js";
 import { recordCreativeFeedback, recordCreativeStage } from "./creative-telemetry.js";
 import { directorStyle } from "./director-library.js";
 
@@ -33,7 +33,7 @@ export function approveAudiovisualDirection(sessionId, cardId, directorChoice) {
   const result = db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,created_at) VALUES (?,'assistant',?,?,?)")
     .run(sessionId, `视听方向已确认，导演参考选择为“${choice}”。我现在自动生成剧情与分镜候选。`, JSON.stringify([confirmed]), timestamp);
   insertCardVersion(sessionId, Number(result.lastInsertRowid), confirmed);
-  db.prepare("UPDATE creative_sessions SET stage='working',workspace_json=?,error_message=NULL,updated_at=? WHERE id=?").run(JSON.stringify(workspace), timestamp, sessionId);
+  transitionCreativeStage(sessionId, "working", { workspaceJson: JSON.stringify(workspace), timestamp });
   recordCreativeFeedback(sessionId, `确认视听方向；导演参考：${choice}`, { decision: "approved", stageOutputId: card.id, key: `session:${sessionId}:audiovisual-direction:approved:${timestamp}` });
   recordCreativeStage(sessionId, "audiovisual_direction", { cardId: card.id, directorReference: choice, details: confirmed.details }, { status: "confirmed", key: `session:${sessionId}:audiovisual-direction:${timestamp}` });
   const instruction = `已确认视听方向卡 ${card.id}，用户从本地导演库选择“${choice}”。采用的可执行参数为：${parameters}。严格沿用已确认成果中最新的 audiovisual_direction Bible 和上述参数，现在生成 3 个稳定编号 storyboard-A/B/C 的剧情与分镜候选；不得模仿具体作品或复制镜头，进入 storyboard_review，不提交图片或视频生成。`;

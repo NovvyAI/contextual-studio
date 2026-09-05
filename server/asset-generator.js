@@ -1,4 +1,4 @@
-import { cardHistory, creativeAssets, creativeCharacterReferenceAssets, db, insertCardVersion, latestCard, latestCardsByKind, now, resolveAssetReferences } from "./database.js";
+import { cardHistory, creativeAssets, creativeCharacterReferenceAssets, db, insertCardVersion, latestCard, latestCardsByKind, now, resolveAssetReferences, transitionCreativeStage } from "./database.js";
 import { publicInputUrl } from "./character-generator.js";
 import { preparePngEditSource, uploadPngEditInput, validatePngEditInputs } from "./image-mask.js";
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
@@ -50,7 +50,7 @@ export function registerChatAttachmentsAsAssets(sessionId, attachments, descript
   const references = registered.map((asset) => asset.reference);
   db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
     .run(sessionId, `${references.join("、") || `${cards.length} 张图片`}已加入资产区域。原图没有经过修改，也没有调用图片生成模型。`, timestamp);
-  db.prepare("UPDATE creative_sessions SET stage=?,error_message=NULL,updated_at=? WHERE id=?").run(session.stage, timestamp, sessionId);
+  transitionCreativeStage(sessionId, session.stage, { timestamp });
   recordCreativeFeedback(sessionId, String(description || "上传为资产"), { decision: "approved", stageOutputId: cards.map((card) => card.id).join(","), key: `session:${sessionId}:uploaded-assets:${timestamp}` });
   registered.forEach((asset) => recordCreativeAsset(sessionId, "reference_panel", asset.url, { stageOutputId: asset.sourceCardId, metadata: { title: asset.title, source: "chat_upload", reference: asset.reference }, key: `session:${sessionId}:uploaded-asset:${asset.sourceCardId}` }));
   return registered;
@@ -98,7 +98,7 @@ export function registerReferencedScreenshotsAsAssets(sessionId, description) {
     try { workspace = JSON.parse(session.workspace_json || "{}"); } catch { /* keep safe fallback */ }
     returnStage = workspace.productionPlan?.referenceStatus === "candidate_review" ? "reference_review" : "concept_review";
   }
-  db.prepare("UPDATE creative_sessions SET stage=?,error_message=NULL,updated_at=? WHERE id=?").run(returnStage, timestamp, sessionId);
+  transitionCreativeStage(sessionId, returnStage, { timestamp });
   registered.forEach((asset) => recordCreativeAsset(sessionId, "reference_panel", asset.url, { stageOutputId: asset.sourceCardId, metadata: { title: asset.title, source: "video_screenshot", reference: asset.reference }, key: `session:${sessionId}:screenshot-asset:${asset.sourceCardId}` }));
   return registered;
 }
@@ -146,7 +146,7 @@ export function registerReferencedScreenshotsAsCharacterReferences(sessionId, de
     db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
       .run(sessionId, "指定截图已经是人物参考候选，无需重复添加。", timestamp);
   }
-  db.prepare("UPDATE creative_sessions SET stage='reference_review',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, sessionId);
+  transitionCreativeStage(sessionId, "reference_review", { timestamp });
   cardsToAdd.forEach((card) => recordCreativeAsset(sessionId, "reference_panel", card.previewUrl, { stageOutputId: card.id, metadata: { title: card.title, source: "video_screenshot_character_reference" }, key: `session:${sessionId}:character-screenshot:${card.id}` }));
   return cardsToAdd;
 }
@@ -194,7 +194,7 @@ export function startAssetCreation(sessionId, description, interruptedCard = nul
   db.prepare("INSERT INTO creative_messages (session_id,role,content,visibility,created_at) VALUES (?,'user',?,'asset',?)")
     .run(sessionId, `从资产区域生成图片：${instruction}`, timestamp);
   appendAsset(sessionId, "正在根据文字描述生成一张新图片。", card);
-  db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, sessionId);
+  transitionCreativeStage(sessionId, "working", { timestamp });
   createAsset(sessionId, card, instruction, session.stage);
 }
 
@@ -217,7 +217,7 @@ export function startAttachmentImageEdit(sessionId, attachments, description, op
       .run(sessionId, instruction, JSON.stringify(attachments), timestamp);
   }
   append(sessionId, "收到，我正在以你上传的图片为主图执行真实修改；完成后会在这张卡片中显示新图片。", card);
-  db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, sessionId);
+  transitionCreativeStage(sessionId, "working", { timestamp });
   editAttachmentImage(sessionId, images, card, instruction, session.stage);
 }
 
@@ -241,11 +241,11 @@ async function editAttachmentImage(sessionId, images, card, instruction, returnS
     }
     const previewUrl = imageUrl(result); if (!previewUrl) throw new Error("图片生成查询超时");
     append(sessionId, "上传图片的修改版已经生成，并已加入资产区域。", { ...card, previewUrl, status: "candidate", details: [...card.details, { label: "生成任务", content: taskId || providerSessionId }] });
-    db.prepare("UPDATE creative_sessions SET stage=?,error_message=NULL,updated_at=? WHERE id=?").run(returnStage === "working" ? "reference_review" : returnStage, now(), sessionId);
+    transitionCreativeStage(sessionId, returnStage === "working" ? "reference_review" : returnStage);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     append(sessionId, `上传图片修改失败：${message}。原始上传图片仍然保留。`, { ...card, status: "failed" });
-    db.prepare("UPDATE creative_sessions SET stage=?,error_message=?,updated_at=? WHERE id=?").run(returnStage === "working" ? "reference_review" : returnStage, message, now(), sessionId);
+    transitionCreativeStage(sessionId, returnStage === "working" ? "reference_review" : returnStage, { errorMessage: message });
   }
 }
 
@@ -273,11 +273,11 @@ async function createAsset(sessionId, card, instruction, returnStage) {
     }
     const previewUrl = imageUrl(result); if (!previewUrl) throw new Error("图片生成查询超时");
     appendAsset(sessionId, "新图片已经生成，并已加入资产区域。", { ...card, previewUrl, status: "candidate", details: [...card.details, ...(referenced.length ? [{ label: "引用资产", content: referenced.map((item) => item.reference).join("、") }] : []), { label: "生成任务", content: taskId || providerSessionId }] });
-    db.prepare("UPDATE creative_sessions SET stage=?,error_message=NULL,updated_at=? WHERE id=?").run(returnStage === "working" ? "reference_review" : returnStage, now(), sessionId);
+    transitionCreativeStage(sessionId, returnStage === "working" ? "reference_review" : returnStage);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     appendAsset(sessionId, `新图片生成失败：${message}`, { ...card, status: "failed" });
-    db.prepare("UPDATE creative_sessions SET stage=?,error_message=?,updated_at=? WHERE id=?").run(returnStage === "working" ? "reference_review" : returnStage, message, now(), sessionId);
+    transitionCreativeStage(sessionId, returnStage === "working" ? "reference_review" : returnStage, { errorMessage: message });
   }
 }
 
@@ -297,7 +297,7 @@ export function startAssetRegeneration(sessionId, assetNumber, feedback, editInp
   db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)")
     .run(sessionId, `修改${asset.reference}（${asset.title}）：${instruction}`, timestamp);
   append(sessionId, `收到，我会以${asset.reference}这个具体版本为主图重新生成；完成后旧图继续保留，新图进入资产区域。`, { ...sourceCard, previewUrl: "", status: "generating" });
-  db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, sessionId);
+  transitionCreativeStage(sessionId, "working", { timestamp });
   regenerate(sessionId, asset, sourceCard, instruction, edit);
 }
 
@@ -339,7 +339,7 @@ export function startCharacterReferenceRegeneration(sessionId, characterReferenc
   db.prepare("INSERT INTO creative_messages (session_id,role,content,visibility,created_at) VALUES (?,'user',?,'asset',?)")
     .run(sessionId, `修改${asset.reference}（${asset.title}）：${instruction}`, timestamp);
   append(sessionId, `正在以${asset.reference}为主图重新生成，并同步更新右侧对应的人物候选卡。原始人物参考图会继续保留。`, sourceCard);
-  db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, sessionId);
+  transitionCreativeStage(sessionId, "working", { timestamp });
   regenerate(sessionId, asset, sourceCard, instruction, { ...edit, returnStage: session.stage });
 }
 
@@ -369,11 +369,11 @@ async function regenerate(sessionId, asset, sourceCard, feedback, options = {}) 
     const completed = { ...sourceCard, previewUrl, version, status: "candidate", summary: `${sourceCard.summary || asset.description}（基于${asset.reference}修改）`, details: [...(sourceCard.details || []), { label: `V${version} 修改`, content: feedback }, { label: "主参考资产", content: asset.reference }, ...(options.mask ? [{ label: "局部编辑蒙版", content: `${options.mask.width}×${options.mask.height} PNG alpha` }] : []), ...(referenced.length ? [{ label: "额外引用", content: referenced.map((item) => item.reference).join("、") }] : []), { label: "生成任务", content: taskId || providerSessionId }] };
     appendResult(sessionId, `${asset.reference}的修改版已经生成。原图保留，新版本已加入生成图片区域。`, completed);
     const stage = options.returnStage || (asset.kind === "final_card" ? "final_card_review" : asset.kind === "storyboard_image" ? "storyboard_review" : "reference_review");
-    db.prepare("UPDATE creative_sessions SET stage=?,error_message=NULL,updated_at=? WHERE id=?").run(stage, now(), sessionId);
+    transitionCreativeStage(sessionId, stage);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     appendResult(sessionId, `${asset.reference}重新生成失败：${message}。原资产仍然保留。`, { ...sourceCard, previewUrl: asset.url, status: "failed" });
     const stage = options.returnStage || (asset.kind === "final_card" ? "final_card_review" : asset.kind === "storyboard_image" ? "storyboard_review" : "reference_review");
-    db.prepare("UPDATE creative_sessions SET stage=?,error_message=?,updated_at=? WHERE id=?").run(stage, message, now(), sessionId);
+    transitionCreativeStage(sessionId, stage, { errorMessage: message });
   }
 }

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { Codex } from "@openai/codex-sdk";
-import { creativeAssets, creativeScreenshotAssets, db, insertCardVersion, latestConfirmedCard, now } from "./database.js";
+import { creativeAssets, creativeScreenshotAssets, db, insertCardVersion, latestConfirmedCard, now, transitionCreativeStage } from "./database.js";
 import { prepareCreativeAttachments } from "./chat-media.js";
 import { productionProfile } from "./production-profile.js";
 import { recordCreativeStage } from "./creative-telemetry.js";
@@ -159,7 +159,7 @@ export async function runCreativeTurn(sessionId, userMessage, initial = false, a
   if (!session) return;
   const drama = db.prepare("SELECT * FROM drama_analyses WHERE id = ?").get(session.drama_id);
   const game = db.prepare("SELECT * FROM game_analyses WHERE id = ?").get(session.game_id);
-  db.prepare("UPDATE creative_sessions SET stage = 'working', error_message = NULL, updated_at = ? WHERE id = ?").run(now(), sessionId);
+  transitionCreativeStage(sessionId, "working");
   try {
     const codex = new Codex();
     const preparedAttachments = await prepareCreativeAttachments(attachments);
@@ -349,8 +349,7 @@ export async function runCreativeTurn(sessionId, userMessage, initial = false, a
       if (!card?.id || !card?.kind) continue;
       insertCardVersion(sessionId, messageId, card);
     }
-    db.prepare("UPDATE creative_sessions SET stage = ?, workspace_json = ?, codex_thread_id = ?, updated_at = ? WHERE id = ?")
-      .run(output.stage, JSON.stringify(output.workspace), thread.id, timestamp, sessionId);
+    transitionCreativeStage(sessionId, output.stage, { workspaceJson: JSON.stringify(output.workspace), codexThreadId: thread.id, timestamp, keepErrorMessage: true });
     if (conceptWasConfirmed && output.workspace?.selectedConceptIds?.length) {
       const { prepareCharacterReferenceReview } = await import("./character-generator.js");
       prepareCharacterReferenceReview(sessionId);
@@ -369,6 +368,6 @@ export async function runCreativeTurn(sessionId, userMessage, initial = false, a
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     db.prepare("INSERT INTO creative_messages (session_id, role, content, created_at) VALUES (?, 'assistant', ?, ?)").run(sessionId, `本轮处理失败：${message}`, now());
-    db.prepare("UPDATE creative_sessions SET stage = 'error', error_message = ?, updated_at = ? WHERE id = ?").run(message, now(), sessionId);
+    transitionCreativeStage(sessionId, "error", { errorMessage: message });
   }
 }

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { Codex } from "@openai/codex-sdk";
-import { db, now, insertCardVersion, latestCard, latestConfirmedCard } from "./database.js";
+import { db, now, insertCardVersion, latestCard, latestConfirmedCard, transitionCreativeStage } from "./database.js";
 import { publicInputUrl } from "./character-generator.js";
 import { runCodexWithTrace } from "./mlflow-tracing.js";
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
@@ -61,7 +61,7 @@ export function startVideoGeneration(sessionId, cardId, targetShotId = "", promp
   append(sessionId, generateAudio
     ? "视频提示词已经确认。我正在上传人物参考并生成视频，完成后会在这张卡片里显示成片。"
     : "视频提示词已经确认。上一次任务因生成音频触发版权策略，本次将关闭生成音频并重新生成视频。", { ...card, previewUrl: "", status: "generating" });
-  db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, sessionId);
+  transitionCreativeStage(sessionId, "working", { timestamp });
   generate(sessionId, card, plan, referenceUrls, storyboardUrls, generateAudio, Boolean(targetShotId));
 }
 
@@ -75,7 +75,7 @@ export function resumeNovvyStoryboardVideoGeneration(sessionId, cardId) {
   if (!referenceUrls.length) throw new Error("已确认人物参考图组为空");
   if (storyboardUrls.length < plan.shots.length) throw new Error(`已确认分镜图不足：需要 ${plan.shots.length} 张，当前只有 ${storyboardUrls.length} 张`);
   const generateAudio = !/OutputAudioSensitiveContentDetected|output audio.*copyright/i.test(session.error_message || "");
-  db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(now(), sessionId);
+  transitionCreativeStage(sessionId, "working");
   generate(sessionId, card, plan, referenceUrls, storyboardUrls, generateAudio);
 }
 
@@ -94,7 +94,7 @@ export function resumeVideoGeneration(sessionId, cardId, taskId, providerSession
       details: [...(card.details || []).filter((item) => item.label !== "视频任务"), { label: "视频任务", content: taskId || providerSessionId }],
     });
   }
-  db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, sessionId);
+  transitionCreativeStage(sessionId, "working", { timestamp });
   return monitorVideoTask(sessionId, card, taskId, providerSessionId);
 }
 
@@ -149,7 +149,7 @@ async function generate(sessionId, card, plan, referenceUrls, storyboardUrls, ge
     } else {
       append(sessionId, "全部内容镜头已经生成。请逐镜播放复审；确认后再按顺序拼接，并追加已确认的原始落版图。", { ...card, previewUrl: "", status: "completed", details: [...(card.details || []).filter((item) => item.label !== "失败原因"), { label: "逐镜状态", content: `${plan.shots.length} 个镜头已完成，等待统一确认拼接` }] });
     }
-    db.prepare("UPDATE creative_sessions SET stage='video_review',error_message=NULL,updated_at=? WHERE id=?").run(now(), sessionId);
+    transitionCreativeStage(sessionId, "video_review");
   } catch (error) {
     failVideoTask(sessionId, card, error);
   }
@@ -187,7 +187,7 @@ async function pollVideoTask(client, sessionId, card, taskId, providerSessionId,
         status: "completed",
         details: [...(card.details || []).filter((item) => !["视频任务", "落版处理"].includes(item.label)), { label: "视频任务", content: taskId || providerSessionId }, { label: "落版处理", content: `完整保留 ${shot.durationSeconds} 秒内容视频，最后追加 ${productionProfile.final_assembly.final_card_duration_seconds} 秒已确认原始落版图` }],
       });
-      db.prepare("UPDATE creative_sessions SET stage='video_review',error_message=NULL,updated_at=? WHERE id=?").run(now(), sessionId);
+      transitionCreativeStage(sessionId, "video_review");
       return;
     }
     await wait(8000);
@@ -206,7 +206,7 @@ function failVideoTask(sessionId, card, error) {
     status: "failed",
     details: [...(card.details || []).filter((item) => item.label !== "失败原因"), { label: "失败原因", content: message }],
   });
-  db.prepare("UPDATE creative_sessions SET stage='prompt_review',error_message=?,updated_at=? WHERE id=?").run(message, now(), sessionId);
+  transitionCreativeStage(sessionId, "prompt_review", { errorMessage: message });
 }
 
 export async function translatePromptWithCodex(card) {

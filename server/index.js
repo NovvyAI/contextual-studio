@@ -4,7 +4,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
-import { db, now, serializeAnalysis, serializeGameAnalysis, serializeCreativeSession, deleteCreativeAsset, upsertExternalDrama, upsertExternalProduct } from "./database.js";
+import { db, now, serializeAnalysis, serializeGameAnalysis, serializeCreativeSession, deleteCreativeAsset, transitionCreativeStage, upsertExternalDrama, upsertExternalProduct } from "./database.js";
 import { analyzeDrama } from "./analyzer.js";
 import { analyzeGame } from "./game-analyzer.js";
 import { runCreativeTurn } from "./creative-agent.js";
@@ -375,7 +375,7 @@ const server = http.createServer(async (req, res) => {
         assetId: finalCardRevisionMatch?.[1] || conceptRevisionMatch?.[1] || "",
         key: `session:${id}:message:${timestamp}:feedback`,
       });
-      db.prepare("UPDATE creative_sessions SET stage = 'working', updated_at = ? WHERE id = ?").run(timestamp, id);
+      transitionCreativeStage(id, "working", { timestamp, keepErrorMessage: true });
       runCreativeTurn(id, userMessage, false, attachments, {
         ...(conceptRevisionMatch ? { conceptRevisionId: conceptRevisionMatch[1].toUpperCase() } : {}),
         ...(customConceptMatch ? { customConceptId: customConceptMatch[1].toUpperCase() } : {}),
@@ -781,7 +781,7 @@ function recoverInterruptedCreativeTurns() {
     if (interruptedAsset) {
       const timestamp = now();
       const detail = (interruptedAsset.details || []).find((item) => item.label === "生成要求")?.content || interruptedAsset.summary;
-      db.prepare("UPDATE creative_sessions SET stage='reference_review',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, session.id);
+      transitionCreativeStage(session.id, "reference_review", { timestamp });
       db.prepare("INSERT INTO creative_messages (session_id,role,content,visibility,created_at) VALUES (?,'assistant',?,'asset',?)")
         .run(session.id, "检测到服务器重启中断了资产图片生成，正在自动恢复同一张图片请求。", timestamp);
       setImmediate(() => startAssetCreation(session.id, detail, interruptedAsset));
@@ -793,7 +793,7 @@ function recoverInterruptedCreativeTurns() {
       const detail = (interruptedCharacter.details || []).find((item) => item.label === "生成要求")?.content
         || [...(interruptedCharacter.details || [])].reverse().find((item) => /修改/.test(item.label))?.content
         || interruptedCharacter.summary;
-      db.prepare("UPDATE creative_sessions SET stage='reference_review',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, session.id);
+      transitionCreativeStage(session.id, "reference_review", { timestamp });
       db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
         .run(session.id, "检测到服务器重启中断了人物图片生成，正在自动恢复同一张候选卡，不需要重新发送修改意见。", timestamp);
       setImmediate(() => {
@@ -809,7 +809,7 @@ function recoverInterruptedCreativeTurns() {
       const hasVideoPrompt = db.prepare("SELECT 1 FROM creative_messages WHERE session_id=? AND cards_json LIKE '%\"kind\":\"video_prompt\"%' LIMIT 1").get(session.id);
       if (!hasVideoPrompt) {
         const timestamp = now();
-        db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, session.id);
+        transitionCreativeStage(session.id, "working", { timestamp });
         db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
           .run(session.id, "检测到服务重启中断了正式视频提示词生成，现已从已确认落版图继续恢复，不会退回人物或分镜阶段。", timestamp);
         setImmediate(() => runCreativeTurn(session.id, "服务重启中断了正式视频提示词生成。请基于已确认的创意、人物参考、落版方向、视听方向、文字分镜、逐镜图片和真实落版图，立即生成正式 video_prompt 审核卡；保留所有已确认成果，不要退回任何前置阶段，也不要提交视频生成。", false));
@@ -820,7 +820,7 @@ function recoverInterruptedCreativeTurns() {
       const hasStoryboard = db.prepare("SELECT 1 FROM creative_messages WHERE session_id=? AND cards_json LIKE '%\"kind\":\"storyboard\"%' LIMIT 1").get(session.id);
       if (!hasStoryboard) {
         const timestamp = now();
-        db.prepare("UPDATE creative_sessions SET stage='reference_review',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, session.id);
+        transitionCreativeStage(session.id, "reference_review", { timestamp });
         db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
           .run(session.id, "检测到服务器重启中断了分镜生成，现已自动恢复，不需要重新确认人物参考图。", timestamp);
         setImmediate(() => runCreativeTurn(session.id, "恢复已确认人物参考图之后被服务器重启中断的流程。请立即生成 3 个完整的视频剧情与分镜候选 storyboard-A/B/C；保留全部已确认成果，不要再次要求确认人物图，也不要提交图片或视频生成。", false));
@@ -832,7 +832,7 @@ function recoverInterruptedCreativeTurns() {
     const hasReferenceCandidate = db.prepare("SELECT 1 FROM creative_messages WHERE session_id=? AND cards_json LIKE '%\"kind\":\"character_image\"%' LIMIT 1").get(session.id);
     if (selectedConceptIds.length && !hasReferenceCandidate) {
       const timestamp = now();
-      db.prepare("UPDATE creative_sessions SET stage='reference_review',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, session.id);
+      transitionCreativeStage(session.id, "reference_review", { timestamp });
       db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
         .run(session.id, "检测到服务器重启中断了人物参考图准备，正在自动恢复；不会提前生成落版方向或图片。", timestamp);
       setImmediate(() => prepareCharacterReferenceReview(session.id));
@@ -841,8 +841,7 @@ function recoverInterruptedCreativeTurns() {
 
     const fallbackStage = hasReferenceCandidate ? "reference_review" : (selectedConceptIds.length ? "reference_review" : "concept_review");
     const timestamp = now();
-    db.prepare("UPDATE creative_sessions SET stage=?,error_message=?,updated_at=? WHERE id=?")
-      .run(fallbackStage, "上一轮 Novvy 任务因服务重启而中断，请重新执行当前操作。", timestamp, session.id);
+    transitionCreativeStage(session.id, fallbackStage, { errorMessage: "上一轮 Novvy 任务因服务重启而中断，请重新执行当前操作。", timestamp });
     db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
       .run(session.id, "上一轮任务因服务重启而中断，工作台已恢复到可操作状态。请重新发送刚才的要求，或再次点击当前步骤的确认按钮。", timestamp);
   }

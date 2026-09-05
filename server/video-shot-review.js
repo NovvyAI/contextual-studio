@@ -1,4 +1,4 @@
-import { db, now, insertCardVersion, latestCard } from "./database.js";
+import { db, now, insertCardVersion, latestCard, transitionCreativeStage } from "./database.js";
 import { finalizeStoryboardVideosWithApprovedCard } from "./video-finalizer.js";
 import { reviewFinalVideo } from "./video-quality-review.js";
 import { recordCreativeAsset, recordCreativeFeedback, recordCreativeRunComplete, recordCreativeStage } from "./creative-telemetry.js";
@@ -10,7 +10,7 @@ export async function approveAndFinalizeVideoShots(sessionId, promptCardId) {
   if (!promptCard || promptCard.kind !== "video_prompt") throw new Error("找不到所属视频提示词卡");
   const rows = db.prepare(`SELECT s.* FROM creative_video_shots s JOIN (SELECT shot_id,MAX(version) version FROM creative_video_shots WHERE session_id=? AND prompt_card_id=? GROUP BY shot_id) latest ON latest.shot_id=s.shot_id AND latest.version=s.version WHERE s.session_id=? AND s.prompt_card_id=? ORDER BY s.shot_order`).all(sessionId, promptCardId, sessionId, promptCardId);
   if (!rows.length || rows.some((row) => row.status !== "completed" || !row.result_url)) throw new Error("还有镜头没有生成完成，暂时不能拼接");
-  db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(now(), sessionId);
+  transitionCreativeStage(sessionId, "working");
   const finalUrl = await finalizeStoryboardVideosWithApprovedCard(sessionId, rows.map((row) => row.result_url));
   const qc = await reviewFinalVideo(finalUrl, rows);
   db.prepare("UPDATE creative_video_shots SET status='approved',updated_at=? WHERE session_id=? AND prompt_card_id=? AND status='completed'").run(now(), sessionId, promptCardId);
@@ -18,7 +18,7 @@ export async function approveAndFinalizeVideoShots(sessionId, promptCardId) {
   const finalizedCard = { ...promptCard, previewUrl: finalUrl, status: "completed", details };
   const result = db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,created_at) VALUES (?,'assistant',?,?,?)").run(sessionId, "逐镜视频已经确认并合成为成片，最后追加的是已确认原始落版图。你可以播放最终成片复审。", JSON.stringify([finalizedCard]), now());
   insertCardVersion(sessionId, Number(result.lastInsertRowid), finalizedCard);
-  db.prepare("UPDATE creative_sessions SET stage='video_review',error_message=NULL,updated_at=? WHERE id=?").run(now(), sessionId);
+  transitionCreativeStage(sessionId, "video_review");
   recordCreativeStage(sessionId, "video_generation", { promptCardId, shotCount: rows.length, quality: qc }, { status: "awaiting_confirmation", key: `session:${sessionId}:video:${promptCardId}:${qc.sha256}` });
   recordCreativeAsset(sessionId, "generated_video", finalUrl, { stageOutputId: promptCardId, metadata: { shotCount: rows.length, sha256: qc.sha256 } });
   return finalUrl;
@@ -38,7 +38,7 @@ export function approveFinalVideo(sessionId, promptCardId) {
   const result = db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,created_at) VALUES (?,'assistant',?,?,?)")
     .run(sessionId, "最终成片已经确认，并已保存到左侧工作流画布。逐镜视频和历史版本仍会保留。", JSON.stringify([confirmedCard]), timestamp);
   insertCardVersion(sessionId, Number(result.lastInsertRowid), confirmedCard);
-  db.prepare("UPDATE creative_sessions SET stage='video_review',workspace_json=?,error_message=NULL,updated_at=? WHERE id=?").run(JSON.stringify(workspace), timestamp, sessionId);
+  transitionCreativeStage(sessionId, "video_review", { workspaceJson: JSON.stringify(workspace), timestamp });
   recordCreativeFeedback(sessionId, `确认最终成片：${promptCardId}`, { decision: "approved", assetId: promptCardId, key: `session:${sessionId}:final-video:${promptCardId}:approved` });
   recordCreativeStage(sessionId, "video_review", { promptCardId, previewUrl: card.previewUrl }, { status: "confirmed", key: `session:${sessionId}:video-review:${promptCardId}:confirmed` });
   recordCreativeRunComplete(sessionId, "completed");

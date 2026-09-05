@@ -4,7 +4,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { db, now, insertCardVersion, latestCard, latestConfirmedCard } from "./database.js";
+import { db, now, insertCardVersion, latestCard, latestConfirmedCard, transitionCreativeStage } from "./database.js";
 import { parseStoryboardVideoPlan, shotCard } from "./storyboard-video-plan.js";
 import { traceToolCall } from "./mlflow-tracing.js";
 
@@ -306,7 +306,7 @@ export function startImaRouterVideoGeneration(sessionId, cardId, requestedModel 
     ...card, previewUrl: "", status: "generating",
     details: [...(card.details || []).filter((item) => !["视频供应商", "参考策略"].includes(item.label)), { label: "视频供应商", content: `ImaRouter / ${model.label}` }, { label: "参考策略", content: modelStrategy }],
   });
-  db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, sessionId);
+  transitionCreativeStage(sessionId, "working", { timestamp });
   generate(sessionId, card, plan, reference, model.key, Boolean(targetShotId));
 }
 
@@ -318,7 +318,7 @@ export function resumeImaRouterVideoGeneration(sessionId, cardId, requestedModel
   const plan = parseStoryboardVideoPlan(card);
   const model = resolveVideoModel(requestedModel);
   const reference = selectReferences(sessionId);
-  db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(now(), sessionId);
+  transitionCreativeStage(sessionId, "working");
   generate(sessionId, card, plan, reference, model.key);
 }
 
@@ -416,7 +416,7 @@ async function generate(sessionId, card, plan, reference, modelKey, forceNewVers
     } else {
       append(sessionId, "全部内容镜头已经生成。请逐镜播放复审；确认后再按顺序拼接，并追加已确认的原始落版图。", { ...card, previewUrl: "", status: "completed", details: [...(card.details || []).filter((item) => item.label !== "失败原因"), { label: "逐镜状态", content: `${plan.shots.length} 个镜头已完成，等待统一确认拼接` }] });
     }
-    db.prepare("UPDATE creative_sessions SET stage='video_review',error_message=NULL,updated_at=? WHERE id=?").run(now(), sessionId);
+    transitionCreativeStage(sessionId, "video_review");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (activeShotId) {
@@ -427,6 +427,6 @@ async function generate(sessionId, card, plan, reference, modelKey, forceNewVers
       ...card, previewUrl: "", status: "failed",
       details: [...(card.details || []).filter((item) => !["失败原因", "视频供应商", "参考策略"].includes(item.label)), { label: "视频供应商", content: `ImaRouter / ${resolveVideoModel(modelKey).label}` }, { label: "参考策略", content: reference.strategy }, { label: "失败原因", content: message }],
     });
-    db.prepare("UPDATE creative_sessions SET stage='prompt_review',error_message=?,updated_at=? WHERE id=?").run(message, now(), sessionId);
+    transitionCreativeStage(sessionId, "prompt_review", { errorMessage: message });
   }
 }

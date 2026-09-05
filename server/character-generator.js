@@ -4,7 +4,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { db, now, resolveAssetReferences, insertCardVersion, latestCard, latestCardsByKind } from "./database.js";
+import { db, now, resolveAssetReferences, insertCardVersion, latestCard, latestCardsByKind, transitionCreativeStage } from "./database.js";
 import { preparePngEditSource, uploadPngEditInput, validatePngEditInputs } from "./image-mask.js";
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
 import { recordCreativeAsset, recordCreativeFeedback, recordCreativeStage } from "./creative-telemetry.js";
@@ -82,8 +82,7 @@ export function prepareCharacterReferenceReview(sessionId) {
   }
   const workspace = session.workspace_json ? JSON.parse(session.workspace_json) : {};
   workspace.productionPlan = { ...(workspace.productionPlan || {}), referenceStatus: "candidate_review", finalCardStatus: "waiting_for_characters" };
-  db.prepare("UPDATE creative_sessions SET stage='reference_review',workspace_json=?,error_message=NULL,updated_at=? WHERE id=?")
-    .run(JSON.stringify(workspace), timestamp, sessionId);
+  transitionCreativeStage(sessionId, "reference_review", { workspaceJson: JSON.stringify(workspace), timestamp });
 }
 
 function mcpConfigPath() {
@@ -253,13 +252,12 @@ async function generateSixViewPanels(sessionId, groups) {
     const session = db.prepare("SELECT workspace_json FROM creative_sessions WHERE id=?").get(sessionId);
     const workspace = session?.workspace_json ? JSON.parse(session.workspace_json) : {};
     workspace.productionPlan = { ...(workspace.productionPlan || {}), sixViewStatus: "candidate_review", referenceStatus: "six_view_review" };
-    db.prepare("UPDATE creative_sessions SET stage='reference_review',workspace_json=?,error_message=NULL,updated_at=? WHERE id=?")
-      .run(JSON.stringify(workspace), now(), sessionId);
+    transitionCreativeStage(sessionId, "reference_review", { workspaceJson: JSON.stringify(workspace) });
     db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
       .run(sessionId, `已为 ${groups.length} 个人物生成六视图面板。请勾选每个人物的一张合格面板，再点击“确认六视图面板并继续”。`, now());
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    db.prepare("UPDATE creative_sessions SET stage='reference_review',error_message=?,updated_at=? WHERE id=?").run(message, now(), sessionId);
+    transitionCreativeStage(sessionId, "reference_review", { errorMessage: message });
     db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
       .run(sessionId, `六视图面板没有全部生成成功：${message}。已生成的候选会保留，可以修改或重新确认人物身份后重试。`, now());
   }
@@ -282,10 +280,10 @@ export function resumeSixViewPanelGeneration(sessionId) {
   }
   if (!grouped.size) {
     workspace.productionPlan = { ...(workspace.productionPlan || {}), sixViewStatus: "candidate_review", referenceStatus: "six_view_review" };
-    db.prepare("UPDATE creative_sessions SET stage='reference_review',workspace_json=?,error_message=NULL,updated_at=? WHERE id=?").run(JSON.stringify(workspace), now(), sessionId);
+    transitionCreativeStage(sessionId, "reference_review", { workspaceJson: JSON.stringify(workspace) });
     return;
   }
-  db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(now(), sessionId);
+  transitionCreativeStage(sessionId, "working");
   generateSixViewPanels(sessionId, [...grouped.values()]);
 }
 
@@ -301,7 +299,7 @@ export function startCharacterRegeneration(sessionId, cardId, feedback, editInpu
   const timestamp = now();
   db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, `修改人物候选 ${cardId}：${instruction}`, timestamp);
   append(sessionId, "收到，我正在基于这张人物候选生成修改版；完成后新图会替换在同一张卡片里。", { ...card, previewUrl: "", status: "generating" });
-  db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, sessionId);
+  transitionCreativeStage(sessionId, "working", { timestamp });
   regenerate(sessionId, card, instruction, edit);
 }
 
@@ -326,7 +324,7 @@ export function startCustomCharacterGeneration(sessionId, description, replaceCa
   const timestamp = now();
   db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, `添加人物候选：${instruction}`, timestamp);
   append(sessionId, `收到，我正在生成人物候选 ${card.candidateNumber}。完成后会加入当前人物参考图组。`, card);
-  db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, sessionId);
+  transitionCreativeStage(sessionId, "working", { timestamp });
   generateCustom(sessionId, card, instruction, baseCard);
 }
 
@@ -353,7 +351,7 @@ export function approveCharacterReferences(sessionId, cardIds) {
     db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, `确认人物身份参考：${selectedIds.join("、")}`, timestamp);
     db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'assistant',?,?)")
       .run(sessionId, `已确认 ${grouped.size} 个人物身份。现在自动补齐每个人物缺少的正脸、侧脸、侧 3/4、全身正面、全身侧面和全身侧 3/4，并生成待审核的六视图面板；不会直接进入下一阶段。`, timestamp);
-    db.prepare("UPDATE creative_sessions SET stage='working',workspace_json=?,error_message=NULL,updated_at=? WHERE id=?").run(JSON.stringify(workspace), timestamp, sessionId);
+    transitionCreativeStage(sessionId, "working", { workspaceJson: JSON.stringify(workspace), timestamp });
     generateSixViewPanels(sessionId, [...grouped.values()]);
     return;
   }
@@ -372,7 +370,7 @@ export function approveCharacterReferences(sessionId, cardIds) {
     characterPanelUrls: selected.map((card) => card.previewUrl),
     characterReferenceUrls: (workspace.pendingCharacterReferences || []).map((item) => item.previewUrl).filter(Boolean),
   });
-  db.prepare("UPDATE creative_sessions SET stage='working',workspace_json=?,error_message=NULL,updated_at=? WHERE id=?").run(JSON.stringify(workspace), timestamp, sessionId);
+  transitionCreativeStage(sessionId, "working", { workspaceJson: JSON.stringify(workspace), timestamp });
   recordCreativeFeedback(sessionId, `确认人物六视图面板：${selectedIds.join("、")}`, { decision: "approved", stageOutputId: "reference-panel", key: `session:${sessionId}:reference-panel:approved:${timestamp}` });
   recordCreativeStage(sessionId, "reference_panel", { cards: selected.map((card) => ({ id: card.id, title: card.title, previewUrl: card.previewUrl })) }, { status: "confirmed", key: `session:${sessionId}:reference-panel:${timestamp}` });
   selected.forEach((card) => recordCreativeAsset(sessionId, "reference_panel", card.previewUrl, { stageOutputId: card.id, metadata: { title: card.title } }));
@@ -404,11 +402,11 @@ async function regenerate(sessionId, card, feedback, edit) {
     const previewUrl = imageUrl(result); if (!previewUrl) throw new Error("人物图生成查询超时");
     const version = Number(card.version || 1) + 1;
     append(sessionId, `人物候选 ${card.id} 的 V${version} 已经生成，新图已替换在原卡片中。`, { ...card, previewUrl, version, status: "candidate", details: [...(card.details || []), { label: `V${version} 修改`, content: feedback }, ...(edit.mask ? [{ label: "局部编辑蒙版", content: `${edit.mask.width}×${edit.mask.height} PNG alpha` }] : []), ...(referencedAssets.length ? [{ label: "引用资产", content: referencedAssets.map((asset) => asset.reference).join("、") }] : []), { label: "生成任务", content: taskId || providerSessionId }] });
-    db.prepare("UPDATE creative_sessions SET stage='reference_review',error_message=NULL,updated_at=? WHERE id=?").run(now(), sessionId);
+    transitionCreativeStage(sessionId, "reference_review");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     append(sessionId, `这次人物图没有生成成功：${message}。原图仍保留在同一张卡片中。`, { ...card, status: "failed" });
-    db.prepare("UPDATE creative_sessions SET stage='reference_review',error_message=?,updated_at=? WHERE id=?").run(message, now(), sessionId);
+    transitionCreativeStage(sessionId, "reference_review", { errorMessage: message });
   }
 }
 
@@ -431,10 +429,10 @@ async function generateCustom(sessionId, card, description, baseCard) {
     }
     const previewUrl = imageUrl(result); if (!previewUrl) throw new Error("人物图生成查询超时");
     append(sessionId, `人物候选 ${card.candidateNumber} 已生成，并已加入人物参考图组。`, { ...card, previewUrl, status: "candidate", details: [...card.details, { label: "生成任务", content: taskId || providerSessionId }] });
-    db.prepare("UPDATE creative_sessions SET stage='reference_review',error_message=NULL,updated_at=? WHERE id=?").run(now(), sessionId);
+    transitionCreativeStage(sessionId, "reference_review");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     append(sessionId, `新增人物候选失败：${message}`, { ...card, status: "failed" });
-    db.prepare("UPDATE creative_sessions SET stage='reference_review',error_message=?,updated_at=? WHERE id=?").run(message, now(), sessionId);
+    transitionCreativeStage(sessionId, "reference_review", { errorMessage: message });
   }
 }

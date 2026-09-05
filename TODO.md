@@ -42,6 +42,7 @@
 - [x] 新增 `server/creative-cards.test.js`，覆盖全部新增函数，以及一个专门验证"回放结果等于旧扫描逻辑结果"的用例。
 
 - [x] 给 `resumeThread` 失败增加最小兜底：`server/creative-agent.js` 的 `runCreativeTurn` 现在只在“本来要恢复一个已有 thread”且失败文案像是“会话/线程找不到”（`isMissingThreadError()`，按文案关键字做最佳努力匹配，宁可漏判也不误伤超时/schema 校验等真实错误）时才降级——用 `startThread()` 开一条全新 thread，把 `sourceContext()`、当前 `workspace_json`、`confirmedCardsSummary()` 和最近 12 条聊天记录（`recentMessagesDigest()`）重新贴进去悄悄重建上下文，不告诉用户“线程丢失”。之后的 repair 子调用和最终 `codex_thread_id` 落库都会自动使用降级后的新 thread。新增 `server/creative-agent.test.js` 覆盖 `isMissingThreadError`/`recentMessagesDigest`。
+- [x] 给 `creative_sessions.stage` 加了一层最小状态机：原来分散在 10 个后端文件里的 66 处 `UPDATE creative_sessions SET stage=...` 裸 SQL（每处各写各的字面量或计算值，没有任何地方定义"合法阶段有哪些"），现在全部收拢成 `server/database.js` 的 `transitionCreativeStage(sessionId, toStage, { workspaceJson, errorMessage, codexThreadId, timestamp, keepErrorMessage })` 一个入口，配 `CREATIVE_STAGES` 常量（11 个合法阶段，和 `creativeTurnSchema.stage` 的 enum 完全对齐）。范围刻意收得很窄：只校验 `toStage` 是否合法（防手滑打错字符串），**不**校验"从 A 阶段能不能转到 B 阶段"——66 处里有几处（中途报错恢复、`storyboard_image` 等其它任务还在跑时暂不离开 `working`、服务重启恢复）转移关系不够直观，没有充分的现场验证就画死一张图，风险比不校验更大，留给以后调用点收拢完、真实转移关系摸清楚了再加。过程中顺带发现并保留了两处原本就"完全不碰 `error_message` 列"的调用点（`creative-agent.js` 单轮写回、`index.js` 新增用户消息时转 `working`）——用 `keepErrorMessage:true` 显式声明，而不是让新函数的默认行为悄悄改变这两处的原有语义。新增 `server/creative-stage.test.js`。用真实、已经跑到剧情与分镜阶段的 session 73 在浏览器里验证，界面和之前完全一致，控制台无报错。
 
 后续实施事项（未完成）：
 

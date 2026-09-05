@@ -1,4 +1,4 @@
-import { db, now, resolveAssetReferences, insertCardVersion, latestCard, latestCardsByKind, latestConfirmedCard, updateCardStatus } from "./database.js";
+import { db, now, resolveAssetReferences, insertCardVersion, latestCard, latestCardsByKind, latestConfirmedCard, transitionCreativeStage, updateCardStatus } from "./database.js";
 import { publicInputUrl } from "./character-generator.js";
 import { preparePngEditSource, uploadPngEditInput, validatePngEditInputs } from "./image-mask.js";
 import { NovvyMcpClient, unpackToolResult } from "./novvy-mcp-client.js";
@@ -11,8 +11,7 @@ function activeStoryboardImageJobs(sessionId) {
 }
 function finishStoryboardImageJob(sessionId, errorMessage = null) {
   const hasOtherJobs = activeStoryboardImageJobs(sessionId).length > 0;
-  db.prepare("UPDATE creative_sessions SET stage=?,error_message=?,updated_at=? WHERE id=?")
-    .run(hasOtherJobs ? "working" : "storyboard_review", errorMessage, now(), sessionId);
+  transitionCreativeStage(sessionId, hasOtherJobs ? "working" : "storyboard_review", { errorMessage });
 }
 function append(sessionId, content, messageCards) {
   const result = db.prepare("INSERT INTO creative_messages (session_id,role,content,cards_json,created_at) VALUES (?,'assistant',?,?,?)")
@@ -123,7 +122,7 @@ export function startStoryboardImageGeneration(sessionId, storyboardId) {
   }));
   db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, `选择 ${storyboard.id} 并生成逐镜分镜图`, timestamp);
   append(sessionId, `已选择「${storyboard.title}」。现在生成 ${shots.length} 张逐镜分镜图，完成后可以逐张修改或统一确认。`, placeholders);
-  db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, sessionId);
+  transitionCreativeStage(sessionId, "working", { timestamp });
   generateGroup(sessionId, storyboard, placeholders, refs);
 }
 
@@ -142,7 +141,7 @@ export function startStoryboardImageRegeneration(sessionId, cardId, feedback, ed
   const timestamp = now();
   db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, `修改分镜图 ${cardId}：${instruction}`, timestamp);
   append(sessionId, "收到，我会以当前分镜图为基础只修改这一个镜头。", [{ ...card, previewUrl: "", status: "generating" }]);
-  db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, sessionId);
+  transitionCreativeStage(sessionId, "working", { timestamp });
   regenerateOne(sessionId, card, instruction, referenceUrls(sessionId), edit);
 }
 
@@ -184,7 +183,7 @@ export function approveStoryboardImages(sessionId, cardIds) {
       ]),
     ],
   }]);
-  db.prepare("UPDATE creative_sessions SET stage='working',workspace_json=?,error_message=NULL,updated_at=? WHERE id=?").run(JSON.stringify(workspace), timestamp, sessionId);
+  transitionCreativeStage(sessionId, "working", { workspaceJson: JSON.stringify(workspace), timestamp });
   import("./image-generator.js").then(({ prepareFinalCardGeneration }) => prepareFinalCardGeneration(sessionId, selected));
 }
 
@@ -206,7 +205,7 @@ export function retryFailedStoryboardImages(sessionId, cardIds) {
   const placeholders = failedCards.map((card) => ({ ...card, previewUrl: "", status: "generating", details: (card.details || []).filter((item) => item.label !== "失败原因") }));
   db.prepare("INSERT INTO creative_messages (session_id,role,content,created_at) VALUES (?,'user',?,?)").run(sessionId, `重试 ${storyboardId} 中失败的 ${failedCards.length} 张分镜图`, timestamp);
   append(sessionId, `正在只重试 ${failedCards.length} 张失败分镜图；已经生成成功的图片保持不变。`, placeholders);
-  db.prepare("UPDATE creative_sessions SET stage='working',error_message=NULL,updated_at=? WHERE id=?").run(timestamp, sessionId);
+  transitionCreativeStage(sessionId, "working", { timestamp });
   generateGroup(sessionId, storyboard, placeholders, refs);
 }
 
@@ -244,11 +243,11 @@ async function generateGroup(sessionId, storyboard, placeholders, referenceSourc
       ? `${placeholders.length - failedCount} 张分镜图已生成，${failedCount} 张生成失败。成功图片已保留，可单独重试失败镜头。`
       : "逐镜分镜图已经生成。你可以在任意卡片里修改单镜，确认全部画面后再统一采用。", completed);
     const errorMessage = failedCount ? `${failedCount} 张分镜图生成失败` : null;
-    db.prepare("UPDATE creative_sessions SET stage='storyboard_review',error_message=?,updated_at=? WHERE id=?").run(errorMessage, now(), sessionId);
+    transitionCreativeStage(sessionId, "storyboard_review", { errorMessage });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     append(sessionId, `分镜图生成没有全部完成：${message}。文字分镜和已经生成的结果均保留。`, placeholders.map((card) => ({ ...card, status: "failed" })));
-    db.prepare("UPDATE creative_sessions SET stage='storyboard_review',error_message=?,updated_at=? WHERE id=?").run(message, now(), sessionId);
+    transitionCreativeStage(sessionId, "storyboard_review", { errorMessage: message });
   }
 }
 
