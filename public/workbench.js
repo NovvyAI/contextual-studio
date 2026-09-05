@@ -1211,22 +1211,21 @@ function layoutWorkflowNodes(flow) {
 
 function inferCreativeStage(session, workspace) {
   if (session.stage !== "working") return session.stage;
-  const latestCards = [...(session.messages || [])].reverse().find((message) => message.cards?.length)?.cards || [];
-  if (latestCards.some((card) => card.kind === "video_prompt")) return "prompt_review";
-  if (latestCards.some((card) => card.kind === "storyboard")) return "storyboard_review";
-  if (latestCards.some((card) => card.kind === "audiovisual_direction")) return "audiovisual_review";
-  if (latestCards.some((card) => ["character_image", "prop_image", "reference_image"].includes(card.kind))) return "reference_review";
-  if (latestCards.some((card) => card.kind === "final_card")) return "final_card_review";
+  // session.cards (creative_cards table) already holds the latest, non-superseded version of
+  // every card_id, in the same "later stage supersedes earlier stage" order this precedence
+  // chain checks in, so there is no need to first find "the latest message that has cards".
+  const cards = session.cards || [];
+  if (cards.some((card) => card.kind === "video_prompt")) return "prompt_review";
+  if (cards.some((card) => card.kind === "storyboard")) return "storyboard_review";
+  if (cards.some((card) => card.kind === "audiovisual_direction")) return "audiovisual_review";
+  if (cards.some((card) => ["character_image", "prop_image", "reference_image"].includes(card.kind))) return "reference_review";
+  if (cards.some((card) => card.kind === "final_card")) return "final_card_review";
   return workspace?.selectedConceptIds?.length ? "concept_selected" : "concept_review";
 }
 
 function currentStagePresentation(session, workspace) {
   const stage = inferCreativeStage(session, workspace);
-  const latestFinalCardSet = [...(session.messages || [])]
-    .reverse()
-    .map((message) => (message.cards || []).filter((card) => card.kind === "final_card"))
-    .find((cards) => cards.length) || [];
-  const hasGeneratedFinalCard = latestFinalCardSet.some((card) => Boolean(card.previewUrl));
+  const hasGeneratedFinalCard = (session.cards || []).some((card) => card.kind === "final_card" && Boolean(card.previewUrl));
   return ({
     concept_review: { stage, title: "创意方案候选", heading: "正在讨论的创意方向", kind: "concept", statusKey: "" },
     concept_selected: { stage, title: "已选方案深化", heading: "已选创意与人物准备", kind: "concept", statusKey: "referenceStatus" },
@@ -1848,9 +1847,9 @@ function describeWorkingTask(session) {
   const workspace = session.workspace || {};
   const plan = workspace.productionPlan || {};
   const messages = session.messages || [];
-  const latestCards = new Map();
-  for (const message of messages) for (const card of message.cards || []) if (card?.id) latestCards.set(card.id, card);
-  const latestGenerating = [...latestCards.values()].filter((card) => card.status === "generating").at(-1);
+  // session.cards is the creative_cards table's authoritative "latest, non-superseded version of
+  // every card_id" — trust it over scanning message history for what is currently generating.
+  const latestGenerating = [...(session.cards || [])].filter((card) => card.status === "generating").at(-1);
   if (latestGenerating?.kind === "character_image") {
     const sixView = (latestGenerating.details || []).some((item) => item.label === "参考类型" && item.content === "人物六视图面板");
     return sixView

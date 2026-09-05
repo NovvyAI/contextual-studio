@@ -47,7 +47,9 @@
 
 - [x] 非首轮 `sourceContext()` 统一改用 `initialDramaContext()`/`initialGameContext()` 的精简投影，不再区分 `compact` 参数。核对过 `dramaAnalysisView()` 丢弃的两块字段（`plotSignals`、`audienceAndMarketSignals`）只在 `server/analyzer.js` 的分析阶段 schema 里出现，创意工作台侧从未按字段名引用；系统提示词第 24 条本来就要求"短剧详细分析的唯一事实源是 `episodeAnalyses[].detailedAnalysis`，不要寻找或要求根级重复副本"，这两块正是被取代的早期粗判副本。用 65 号短剧（5 集，云端同步）实测：完整 `analysis_json` 118014 字符，精简投影 59071 字符，降了约 50%；游戏分析本来就小，降幅可以忽略。
 - [ ] `creative_messages.cards_json` 目前仍在双写（作为迁移期间的安全网，`creativeAssets()`/`creativeCharacterReferenceAssets()` 这两个"永久编号目录"型函数仍然依赖它，语义上不是"取最新"而是"每个曾经出现过的不同 URL 永久占一个编号"，没有直接挪到新表）；等确认新表路径稳定运行一段时间后，可以评估要不要把这两个函数也改造成查 `creative_cards` 全部历史版本、彻底停止写 `cards_json`。
-- [ ] 前端 `renderMessages()`/`describeWorkingTask()`/`inferCreativeStage()`/`currentStagePresentation()` 里仍保留的扫描式推导（`latestMutableCardMessageIds`、"猜测正在生成什么"的关键词兜底等）目前靠 `cards_json` 双写继续正常工作；新表已经能提供这些信息的权威答案，值得后续单独排期把这部分也切过去、删掉扫描/猜测代码。
+- [x]（部分完成）`describeWorkingTask()`/`inferCreativeStage()`/`currentStagePresentation()` 三个函数原来靠反查 `session.messages[].cards` 猜"最新版本"，已改成直接读 `session.cards`（`liveCardsForSession()`，权威、自动排除 superseded）：`describeWorkingTask()` 的"当前正在生成哪张卡"、`inferCreativeStage()` 的按卡片种类判断阶段、`currentStagePresentation()` 的"落版图是否已经真实生成"三处都已切换，行为不变但不再依赖消息历史扫描。
+  - 未动：`describeWorkingTask()` 结尾那段按聊天文字关键字猜测的兜底（`textPatterns`）——这段本来就是给"结构化状态还没来得及写回"这个真实的时间窗口用的最后兜底，不是纯粹的历史遗留，暂不确定新表能否覆盖这个窗口，先保留。
+  - 未动：`renderMessages()` 里 `latestMutableCardMessageIds`/`characterGroupMessageId`/`storyboardGroupMessageId` 那段扫描——这段特意保留了 superseded/failed 卡片以便在聊天记录里展示"这张候选后来被换掉了"，而 `session.cards` 默认排除 superseded，直接替换会让这些历史卡片从界面消失，语义不等价，需要单独设计（比如显式带 `excludeStatuses:[]` 查一份完整历史）才能安全切换，本轮没有动。
 - [ ] 评估把 `runCreativeTurn` 按阶段拆成独立的一次性 Codex 调用（不再共用一条 thread），每阶段可以独立选模型/供应商，且互不阻塞排队——状态层已经理顺，这条的技术前提已经具备，但本轮判断优先级低于状态层本身，特意没有一起做。
 - [ ] 参考 `contextual-ad-agent` 的 `evaluationAgent` 设计取舍（通用 `dimensions:{name,score}[]`，评分维度交给 skill markdown 而不是硬编码 schema），评估创意质量检查是否也要抽象成类似的可复用评审。
 
