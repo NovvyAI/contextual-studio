@@ -1881,7 +1881,11 @@ function describeWorkingTask(session) {
     { test: /生成.*落版方向/, result: { title: "正在生成落版方向候选", description: "正在准备末镜衔接、构图、英文文案与 CTA" } },
     { test: /落版图/, result: { title: "正在处理落版图", description: "完成后会更新当前落版任务" } },
   ];
-  for (const message of [...messages].reverse().slice(0, 8)) {
+  // Only scan Novvy's own messages, never the user's: a user confirmation like "现在不要生成
+  // 落版方向、落版图片、视听方向或剧情分镜" (sent verbatim by the concept-confirm button) contains
+  // the same "生成…视听方向" substring as a *negation*, and would otherwise false-positive-match
+  // the very first turn after every concept confirmation.
+  for (const message of [...messages].reverse().filter((message) => message.role === "assistant").slice(0, 8)) {
     const text = message.content || "";
     const match = textPatterns.find((pattern) => pattern.test.test(text));
     if (match) return match.result;
